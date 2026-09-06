@@ -222,9 +222,7 @@ def _run_with(monkeypatch, scraper):
     monkeypatch.setattr(runner_mod, "PoliteClient", lambda *a, **k: object())
     monkeypatch.setattr(runner_mod.HttpSettings, "from_config", staticmethod(lambda cfg: None))
     monkeypatch.setattr(runner_mod, "build_scrapers", lambda cfg, client: {"greenhouse": scraper})
-    monkeypatch.setattr(
-        runner_mod.JobFilter, "from_config", staticmethod(lambda cfg: _PassThroughFilter())
-    )
+    monkeypatch.setattr(runner_mod, "resolve_filter", lambda cfg: _PassThroughFilter())
     return runner_mod.run_scrape(FakeConfig())
 
 

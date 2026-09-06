@@ -105,3 +105,35 @@ class JobFilter:
 
 def _lower(values) -> list[str]:
     return [str(v).lower().strip() for v in (values or []) if str(v).strip()]
+
+
+def resolve_filter(cfg) -> JobFilter:
+    """The search to run: derived-from-resume if present, else config.yaml.
+
+    A hand-written keyword list is the thing most likely to be stale — it is
+    written once, before the user knows what they want, and never revisited.
+    The derived profile is regenerated from the resume, so it wins by default.
+    """
+    if not cfg.get("filters.use_derived_profile", True):
+        return JobFilter.from_config(cfg)
+
+    from config.loader import PROJECT_ROOT
+    from resume.profile import PROFILE_FILENAME, load_profile
+
+    profile = load_profile(PROJECT_ROOT / cfg.get("filters.profile_path", PROFILE_FILENAME))
+    if profile is None or not profile.titles:
+        return JobFilter.from_config(cfg)
+
+    import logging
+
+    logging.getLogger(__name__).info(
+        "Filters from %s — %s, %d title keywords",
+        profile.source, profile.seniority, len(profile.titles),
+    )
+    return JobFilter(
+        title_keywords=_lower(profile.titles),
+        exclude_title_keywords=_lower(profile.exclude_titles),
+        location_keywords=_lower(profile.locations),
+        exclude_location_keywords=_lower(profile.exclude_locations),
+        description_required_keywords=_lower(cfg.get("filters.description_required_keywords", [])),
+    )

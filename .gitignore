@@ -1,8 +1,21 @@
 .env
 data/
 logs/
-resume/base_resume.*
+# Every resume document, whatever it is called. The old pattern matched only
+# `base_resume.*`, so a resume saved under the person's own name was NOT
+# ignored — and this repo is public. Match by extension instead; the .py files
+# in resume/ are code and stay tracked.
+resume/*.doc
+resume/*.docx
+resume/*.pdf
+resume/*.txt
+resume/*.md
+resume/*.rtf
+resume/*.odt
 resume/output/
+
+# Derived from the resume, so it carries the person's titles and seniority.
+config/search_profile.yaml
 submitter/audit_log/
 *.xlsx
 

@@ -130,6 +130,46 @@ def cmd_reparse(cfg, args) -> int:
     return 0
 
 
+def cmd_profile(cfg, args) -> int:
+    """Derive the job search from the resume — no keywords to hand-write."""
+    from config.loader import PROJECT_ROOT
+    from resume.pipeline import load_base_resume
+    from resume.profile import PROFILE_FILENAME, derive_search_profile, save_profile
+
+    path = PROJECT_ROOT / cfg.get("filters.profile_path", PROFILE_FILENAME)
+    if path.exists() and not args.force and not args.show:
+        print(f"A search profile already exists at {path.name}.")
+        print("  --show   print it     --force  regenerate from the resume (overwrites edits)")
+        return 0
+
+    resume = load_base_resume(cfg)
+    profile = derive_search_profile(resume)
+
+    years = f"{profile.years_experience:.0f}" if profile.years_experience else "unknown"
+    print(f"Resume     : {profile.resume_path}")
+    print(f"Read as    : {profile.seniority} level, {years} years of experience")
+    print(f"Titles held: {', '.join(profile.held_titles[:6]) or 'none detected'}")
+    print(f"Searching  : {', '.join(profile.families) or 'no role family matched'}")
+    if profile.considered_families:
+        print(f"Considered : {', '.join(profile.considered_families)} — too weak in your "
+              f"resume to search for; add them to the file if you disagree")
+    print()
+    print(f"  Job titles ({len(profile.titles)}):")
+    for term in profile.titles:
+        print(f"    + {term}")
+    print(f"  Excluding ({len(profile.exclude_titles)}):")
+    print(f"    - {', '.join(profile.exclude_titles)}")
+    print(f"  Locations : {', '.join(profile.locations)}")
+
+    if args.show:
+        return 0
+
+    save_profile(profile, path)
+    print(f"\nSaved to {path.relative_to(PROJECT_ROOT)} — edit it freely, the scraper reads it.")
+    print("Next: python main.py scrape")
+    return 0
+
+
 def cmd_score(cfg, args) -> int:
     init_engine(cfg.database_url)
     from resume.pipeline import score_jobs
@@ -282,6 +322,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("reparse", help="Re-derive requirements from stored JDs (no network)")
 
+    p_profile = sub.add_parser(
+        "profile", help="Derive your job search from your resume (no keywords to write)"
+    )
+    p_profile.add_argument("--force", action="store_true", help="Regenerate, overwriting edits")
+    p_profile.add_argument("--show", action="store_true", help="Print without saving")
+
     p_score = sub.add_parser("score", help="Score jobs against the base resume (no API cost)")
     p_score.add_argument("--limit", type=int, default=0, help="Only score N jobs")
     p_score.add_argument("--rescore", action="store_true", help="Recompute existing scores")
@@ -312,6 +358,7 @@ COMMANDS = {
     "import-csv": cmd_import_csv,
     "export": cmd_export,
     "reparse": cmd_reparse,
+    "profile": cmd_profile,
     "score": cmd_score,
     "tailor": cmd_tailor,
     "stats": cmd_stats,

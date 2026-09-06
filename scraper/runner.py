@@ -15,7 +15,7 @@ from db.models import Company, Job, ScrapeLog, utcnow
 from db.session import get_session
 from scraper.base import CompanyRef, PortalScraper, RawJob
 from scraper.discovery import upsert_company
-from scraper.filters import JobFilter
+from scraper.filters import JobFilter, resolve_filter
 from scraper.greenhouse import GreenhouseScraper
 from scraper.http_client import HttpSettings, PoliteClient, RobotsDisallowed
 from scraper.lever import LeverScraper
@@ -92,7 +92,7 @@ def load_companies(cfg) -> list[CompanyRef]:
 def run_scrape(cfg) -> RunSummary:
     client = PoliteClient(HttpSettings.from_config(cfg))
     scrapers = build_scrapers(cfg, client)
-    job_filter = JobFilter.from_config(cfg)
+    job_filter = resolve_filter(cfg)
     summary = RunSummary(run_id=uuid.uuid4().hex[:12])
     deactivate_after = int(cfg.get("limits.deactivate_after_failures", 5) or 0)
     close_on_empty = bool(cfg.get("limits.close_on_empty_board", False))

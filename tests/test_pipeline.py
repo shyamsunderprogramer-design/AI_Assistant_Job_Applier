@@ -98,7 +98,12 @@ def test_scores_are_persisted_and_marked_for_reexport(env):
         assert job.exported_to_excel is False
 
 
-def test_missing_base_resume_raises_clearly(tmp_path, env):
+def test_missing_base_resume_raises_clearly(tmp_path, env, monkeypatch):
+    """Isolate resume/ — this passed only while the real folder happened to be
+    empty, and started failing the moment a real resume was dropped in."""
+    import resume.pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "PROJECT_ROOT", tmp_path)
     add_job(STRONG_JD)
     with pytest.raises(FileNotFoundError):
         score_jobs(FakeConfig(tmp_path / "nonexistent" / "resume.docx"))
