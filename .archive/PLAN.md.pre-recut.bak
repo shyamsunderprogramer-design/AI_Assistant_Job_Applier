@@ -1,0 +1,153 @@
+# Build Plan — Job Applier Agent
+
+Working document. Each item is ticked only when it is **built, run, and verified** —
+not when the code is merely written.
+
+Legend: `[x]` done & verified · `[ ]` not started · `[~]` in progress · `[!]` blocked
+
+Constraints that govern every item live in `constraints.txt`. Read it first.
+
+---
+
+## Phase 0 — Foundation
+
+- [x] Project skeleton (`config/`, `db/`, `scraper/`, `excel/`, `resume/`, `submitter/`, `tests/`)
+- [x] `requirements.txt` covering all four phases
+- [x] `.gitignore` (secrets, DB, logs, resumes, audit artifacts)
+- [x] `.env.example` + `python-dotenv` loading; no hardcoded secrets
+- [x] `config/config.yaml` as the single source of tunables
+- [x] `config/loader.py` — dotted-path lookup, UA templating, logging setup
+- [x] `constraints.txt` — scope, politeness, and safety decisions recorded
+- [x] Virtualenv created, dependencies installed
+- [x] `README.md` with setup + usage
+
+## Phase 1 — Job Discovery
+
+**Status: COMPLETE.** Verified live: 10 companies, 3,110 postings seen, 105 matched, 0 duplicates on re-run.
+
+- [x] SQLAlchemy models: `Company`, `Job`, `ScrapeLog`
+- [x] Unique constraint `(source, company_slug, external_id)` for dedupe
+- [x] `content_hash` so an edited posting updates in place instead of duplicating
+- [x] Session/engine setup resolving SQLite paths from any cwd
+- [x] `PoliteClient`: robots.txt fetch + cache + honor, per-host delay w/ jitter
+- [x] Bounded retries with exponential backoff; `Retry-After` respected on 429
+- [x] Honest, contactable User-Agent (no browser impersonation)
+- [x] `PortalScraper` ABC + `RawJob` normalised shape
+- [x] Greenhouse scraper against the public board API
+- [x] Lever scraper against the public postings API
+- [x] HTML → readable plain text for JD bodies
+- [x] Requirements-section extraction heuristic (returns None rather than guessing)
+- [x] Keyword filters: title include/exclude, location, JD-body required
+- [x] Company discovery: name → candidate slugs → live ATS probe
+- [x] Inventory CSV import (`name,slug,source`)
+- [x] Runner: per-company failure isolation, logged to `scrape_log`, run continues
+- [x] Auto-deactivate a company after N consecutive failures
+- [x] CLI: `init-db`, `scrape`, `discover`, `import-csv`, `stats`, `failures`
+- [x] 20 offline unit tests (filters, parsers, hashing, slug derivation) — all passing
+- [x] Live verification run against real Greenhouse + Lever boards
+- [ ] Narrow `filters.title_keywords` to the user's actual target roles — **needs user input**
+
+## Phase 2 — Excel Tracking Sheet
+
+**Status: COMPLETE.** 105 jobs exported live; re-export is a clean no-op.
+
+- [x] `excel/tracker.py` module
+- [x] Read newly-discovered jobs from the DB (drive off `exported_to_excel`)
+- [x] Column set: Company · Job Title · Application Link · JD · Location · Posting Date ·
+      Required Skills · Date Found · Application Status · ATS Match Score
+- [x] Create workbook if absent; append to it if present
+- [x] Append-only semantics — never duplicate or clobber an existing row
+- [x] Preserve user edits to Status when re-exporting (the sheet is user-writable)
+- [x] Update in place when a posting changed (content_hash moved) rather than re-appending
+- [x] Application Link written as a real clickable hyperlink
+- [x] JD truncated to a cell-safe length, with full text still in the DB
+- [x] Freeze the header row
+- [x] Sensible column widths + autofilter; hidden `Job Key` join column
+- [x] Conditional formatting on the Status column (7 states, not duplicated per export)
+- [x] Data-validation dropdown for Status values
+- [x] Mark rows `exported_to_excel` so the next run only appends new ones
+- [x] CLI: `python main.py export` (`--all` to re-export everything)
+- [x] Unit tests: append idempotency, status preservation, formatting applied (14 tests)
+- [x] Verified live against the real DB (105 jobs)
+
+## Phase 3 — Resume Tailoring + ATS Scoring
+
+**Status: CODE COMPLETE.** Scoring verified live on 105 real postings and calibrated.
+Tailoring is written and unit-tested but needs the user's resume + API key for a live run.
+
+- [x] `resume/parser.py` — extract structured text from .docx, .pdf, .txt/.md
+- [x] Auto-detect the base resume in `resume/`, ignoring Word lock files
+- [x] `resume/scorer.py` — weighted keyword overlap between resume and JD
+- [x] Scorer works standalone (no API key, no cost) and is unit-tested
+- [x] Score against the *requirements* section, not company blurb/benefits
+- [x] Skills weighted above generic JD prose; company-name tokens excluded
+- [x] Threshold calibrated against 105 real postings (max 47%, p90 31%, median 20%)
+- [x] `resume/tailor.py` — Claude API call (`claude-opus-5`, adaptive thinking, streaming)
+- [x] Anti-fabrication guard: prompt rule + post-hoc check for invented skills,
+      metrics, dates, and employers
+- [x] Guard shares one skill vocabulary with the scorer so they can't drift
+- [x] Reject any tailored output that fails the fabrication check
+- [x] `resume/writer.py` — ATS-safe .docx (no tables, columns, text boxes, graphics)
+- [x] Employers, dates, and education copied through verbatim — never rewritten
+- [x] Review note (`*_review.txt`) listing rewrites, omissions, and honest gaps
+- [x] Deterministic output filenames tying a resume version to a job
+- [x] Write match score back to the DB and into the Excel sheet
+- [x] Threshold flag: below `resume.min_score` → "Manual Review", and the flag
+      clears symmetrically when a job later clears the bar
+- [x] Excel respects user-set statuses while letting system flags through
+- [x] Skip re-tailoring a job that already has an output file (API cost control)
+- [x] CLI: `score`, `tailor [--job-id N] [--limit N]`, `reparse`
+- [x] 42 offline unit tests for scorer, guard, parser, writer, pipeline
+- [x] Scoring verified live: 105 jobs ranked, backend roles top, frontend bottom
+- [!] Live tailoring run — **blocked on user**: base resume in `resume/` + `ANTHROPIC_API_KEY`
+
+## Phase 4 — Profile Creation & Submission
+
+**Gate: report portal-by-portal reliability to the user BEFORE writing code here.**
+
+### Reliability assessment (done — read before deciding where to keep manual review)
+
+| Portal | Automating the form | Verdict |
+|---|---|---|
+| **Greenhouse** | Most predictable. Stable, mostly static form markup, consistent field names, plain file input for the resume. Embedded iframes on some company-hosted pages are the main annoyance. | **Confident** — worth automating field-fill + upload. Keep `--dry-run` default. |
+| **Lever** | Also predictable and simpler than Greenhouse. Fewer custom questions in practice. | **Confident** — same treatment as Greenhouse. |
+| **Workday** | Hostile to automation: per-tenant subdomains, heavy JS, shadow DOM, mandatory account creation, email verification, multi-step wizards that lose state. Selectors differ per tenant, so "supporting Workday" means supporting each company separately. | **Not recommended.** Track manually. Automating it reliably is a project of its own. |
+| **Custom / in-house** | Unbounded variety. No shared structure to code against. | **Not automatable generically.** Flag for manual application. |
+
+Cutting across all four: **CAPTCHAs, bot-detection, and account flags are the real
+failure mode, not selectors** — and most portals' ToS prohibit automated submission
+outright (constraints.txt §9). That is why this phase stays human-in-the-loop by
+default and why CAPTCHA is a hard stop rather than something to work around.
+
+**Recommendation:** automate Greenhouse and Lever only, keep `require_manual_confirm:
+true` for both until the user has watched several dry runs, and leave Workday/custom
+as tracked-but-manual rows in the Excel sheet.
+
+- [x] Written reliability assessment: Greenhouse vs Lever vs Workday vs custom
+- [ ] `config/profile.yaml` — name, contact, work history, EEO answers, links
+- [ ] `submitter/base.py` — shared fill/verify/submit lifecycle
+- [ ] Playwright session setup (headed by default so the user can watch)
+- [ ] Greenhouse form filler (standard fields + resume upload)
+- [ ] Lever form filler (standard fields + resume upload)
+- [ ] Custom/screening question detection — never auto-answered
+- [ ] Claude-drafted answers routed through explicit user approval
+- [ ] `--dry-run` fills everything and stops before Submit
+- [ ] Per-portal `require_manual_confirm`, defaulting to `true`
+- [ ] CAPTCHA detection = hard stop, never an evasion attempt
+- [ ] Daily application cap enforced from `limits.max_applications_per_day`
+- [ ] Audit log: timestamp, screenshot, exact resume version, field values
+- [ ] `Application` table + status write-back to DB and Excel
+- [ ] Dry-run verified on a real posting before any live submission
+
+---
+
+## Blocked on user
+
+1. **Base resume file** (`.docx` or `.pdf`) into `resume/` — unblocks the live
+   Phase 3 tailoring run. Everything else in Phase 3 is built and tested.
+2. **`ANTHROPIC_API_KEY`** in `.env` — same.
+3. **Target role keywords** — current filters are a broad SWE default, which is
+   why Stripe matched 6 of 580 postings. Narrowing them improves signal.
+4. **Profile data** (contact, work history, EEO answers) — needed to start Phase 4.
+5. **Go/no-go on Phase 4 scope** — recommendation is Greenhouse + Lever only,
+   dry-run first, per the assessment above.

@@ -1,0 +1,163 @@
+# Job Applier Agent — configuration
+# Everything tunable lives here. No behaviour is hardcoded in the modules.
+
+database:
+  url: "sqlite:///data/jobs.db"
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Excel tracking sheet.
+# The DB is the source of truth; the workbook is a view you can edit. The
+# Application Status column is yours — re-exports never overwrite it.
+# ---------------------------------------------------------------------------
+excel:
+  path: "data/job_tracker.xlsx"
+
+# ---------------------------------------------------------------------------
+# Phase 3 — resume tailoring + ATS scoring.
+# Claude may only rephrase/reorder/emphasise what is already in the base
+# resume. Output is checked by the fabrication guard before it is written.
+# ---------------------------------------------------------------------------
+resume:
+  # Leave null to auto-detect the newest .docx/.pdf in resume/.
+  base_path: null
+  output_dir: "resume/output"
+  # Below this match score a job is flagged "Manual Review" instead of being
+  # auto-tailored. 0.0–1.0.
+  #
+  # Calibrated against 105 real postings: a strong-fit resume scored max 47%,
+  # p90 31%, median 20%. The score measures coverage of a JD's salient terms —
+  # no real resume approaches 100%, so treat it as a RANKING, not a grade.
+  #   0.25 -> ~top quartile auto-tailors   0.30 -> ~top 10%   0.45 -> almost nothing
+  # Raise it to spend less on API calls; lower it to cast wider.
+  min_score: 0.25
+  # Re-tailor a job that already has an output file?
+  overwrite: false
+
+# ---------------------------------------------------------------------------
+# Politeness. See README.md §C5 — do not weaken these to go faster.
+# ---------------------------------------------------------------------------
+http:
+  # Honest, contactable UA. {contact} is filled from SCRAPER_CONTACT_EMAIL.
+  user_agent: "JobApplierAgent/0.1 (personal job search; contact: {contact})"
+  respect_robots: true
+  timeout_seconds: 20
+  # Minimum seconds between requests to the SAME host, plus random jitter.
+  min_delay_seconds: 1.5
+  jitter_seconds: 0.75
+  max_retries: 3
+  backoff_base_seconds: 2.0
+
+# ---------------------------------------------------------------------------
+# Which ATS platforms to scrape. Adding a company is a config/DB change only.
+# ---------------------------------------------------------------------------
+portals:
+  greenhouse:
+    enabled: true
+  lever:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Companies to scrape.
+#
+# `seed_companies` is a starter list of known Greenhouse/Lever boards, used to
+# prove the pipeline works end to end. The real breadth comes from running
+# `python main.py discover` against a name list — discovered companies are
+# stored in the DB and scraped automatically alongside these.
+#
+# `slug` is the company's identifier on that ATS, i.e. the last path segment of
+#   https://job-boards.greenhouse.io/<slug>   or   https://jobs.lever.co/<slug>
+# ---------------------------------------------------------------------------
+companies:
+  scrape_discovered: true      # also scrape companies found by `discover`
+  # All slugs below verified live on 2026-08-31.
+  seed_companies:
+    - { name: "Stripe",     slug: "stripe",     source: "greenhouse" }
+    - { name: "Databricks", slug: "databricks", source: "greenhouse" }
+    - { name: "Figma",      slug: "figma",      source: "greenhouse" }
+    - { name: "Anthropic",  slug: "anthropic",  source: "greenhouse" }
+    - { name: "Brex",       slug: "brex",       source: "greenhouse" }
+    - { name: "Coinbase",   slug: "coinbase",   source: "greenhouse" }
+    - { name: "Instacart",  slug: "instacart",  source: "greenhouse" }
+    - { name: "Palantir",   slug: "palantir",   source: "lever" }
+
+# ---------------------------------------------------------------------------
+# Role filters. A job is kept if its title matches any `title_keywords`
+# (case-insensitive substring), and is dropped if it matches any exclude rule.
+# Broad software-engineering default — narrow this to your actual targets.
+# ---------------------------------------------------------------------------
+filters:
+  title_keywords:
+    - "software engineer"
+    - "backend engineer"
+    - "back end engineer"
+    - "full stack"
+    - "fullstack"
+    - "platform engineer"
+    - "data engineer"
+    - "machine learning engineer"
+    - "ml engineer"
+    - "python"
+
+  # Dropped if the TITLE contains any of these.
+  exclude_title_keywords:
+    - "intern"
+    - "principal"
+    - "staff"
+    - "director"
+    - "vp "
+    - "manager"
+    - "sales"
+    - "recruiter"
+
+  # Optional: keep only jobs whose location matches one of these. Matching is
+  # word-boundary, so "us" matches "US-Remote" but not "Aarhus" or "Vilnius".
+  # Leave empty to accept every location.
+  location_keywords:
+    - "remote"
+    - "united states"
+    - "usa"
+    - "us"
+
+  # Dropped even if location_keywords matched. Exclusion wins — this is what
+  # separates "Remote - USA" from "Remote - India", which both match "remote".
+  exclude_location_keywords:
+    - "india"
+    - "brazil"
+    - "canada"
+    - "united kingdom"
+    - "ireland"
+    - "germany"
+    - "poland"
+    - "australia"
+    - "singapore"
+    - "japan"
+    - "emea"
+    - "apac"
+    - "latam"
+
+  # Optional: require at least one of these in the JD body. Empty = no check.
+  description_required_keywords: []
+
+# ---------------------------------------------------------------------------
+# Pacing / limits (application caps are enforced in Phase 4)
+# ---------------------------------------------------------------------------
+limits:
+  max_companies_per_run: 0        # 0 = no cap
+  max_applications_per_day: 15    # Phase 4
+  # Stop scraping a company after this many consecutive failures (dead slug,
+  # company left the ATS). 0 disables. Re-enable by setting active=1 in the DB.
+  deactivate_after_failures: 5
+
+# ---------------------------------------------------------------------------
+# Company discovery (name -> ATS slug probing). See README.md §C3.
+# ---------------------------------------------------------------------------
+discovery:
+  probe_sources: ["greenhouse", "lever"]
+  # Suffixes stripped when deriving a slug from a company name.
+  strip_suffixes: ["inc", "inc.", "corp", "corp.", "corporation", "llc",
+                   "ltd", "ltd.", "co", "co.", "plc", "group", "holdings",
+                   "the", "company"]
+
+logging:
+  level: "INFO"
+  file: "logs/agent.log"

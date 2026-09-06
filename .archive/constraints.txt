@@ -1,0 +1,148 @@
+JOB APPLIER AGENT — CONSTRAINTS & DECISIONS
+Last updated: 2026-08-31
+
+This file records the hard constraints, scope decisions, and known limitations
+of this project. Read it before changing architecture or adding a portal.
+
+
+================================================================================
+1. PROJECT NATURE
+================================================================================
+- Personal automation for one person's job search. NOT a commercial product,
+  NOT a service to be resold or run on behalf of others.
+- Built incrementally in 4 phases. Each phase is reviewed/tested before the
+  next begins. Do not build ahead.
+
+
+================================================================================
+2. SCOPE — PORTALS
+================================================================================
+IN SCOPE (Phase 1):
+  - Greenhouse  (boards-api.greenhouse.io — public JSON job board API)
+  - Lever       (api.lever.co/v0/postings — public JSON API)
+
+OUT OF SCOPE for now (revisit after Phase 1 is stable):
+  - Workday        — per-tenant subdomains, heavy JS, shadow DOM, session auth.
+                     High effort, fragile. Track manually if needed.
+  - iCIMS, Taleo/Oracle, SuccessFactors, Ashby, BambooHR, custom in-house sites.
+
+RULE: one scraper module per ATS TYPE, never per company. A company is a tenant
+of an ATS, not a portal. Adding a company = adding a config/DB row, never code.
+
+
+================================================================================
+3. SCOPE — COMPANY LIST ("Fortune 1 million")
+================================================================================
+Goal: cast the widest net possible, not a hand-curated shortlist.
+
+CONSTRAINT: There is no public directory of "all companies using Greenhouse or
+Lever." Each company runs its own board at a slug. The name -> slug mapping must
+be built, not fetched.
+
+CONSTRAINT: Fortune 500/1000 lists (e.g. from Wikipedia) are a POOR seed for
+this project. Large enterprises overwhelmingly use Workday / Taleo / iCIMS /
+SuccessFactors. Greenhouse and Lever skew to startups and mid-size tech.
+Seeding from a Fortune list yields a low hit rate. Use it only as raw NAME
+input to the slug prober, never as the target list itself.
+
+APPROACH (implemented in scraper/discovery.py):
+  1. Slug probing — derive candidate slugs from a company name, probe the
+     Greenhouse and Lever APIs, keep the ones that return 200. Self-builds the
+     inventory from any name list.
+  2. CSV ingest — optionally import a community-maintained ATS company
+     inventory (e.g. github.com/kalil0321/ats-scrapers -> ats-companies/).
+
+Discovered companies are stored in the `companies` table with their ATS type and
+slug, so discovery runs once and scraping reuses the result.
+
+
+================================================================================
+4. TECH DECISIONS (and deviations from the original spec)
+================================================================================
+- Python 3.11+, SQLite via SQLAlchemy, pandas/openpyxl, pytest, python-dotenv,
+  config.yaml — all as specified.
+
+- DEVIATION: Phase 1 uses plain HTTP (`requests`) against the Greenhouse and
+  Lever public JSON APIs, NOT Playwright.
+  WHY: both ATSs expose documented, stable JSON endpoints. Driving a headless
+  browser against them would be ~100x slower, far more fragile, and far heavier
+  on their infrastructure, for zero benefit. Playwright is still a dependency
+  and is reserved for:
+     - Phase 4 form filling / submission (genuinely needs a real browser)
+     - any future JS-heavy portal (Workday, custom sites)
+  If a portal has no usable API, its scraper module uses Playwright. That is a
+  per-portal decision, not a global one.
+
+- Secrets live in .env only. Never hardcoded, never committed.
+
+
+================================================================================
+5. POLITENESS / RATE LIMITING (non-negotiable)
+================================================================================
+- robots.txt is fetched, cached, and honored per host before any request.
+  A disallowed path is skipped and logged, never fetched anyway.
+- Minimum delay between requests per host, configurable in config.yaml
+  (default 1.5s, with jitter). Never remove or zero this to go faster.
+- Bounded retries with exponential backoff. On HTTP 429 or 5xx, back off; do
+  not hammer.
+- A descriptive, honest User-Agent. Do not impersonate a browser to evade
+  detection.
+- Concurrency is capped per host. Scale breadth by adding companies, never by
+  raising request rate against one host.
+
+
+================================================================================
+6. FAILURE HANDLING
+================================================================================
+- A portal or company that fails must NOT crash the run. Log it to the
+  `scrape_log` table with the error and continue to the next.
+- Per-portal and per-company failure counts are queryable so unsupported or
+  broken targets surface instead of silently returning zero jobs.
+
+
+================================================================================
+7. DEDUPLICATION
+================================================================================
+- A job's identity is (source, company_slug, external_id), enforced by a unique
+  constraint. A stable content hash is also stored so edited postings can be
+  detected without creating duplicates.
+- The DB is the source of truth for "have I seen this?" and later "have I
+  applied to this?" — never re-derive that from the Excel sheet.
+
+
+================================================================================
+8. RESUME / TAILORING (Phase 3) — HARD RULE
+================================================================================
+- The Claude API may only rephrase, reorder, and re-emphasize content that
+  already exists in the base resume. It must NEVER invent employers, titles,
+  dates, credentials, metrics, or skills the user does not have.
+- Output must be ATS-safe .docx: no tables, columns, text boxes, headers/
+  footers, or graphics.
+- Match score below the configured threshold => flag for manual review rather
+  than auto-proceed.
+- Base resume supplied by the user (.docx or .pdf) into resume/. Confirmed the
+  user has one ready.
+
+
+================================================================================
+9. SUBMISSION (Phase 4) — HUMAN IN THE LOOP
+================================================================================
+- Most career portals' Terms of Service prohibit automated submission. This
+  phase is deliberately semi-automated and MUST stay that way.
+- Defaults: require_manual_confirm: true for every portal not extensively
+  tested. --dry-run fills the form and stops before the final Submit.
+- Open-ended / custom screening questions are NEVER auto-submitted. Either the
+  user answers them, or Claude drafts an answer the user explicitly approves.
+- CAPTCHAs are a stop condition, not something to solve or evade.
+- Every submission and dry-run is logged with timestamp, screenshot, and the
+  exact resume version used.
+- Per-day application cap enforced from config.yaml.
+
+
+================================================================================
+10. OPEN ITEMS
+================================================================================
+- Keyword/role filters: currently a broad software-engineering default in
+  config.yaml. User to narrow.
+- Base resume file not yet placed in resume/ (needed for Phase 3).
+- Company name seed list not yet supplied (discovery module accepts any).
