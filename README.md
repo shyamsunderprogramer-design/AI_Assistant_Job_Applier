@@ -19,14 +19,14 @@ those numbers are stable, don't renumber them.
 | **P2** Excel tracker | ✅ Done, verified live | 105 exported · re-export is a no-op · your Status edits survive |
 | **P3A** ATS scoring | ✅ Done, calibrated | 105 real postings: max 47%, p90 31%, median 20% |
 | **P3B** Resume tailoring | ⚠️ Built, **never run** | Blocked: no resume file, no API key |
-| **P5** Pipeline integrity | ❌ Half-built, **inert** | Lifecycle columns exist in the DB; no code touches them |
-| **P6** Breadth | ❌ Not started | Discovery works but was never used at scale — still 10 boards |
+| **P5** Pipeline integrity | ✅ Done, verified live | Closed 3 vanished postings on a real run; a simulated outage closes nothing |
+| **P6** Breadth | ❌ Not started — **next** | Discovery works but was never used at scale — still 10 boards |
 | **P7** Daily loop | ❌ Not started | 5+ manual commands, so it gets run once |
 | **P8** Relevance v2 | ❌ Not started | Needs P6 first |
 | **P4** Assisted apply | ❌ Not started | Recast from auto-submit; needs your go/no-go |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
 
-**77 tests, all passing, all offline.** Not under git — see §C11.
+**96 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
 
 ### Contents
 
@@ -87,6 +87,7 @@ main.py export --all                     # re-export everything
 # Scoring and tailoring
 main.py score                            # free, no API key
 main.py score --rescore --top 20
+main.py score --include-closed           # closed postings are skipped by default
 main.py tailor --limit 3                 # needs ANTHROPIC_API_KEY
 main.py reparse                          # re-derive requirements after a heuristic change
 ```
@@ -114,7 +115,7 @@ Everything tunable lives in `config/config.yaml`. No behaviour is hardcoded.
 | `portals` | which ATSs are enabled |
 | `companies` | seed list; whether to also scrape discovered companies |
 | `filters` | title keywords + exclusions, location include/exclude, JD keyword requirements |
-| `limits` | companies per run, applications/day (P4), auto-deactivation threshold |
+| `limits` | companies per run, applications/day (P4), auto-deactivation, posting-closure safety (`close_on_empty_board`), staleness warning (`stale_company_warn_days`) |
 | `discovery` | which ATSs to probe, corporate suffixes to strip from names |
 | `logging` | level and log file |
 
@@ -132,11 +133,11 @@ Exclusions win over inclusions — that is what separates `Remote - USA` from
 config/     config.yaml + loader (YAML + .env, logging setup)
 db/         SQLAlchemy models (Company, Job, ScrapeLog), session, additive migrations
 scraper/    http_client (robots + rate limiting), base, greenhouse, lever,
-            filters, discovery, runner
+            filters, discovery, runner, lifecycle (closure + staleness)
 excel/      tracker.py — DB -> editable workbook, append-only
 resume/     parser, scorer, tailor, guard, writer, pipeline (+ your base resume)
 submitter/  submission + audit log — EMPTY, Phase 4 not started
-tests/      77 offline unit tests
+tests/      96 offline unit tests
 data/       SQLite database + job_tracker.xlsx (gitignored)
 logs/       run logs (gitignored)
 .archive/   the pre-merge README / PLAN / constraints, kept because there is no git
@@ -257,11 +258,17 @@ only brake is `resume.overwrite: false` skipping jobs that already have output. 
 hard spend cap, a cost estimate before a run, and model tiering are part of P3B and
 are not optional once the inventory grows past a few hundred jobs.
 
-### §C11 — This project is not under version control
-`git init` has never been run here. There is no history, no diff, no undo, and no
-branch. `.archive/` and `.bak` files are standing in for a VCS, which is not a
-substitute. **This is the highest-severity item in the plan** and it is five seconds
-of work: everything else assumes changes are recoverable, and right now they are not.
+### §C11 — Version control
+Under git since 2026-09-06, pushed to
+`github.com/shyamsunderprogramer-design/AI_Assitant_Job_Applier` (**public**).
+
+`.gitignore` keeps `.env`, `data/` (the SQLite DB and the tracker workbook),
+`logs/`, and `resume/` output out of the repo — so no API key, no scraped job
+data, and no resume is ever committed. **Check that before adding a file**: the
+repo is public, and the DB in particular holds the full text of every posting.
+
+`data/` being gitignored also means the database is *not* backed up by git. A
+destructive DB change is unrecoverable; copy `data/jobs.db` before one.
 
 ---
 
@@ -280,9 +287,9 @@ execution order below, which is deliberately *not* 0,1,2,3,4.
 
 | # | Phase | Why here | Blocked? |
 |---|---|---|---|
-| 0 | **git init** (§C11) | No history exists. Everything below assumes changes are recoverable. | No |
-| 1 | **P5 — Pipeline integrity** | Half-built already: dead columns in the live DB. Without it the tracker rots — it ranks and spends Opus calls on roles that were filled last week. | No |
-| 2 | **P6 — Breadth** | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
+| ~~0~~ | ~~**git init** (§C11)~~ | ✅ Done 2026-09-06 — repo initialised and pushed. | — |
+| ~~1~~ | ~~**P5 — Pipeline integrity**~~ | ✅ Done 2026-09-06 — closure live, 3 dead postings retired on the first run. | — |
+| 2 | **P6 — Breadth** ← **next** | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
 | 3 | **P7 — Daily loop** | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
 | 4 | **P3B — Live tailoring** | Fully built, never run. Unblocks the moment a resume + key exist. | Yes — you |
 | 5 | **P8 — Relevance v2** | Only worth it once the funnel is wide. Re-ranking 105 jobs is pointless; re-ranking 3,000 is not. | Yes — key |
@@ -322,7 +329,7 @@ everything else waiting on two files only you can provide. Six problems with tha
 - [x] Virtualenv created, dependencies installed
 - [x] Documentation written
 - [x] `db/migrate.py` — additive-only column migration, run on every startup
-- [ ] **`git init` + first commit** (§C11) — nothing here is recoverable today
+- [x] **`git init` + first commit** (§C11) — pushed to GitHub 2026-09-06
 
 ### Phase 1 — Job Discovery ✅
 
@@ -414,32 +421,49 @@ Verified live on 105 real postings and calibrated.
 **Done when:** a real tailored .docx exists for a real posting, the guard has been
 seen both to pass *and* to reject, and a run's cost is known before it starts.
 
-### Phase 5 — Pipeline Integrity ❌ half-built and inert — **DO FIRST**
+### Phase 5 — Pipeline Integrity ✅
 
-`Job.last_seen_at`, `Job.is_open`, and `Job.closed_at` exist in the model and were
-migrated into the live DB on 2026-09-06 — and **no code reads or writes any of
-them**. A repo-wide grep finds them only in `models.py`. Every job in the DB has
-been `is_open=True` since the day it was found, including any filled since.
+**Verified live 2026-09-06.** The lifecycle columns had been sitting in the model
+and the live DB with no code reading or writing them; every job had been
+`is_open=True` since the day it was found. Now reconciled on every successful
+scrape (`scraper/lifecycle.py`).
 
-A stale row is worse than a missing one: it gets ranked, it gets an Opus call spent
-on it, and it wastes the one thing this project exists to save.
+First real run: 3,172 postings seen across 10 boards, **3 vanished postings
+closed** (1 Figma, 2 Instacart), 0 wrongly closed, and the median age of an open
+job dropped from 83 to 74 days.
 
-- [ ] Runner advances `last_seen_at` for every job returned by a **successful** fetch
-- [ ] After a successful fetch, that company's jobs which were *not* returned get
+The load-bearing detail: **databricks and palantir matched 0 title filters that
+run, and their 4 stored jobs correctly stayed open** — closure is judged against
+every posting the board returned, not the filtered subset. Reconciling against the
+filtered set instead would have closed 4 live jobs.
+
+- [x] Runner advances `last_seen_at` for every job returned by a **successful** fetch
+- [x] After a successful fetch, that company's jobs which were *not* returned get
       `is_open=False` + `closed_at`
-- [ ] A failed or partial fetch closes **nothing** — an outage must never look like a
-      mass closure. This is the bug that makes naive versions of this feature dangerous
-- [ ] Closure is per-company, and only for companies actually scraped in that run
-- [ ] Reopening: a posting that reappears clears `closed_at` and goes open again
-- [ ] `score` and `tailor` skip closed jobs by default (`--include-closed` to override)
-- [ ] Excel: a `Closed` status flows through without clobbering a user-set status,
+- [x] A failed or partial fetch closes **nothing** — an outage must never look like a
+      mass closure. Covered by an integration test that runs a failing board through
+      the real runner
+- [x] Closure is per-company, and only for companies actually scraped in that run
+- [x] Reopening: a posting that reappears clears `closed_at` and goes open again
+- [x] `score` and `tailor` skip closed jobs by default (`--include-closed` to override)
+- [x] Excel: a `Closed` status flows through without clobbering a user-set status,
       using the precedence rule P2 already established
-- [ ] `stats` reports open vs closed and median posting age
-- [ ] Staleness guard: warn when a company hasn't been successfully scraped in N days
-- [ ] Unit tests: closure on success, **no** closure on failure, reopen, status precedence
+- [x] `stats` reports open vs closed and median posting age
+- [x] Staleness guard: warn when a company hasn't been successfully scraped in N days
+- [x] Unit tests: 19 new tests — closure on success, **no** closure on failure, reopen,
+      status precedence, empty-board guard, cross-company isolation
 
-**Done when:** a scrape closes a posting that really vanished, a simulated board
-outage closes nothing, and `stats` shows the open/closed split.
+**Two safety rules worth not undoing:**
+
+- **An empty board closes nothing** (`limits.close_on_empty_board: false`). An
+  empty 200 is indistinguishable from a board that broke, and being wrong closes
+  every job for that company.
+- **Only a successful fetch closes anything.** The runner reaches the reconciler
+  only after the failure paths have already `continue`d.
+
+**Also fixed here:** stored datetimes come back from SQLite **naive** while
+`utcnow()` is **tz-aware**, so any comparison between them raises `TypeError`.
+Every comparison now goes through `lifecycle.as_utc()`.
 
 ### Phase 6 — Breadth ❌ — **DO SECOND**
 

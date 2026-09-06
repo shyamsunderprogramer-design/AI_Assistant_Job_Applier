@@ -24,6 +24,35 @@ class Base(DeclarativeBase):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Application status vocabulary.
+#
+# This lives here, not in excel/tracker.py, because three things now write it —
+# the scorer, the lifecycle reconciler, and the Excel export — and a status one
+# of them sets that another does not recognise is a silent bug. One list.
+#
+# SYSTEM_STATUSES is the subset the pipeline is allowed to OVERWRITE: they
+# record no human decision. Everything else ("Applied", "Rejected", ...) is the
+# user's judgement and is never touched by code (README.md §C7).
+# ---------------------------------------------------------------------------
+DEFAULT_STATUS = "Not Applied"
+REVIEW_STATUS = "Manual Review"
+CLOSED_STATUS = "Closed"
+
+STATUS_VALUES = [
+    DEFAULT_STATUS,
+    REVIEW_STATUS,
+    CLOSED_STATUS,
+    "Applied",
+    "Interviewing",
+    "Rejected",
+    "Offer",
+    "Skipped",
+]
+
+SYSTEM_STATUSES = {"", DEFAULT_STATUS, REVIEW_STATUS, CLOSED_STATUS}
+
+
 class Company(Base):
     """A company and the ATS it uses. Populated by config seeds or discovery."""
 
@@ -82,7 +111,7 @@ class Job(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Phase 2/3 fields, unused in Phase 1
-    status: Mapped[str] = mapped_column(String(32), default="Not Applied")
+    status: Mapped[str] = mapped_column(String(32), default=DEFAULT_STATUS)
     ats_match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     exported_to_excel: Mapped[bool] = mapped_column(default=False)
 

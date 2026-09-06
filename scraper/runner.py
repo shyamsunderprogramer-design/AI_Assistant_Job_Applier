@@ -19,6 +19,7 @@ from scraper.filters import JobFilter
 from scraper.greenhouse import GreenhouseScraper
 from scraper.http_client import HttpSettings, PoliteClient, RobotsDisallowed
 from scraper.lever import LeverScraper
+from scraper.lifecycle import reconcile_board
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ class RunSummary:
     jobs_kept: int = 0
     jobs_new: int = 0
     jobs_updated: int = 0
+    jobs_closed: int = 0
+    jobs_reopened: int = 0
     failures: list[tuple[str, str, str]] = field(default_factory=list)  # (source, slug, error)
 
 
@@ -92,6 +95,7 @@ def run_scrape(cfg) -> RunSummary:
     job_filter = JobFilter.from_config(cfg)
     summary = RunSummary(run_id=uuid.uuid4().hex[:12])
     deactivate_after = int(cfg.get("limits.deactivate_after_failures", 5) or 0)
+    close_on_empty = bool(cfg.get("limits.close_on_empty_board", False))
 
     companies = load_companies(cfg)
     log.info("Run %s — scraping %d companies", summary.run_id, len(companies))
@@ -115,15 +119,30 @@ def run_scrape(cfg) -> RunSummary:
         kept = job_filter.apply(raw_jobs)
         new_count, updated_count = _persist(kept)
 
+        # Only reachable on a SUCCESSFUL fetch — every failure path above has
+        # already `continue`d, so an outage can never close a company's jobs.
+        # Reconciled against EVERY posting returned, not the filtered subset:
+        # a stored job whose title no longer matches the filters is still on
+        # the board (scraper/lifecycle.py).
+        lifecycle = reconcile_board(
+            company.source,
+            company.slug,
+            [raw.external_id for raw in raw_jobs],
+            close_on_empty_board=close_on_empty,
+        )
+
         summary.jobs_seen += len(raw_jobs)
         summary.jobs_kept += len(kept)
         summary.jobs_new += new_count
         summary.jobs_updated += updated_count
+        summary.jobs_closed += lifecycle.closed
+        summary.jobs_reopened += lifecycle.reopened
 
         _log_success(summary, company, len(raw_jobs), len(kept), new_count, started)
         log.info(
-            "%-11s %-24s %3d seen  %3d match  %3d new",
+            "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed",
             company.source, company.slug, len(raw_jobs), len(kept), new_count,
+            lifecycle.closed,
         )
 
     return summary

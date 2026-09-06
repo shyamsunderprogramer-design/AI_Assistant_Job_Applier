@@ -48,6 +48,8 @@ def cmd_scrape(cfg, args) -> int:
     print(f"  Matched filters   : {summary.jobs_kept}")
     print(f"  New in DB         : {summary.jobs_new}")
     print(f"  Updated postings  : {summary.jobs_updated}")
+    print(f"  Closed (gone)     : {summary.jobs_closed}")
+    print(f"  Reopened          : {summary.jobs_reopened}")
 
     if summary.failures:
         print("\n  Failures:")
@@ -132,7 +134,9 @@ def cmd_score(cfg, args) -> int:
     init_engine(cfg.database_url)
     from resume.pipeline import score_jobs
 
-    outcomes = score_jobs(cfg, limit=args.limit, rescore=args.rescore)
+    outcomes = score_jobs(
+        cfg, limit=args.limit, rescore=args.rescore, include_closed=args.include_closed
+    )
     if not outcomes:
         print("Nothing to score. Use --rescore to recompute existing scores.")
         return 0
@@ -156,7 +160,9 @@ def cmd_tailor(cfg, args) -> int:
     from resume.pipeline import tailor_jobs
 
     job_ids = [int(i) for i in args.job_id] if args.job_id else None
-    outcomes = tailor_jobs(cfg, job_ids=job_ids, limit=args.limit)
+    outcomes = tailor_jobs(
+        cfg, job_ids=job_ids, limit=args.limit, include_closed=args.include_closed
+    )
     if not outcomes:
         print("No jobs eligible for tailoring. Run `score` first, or pass --job-id.")
         return 0
@@ -177,22 +183,58 @@ def cmd_tailor(cfg, args) -> int:
 
 def cmd_stats(cfg, args) -> int:
     init_engine(cfg.database_url)
+    from statistics import median
+
+    from db.models import utcnow
+    from scraper.lifecycle import as_utc, stale_companies
+
     with get_session() as session:
         companies = session.query(Company).count()
         jobs = session.query(Job).count()
+        open_jobs = session.query(Job).filter(Job.is_open.is_(True)).count()
         by_source = {}
         for source, in session.query(Job.source).distinct():
             by_source[source] = session.query(Job).filter_by(source=source).count()
         recent = (
-            session.query(Job).order_by(Job.found_at.desc()).limit(10).all()
+            session.query(Job)
+            .filter(Job.is_open.is_(True))
+            .order_by(Job.found_at.desc())
+            .limit(10)
+            .all()
         )
+        # Age of what is actually live. posted_at is missing on some boards,
+        # so fall back to when we first saw it — never silently drop the row.
+        now = utcnow()
+        ages = [
+            (now - as_utc(job.posted_at or job.found_at)).days
+            for job in session.query(Job).filter(Job.is_open.is_(True)).all()
+            if (job.posted_at or job.found_at) is not None
+        ]
 
     print(f"Companies tracked : {companies}")
     print(f"Jobs stored       : {jobs}")
+    print(f"  open            : {open_jobs}")
+    print(f"  closed          : {jobs - open_jobs}")
     for source, count in by_source.items():
-        print(f"  {source:<12}: {count}")
+        print(f"  {source:<14}: {count}")
+    if ages:
+        print(f"Median age (open) : {median(ages):.0f} days")
+
+    warn_days = int(cfg.get("limits.stale_company_warn_days", 7) or 0)
+    stale = stale_companies(warn_days)
+    if stale:
+        # Silence is the failure mode: a company that stopped being scraped
+        # keeps every job marked open forever, because closure only happens on
+        # a successful fetch. Nothing errors — the rows just quietly rot.
+        print(f"\nStale — not scraped in {warn_days}+ days ({len(stale)}):")
+        for row in stale[:10]:
+            when = "never" if row.days is None else f"{row.days}d ago"
+            print(f"  {row.source:<11} {row.slug:<24} {when}")
+        if len(stale) > 10:
+            print(f"  ... and {len(stale) - 10} more")
+
     if recent:
-        print("\nMost recent finds:")
+        print("\nMost recent open finds:")
         for job in recent:
             print(f"  {job.company:<20} {job.title[:56]}")
     return 0
@@ -244,10 +286,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_score.add_argument("--limit", type=int, default=0, help="Only score N jobs")
     p_score.add_argument("--rescore", action="store_true", help="Recompute existing scores")
     p_score.add_argument("--top", type=int, default=25, help="Rows to print")
+    p_score.add_argument(
+        "--include-closed", action="store_true", help="Also score postings no longer on the board"
+    )
 
     p_tailor = sub.add_parser("tailor", help="Tailor the resume per job via the Claude API")
     p_tailor.add_argument("--job-id", action="append", help="Tailor specific job id(s)")
     p_tailor.add_argument("--limit", type=int, default=0, help="Cap how many jobs to tailor")
+    p_tailor.add_argument(
+        "--include-closed", action="store_true", help="Also tailor for closed postings"
+    )
 
     sub.add_parser("stats", help="Show DB counts and recent finds")
 

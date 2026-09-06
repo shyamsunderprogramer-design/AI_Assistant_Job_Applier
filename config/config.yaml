@@ -148,6 +148,22 @@ limits:
   # company left the ATS). 0 disables. Re-enable by setting active=1 in the DB.
   deactivate_after_failures: 5
 
+  # Posting lifecycle. A job that vanishes from a board is closed so it stops
+  # being ranked and tailored for. Only a SUCCESSFUL fetch ever closes
+  # anything — an outage must never look like a mass hiring freeze.
+  #
+  # A board that returns ZERO postings is the ambiguous case: an empty 200 is
+  # indistinguishable from a board that broke, and being wrong closes every job
+  # for that company. Default is to close nothing and log a warning. Set true
+  # only if you know a company genuinely empties its board.
+  close_on_empty_board: false
+
+  # Warn (in `stats`) when an active company has not been successfully scraped
+  # in this many days. Silence is the real failure mode: an unscraped company
+  # keeps its jobs marked open forever, because closure needs a live fetch.
+  # 0 disables.
+  stale_company_warn_days: 7
+
 # ---------------------------------------------------------------------------
 # Company discovery (name -> ATS slug probing). See README.md §C3.
 # ---------------------------------------------------------------------------

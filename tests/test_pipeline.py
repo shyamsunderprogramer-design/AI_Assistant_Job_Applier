@@ -102,3 +102,32 @@ def test_missing_base_resume_raises_clearly(tmp_path, env):
     add_job(STRONG_JD)
     with pytest.raises(FileNotFoundError):
         score_jobs(FakeConfig(tmp_path / "nonexistent" / "resume.docx"))
+
+
+# -- Phase 5: closed postings are not worth ranking or paying for ----------
+
+def test_scoring_skips_closed_jobs(env):
+    add_job(STRONG_JD, ext="open-1")
+    add_job(STRONG_JD, ext="closed-1")
+    with get_session() as s:
+        s.query(Job).filter_by(external_id="closed-1").one().is_open = False
+
+    outcomes = score_jobs(FakeConfig(env))
+
+    assert {o.job_id for o in outcomes} == {
+        job_id_of("open-1"),
+    }
+
+
+def test_include_closed_opts_back_in(env):
+    add_job(STRONG_JD, ext="closed-1")
+    with get_session() as s:
+        s.query(Job).filter_by(external_id="closed-1").one().is_open = False
+
+    assert score_jobs(FakeConfig(env)) == []
+    assert len(score_jobs(FakeConfig(env), include_closed=True)) == 1
+
+
+def job_id_of(ext):
+    with get_session() as s:
+        return s.query(Job).filter_by(external_id=ext).one().id

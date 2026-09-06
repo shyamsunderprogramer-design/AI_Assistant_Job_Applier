@@ -48,8 +48,14 @@ def load_base_resume(cfg) -> Resume:
     return parse_resume(path)
 
 
-def score_jobs(cfg, limit: int = 0, rescore: bool = False) -> list[JobOutcome]:
-    """Score every job against the base resume. No API calls, no cost."""
+def score_jobs(
+    cfg, limit: int = 0, rescore: bool = False, include_closed: bool = False
+) -> list[JobOutcome]:
+    """Score every open job against the base resume. No API calls, no cost.
+
+    Closed postings are skipped: ranking a filled role wastes the user's
+    attention, which is the whole point of the ranking.
+    """
     resume = load_base_resume(cfg)
     resume_text = resume.text()
     threshold = float(cfg.get("resume.min_score", 0.45))
@@ -57,6 +63,8 @@ def score_jobs(cfg, limit: int = 0, rescore: bool = False) -> list[JobOutcome]:
 
     with get_session() as session:
         query = session.query(Job)
+        if not include_closed:
+            query = query.filter(Job.is_open.is_(True))
         if not rescore:
             query = query.filter(Job.ats_match_score.is_(None))
         jobs = query.order_by(Job.found_at.desc()).all()
@@ -98,8 +106,18 @@ def score_jobs(cfg, limit: int = 0, rescore: bool = False) -> list[JobOutcome]:
     return outcomes
 
 
-def tailor_jobs(cfg, job_ids: list[int] | None = None, limit: int = 0) -> list[JobOutcome]:
-    """Tailor the resume for jobs at or above the score threshold."""
+def tailor_jobs(
+    cfg,
+    job_ids: list[int] | None = None,
+    limit: int = 0,
+    include_closed: bool = False,
+) -> list[JobOutcome]:
+    """Tailor the resume for open jobs at or above the score threshold.
+
+    Closed postings are skipped by default — a tailoring call is the most
+    expensive thing here, and spending one on a filled role buys nothing.
+    An explicit --job-id still wins, so a deliberate choice is never blocked.
+    """
     from resume.tailor import tailor_resume  # lazy: needs the anthropic SDK + key
 
     resume = load_base_resume(cfg)
@@ -110,9 +128,12 @@ def tailor_jobs(cfg, job_ids: list[int] | None = None, limit: int = 0) -> list[J
     with get_session() as session:
         query = session.query(Job)
         if job_ids:
+            # Naming a job id is an explicit decision; honour it either way.
             query = query.filter(Job.id.in_(job_ids))
         else:
             query = query.filter(Job.ats_match_score >= threshold)
+            if not include_closed:
+                query = query.filter(Job.is_open.is_(True))
         jobs = query.order_by(Job.ats_match_score.desc()).all()
         if limit:
             jobs = jobs[:limit]

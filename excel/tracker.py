@@ -19,7 +19,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
 
 from config.loader import PROJECT_ROOT
-from db.models import Job
+from db.models import STATUS_VALUES, SYSTEM_STATUSES, Job
 from db.session import get_session
 
 log = logging.getLogger(__name__)
@@ -41,20 +41,12 @@ COLUMNS: list[tuple[str, int]] = [
     ("Job Key", 30),
 ]
 
-STATUS_VALUES = [
-    "Not Applied",
-    "Manual Review",
-    "Applied",
-    "Interviewing",
-    "Rejected",
-    "Offer",
-    "Skipped",
-]
-
-# Statuses the pipeline sets on its own. An export may update a row still in
-# one of these, because there is no user decision recorded there yet. Every
-# other value is a human judgement and is never overwritten.
-SYSTEM_STATUSES = {"", "Not Applied", "Manual Review"}
+# STATUS_VALUES and SYSTEM_STATUSES are defined in db.models and imported here.
+# Three things write a status now — the scorer, the lifecycle reconciler, and
+# this export — so the vocabulary lives in one place or they drift.
+#
+# SYSTEM_STATUSES are the ones an export may update, because they record no
+# user decision. Every other value is a human judgement and is never overwritten.
 
 # Excel's hard per-cell limit is 32767; stay well under it.
 JD_CELL_LIMIT = 20000
@@ -211,6 +203,7 @@ class ExcelTracker:
         colours = {
             "Not Applied": "FFF2F2F2",
             "Manual Review": "FFFFF2CC",
+            "Closed": "FFE0E0E0",
             "Applied": "FFDDEBF7",
             "Interviewing": "FFD9EAD3",
             "Rejected": "FFF4CCCC",

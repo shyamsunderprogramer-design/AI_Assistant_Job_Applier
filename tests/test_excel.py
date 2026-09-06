@@ -181,3 +181,45 @@ def test_user_status_beats_system_status_in_both_directions(tracker):
 
     tracker.export([make_job(status="Not Applied")])
     assert read(tracker).cell(row=2, column=COL["Application Status"]).value == "Interviewing"
+
+
+# -- Phase 5: closure reaches the sheet without clobbering the user ---------
+
+def test_closed_status_reaches_an_untouched_row(tracker):
+    job = make_job()
+    tracker.export([job])
+
+    job.status = "Closed"
+    tracker.export([job])
+
+    ws = read(tracker)
+    assert ws.cell(row=2, column=COL["Application Status"]).value == "Closed"
+
+
+def test_closed_status_never_overwrites_a_user_edit(tracker):
+    """A posting the user applied to can vanish from the board. Their row stays."""
+    job = make_job()
+    tracker.export([job])
+
+    ws = read(tracker)
+    ws.cell(row=2, column=COL["Application Status"]).value = "Interviewing"
+    ws.parent.save(tracker.path)
+
+    job.status = "Closed"
+    tracker.export([job])
+
+    assert read(tracker).cell(row=2, column=COL["Application Status"]).value == "Interviewing"
+
+
+def test_reopened_job_clears_the_closed_status(tracker):
+    job = make_job(status="Closed")
+    tracker.export([job])
+
+    job.status = "Not Applied"
+    tracker.export([job])
+
+    assert read(tracker).cell(row=2, column=COL["Application Status"]).value == "Not Applied"
+
+
+def test_closed_is_a_selectable_status(tracker):
+    assert "Closed" in STATUS_VALUES
