@@ -121,6 +121,17 @@ def parse_pdf(path: Path | str) -> Resume:
     return _build(lines, Path(path))
 
 
+def parse_text(text: str, path: Path | None = None) -> Resume:
+    """Parse resume text that is already in memory.
+
+    Shared by the .txt/.md path and by tests, so a test resume goes through
+    exactly the same sectioning as a real .docx — a fixture that took a
+    different path would stop catching parser regressions.
+    """
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    return _build(lines, path)
+
+
 def parse_resume(path: Path | str) -> Resume:
     path = Path(path)
     if not path.exists():
@@ -131,7 +142,7 @@ def parse_resume(path: Path | str) -> Resume:
     if suffix == ".pdf":
         return parse_pdf(path)
     if suffix in (".txt", ".md"):
-        return _build([ln.strip() for ln in path.read_text(encoding="utf-8").split("\n") if ln.strip()], path)
+        return parse_text(path.read_text(encoding="utf-8"), path)
     raise ValueError(f"Unsupported resume format: {suffix} (use .docx or .pdf)")
 
 

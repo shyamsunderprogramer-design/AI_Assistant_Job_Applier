@@ -24,12 +24,18 @@ resume:
   # Below this match score a job is flagged "Manual Review" instead of being
   # auto-tailored. 0.0–1.0.
   #
-  # Calibrated against 105 real postings: a strong-fit resume scored max 47%,
-  # p90 31%, median 20%. The score measures coverage of a JD's salient terms —
-  # no real resume approaches 100%, so treat it as a RANKING, not a grade.
-  #   0.25 -> ~top quartile auto-tailors   0.30 -> ~top 10%   0.45 -> almost nothing
-  # Raise it to spend less on API calls; lower it to cast wider.
-  min_score: 0.25
+  # RECALIBRATED 2026-09-09 against 111 postings and a REAL resume. The old
+  # numbers (max 47%, median 20%, threshold 0.25) came from a throwaway sample
+  # resume, and were far too low once a real one was in place: 110 of 111 jobs
+  # cleared 0.25, so the flag stopped filtering anything at all.
+  #
+  # Real distribution: max 76%, p90 60%, p75 55%, median 46%, min 23%.
+  #   0.50 -> 42 jobs    0.60 -> 15 jobs    0.65 -> 6 jobs    0.70 -> 4 jobs
+  #
+  # Still a RANKING, not a grade — it measures coverage of a JD's salient
+  # terms. Recalibrate after any big change to the resume or the filters:
+  #   python main.py score --rescore
+  min_score: 0.60
   # Re-tailor a job that already has an output file?
   overwrite: false
 
