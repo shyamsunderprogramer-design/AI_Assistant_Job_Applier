@@ -18,7 +18,8 @@ those numbers are stable, don't renumber them.
 | **P1** Job discovery | ✅ Done, verified live | 10 companies · 3,110 postings seen · 105 matched · 0 dupes on re-run |
 | **P2** Excel tracker | ✅ Done, verified live | 105 exported · re-export is a no-op · your Status edits survive |
 | **P3A** ATS scoring | ✅ Done, calibrated | 105 real postings: max 47%, p90 31%, median 20% |
-| **P3B** Resume tailoring | ⚠️ Built, **never run** | Blocked: no resume file, no API key |
+| **P3B** Resume tailoring | ⚠️ Built, **never run** | Blocked: needs an `ANTHROPIC_API_KEY` |
+| **Auto-search** | ✅ Done, verified live | Reads any resume, derives the search — no keywords to write |
 | **P5** Pipeline integrity | ✅ Done, verified live | Closed 3 vanished postings on a real run; a simulated outage closes nothing |
 | **P6** Breadth | ❌ Not started — **next** | Discovery works but was never used at scale — still 10 boards |
 | **P7** Daily loop | ❌ Not started | 5+ manual commands, so it gets run once |
@@ -26,7 +27,7 @@ those numbers are stable, don't renumber them.
 | **P4** Assisted apply | ❌ Not started | Recast from auto-submit; needs your go/no-go |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
 
-**96 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
+**118 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
 
 ### Contents
 
@@ -41,25 +42,35 @@ those numbers are stable, don't renumber them.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env          # Phase 1 and scoring need no API key
+cp .env.example .env          # discovery and scoring need no API key
+```
 
+**Then drop your resume — any resume — into `resume/`** and run:
+
+```bash
 .venv/bin/python main.py init-db     # create tables, load seed companies
+.venv/bin/python main.py profile     # READ THE RESUME, WRITE THE SEARCH
 .venv/bin/python main.py scrape      # scrape every active company
 .venv/bin/python main.py export      # append new jobs to the Excel tracker
 .venv/bin/python main.py score       # rank them against your resume — free, no API
 ```
 
-To go further than scoring:
+`profile` is the step that means you never write a keyword list. It reads the
+resume and derives the job titles to search for, the ones to exclude, your
+seniority, and where you can work — then saves that to
+`config/search_profile.yaml`, which the scraper reads in preference to
+`config.yaml`. **The file is yours to edit**; regenerate with `profile --force`.
 
-1. Drop your base resume (`.docx` or `.pdf`) into `resume/` — auto-detected, gitignored.
-2. Put `ANTHROPIC_API_KEY` in `.env` — needed only by `tailor`, never by `score`.
+Only resume *tailoring* needs an `ANTHROPIC_API_KEY` in `.env`. Everything
+above — discovery, ranking, tracking — is free and works offline of the API.
 
 Two things worth understanding before you read a number out of this tool:
 
-> **The score is a ranking, not a grade.** Calibrated on 105 real postings, a
-> strong-fit resume scored 47% at best and 20% at the median. It measures coverage
-> of a JD's salient terms, and no real resume approaches 100%. Tune
-> `resume.min_score` rather than reading the percentage as a mark out of 100.
+> **The score is a ranking, not a grade.** On 111 real postings against a real
+> resume: 76% at best, 46% median. It measures coverage of a JD's salient terms,
+> and no real resume approaches 100%. **Recalibrate `resume.min_score` after any
+> big change to your resume or filters** — the original 0.25 came from a sample
+> resume and let 110 of 111 jobs through once a real one was in place.
 
 > **Nothing invents experience.** Claude may only rephrase, reorder, and
 > re-emphasise what your resume already says. Every tailored output is checked
@@ -86,6 +97,9 @@ main.py export --all                     # re-export everything
 
 # Scoring and tailoring
 main.py score                            # free, no API key
+main.py profile                          # derive the search from the resume
+main.py profile --show                   # print it without saving
+main.py profile --force                  # regenerate, overwriting your edits
 main.py score --rescore --top 20
 main.py score --include-closed           # closed postings are skipped by default
 main.py tailor --limit 3                 # needs ANTHROPIC_API_KEY
@@ -114,14 +128,16 @@ Everything tunable lives in `config/config.yaml`. No behaviour is hardcoded.
 | `http` | robots.txt enforcement, per-host delay, jitter, retries, backoff, UA |
 | `portals` | which ATSs are enabled |
 | `companies` | seed list; whether to also scrape discovered companies |
-| `filters` | title keywords + exclusions, location include/exclude, JD keyword requirements |
+| `filters` | JD keyword requirements; `use_derived_profile` (default true) makes the resume-derived search win over the hand-written lists here |
 | `limits` | companies per run, applications/day (P4), auto-deactivation, posting-closure safety (`close_on_empty_board`), staleness warning (`stale_company_warn_days`) |
 | `discovery` | which ATSs to probe, corporate suffixes to strip from names |
 | `logging` | level and log file |
 
-**The role filters are still a broad software-engineering default.** That is why
-Stripe matched 6 postings out of 580. Narrowing `filters.title_keywords` to your
-actual targets is the single cheapest quality win available and it needs no code.
+**You should not need to touch `filters.title_keywords`.** `main.py profile`
+derives the search from your resume and writes `config/search_profile.yaml`,
+which the scraper prefers. The lists in `config.yaml` are the fallback for when
+no resume has been supplied. Set `filters.use_derived_profile: false` to force
+the hand-written lists instead.
 
 Location matching is word-boundary, so `"us"` matches `US-Remote` but not `Aarhus`.
 Exclusions win over inclusions — that is what separates `Remote - USA` from
@@ -135,9 +151,10 @@ db/         SQLAlchemy models (Company, Job, ScrapeLog), session, additive migra
 scraper/    http_client (robots + rate limiting), base, greenhouse, lever,
             filters, discovery, runner, lifecycle (closure + staleness)
 excel/      tracker.py — DB -> editable workbook, append-only
-resume/     parser, scorer, tailor, guard, writer, pipeline (+ your base resume)
+resume/     parser, profile (resume -> search), scorer, tailor, guard,
+            writer, pipeline (+ your base resume, gitignored)
 submitter/  submission + audit log — EMPTY, Phase 4 not started
-tests/      96 offline unit tests
+tests/      118 offline unit tests
 data/       SQLite database + job_tracker.xlsx (gitignored)
 logs/       run logs (gitignored)
 .archive/   the pre-merge README / PLAN / constraints, kept because there is no git
@@ -263,8 +280,13 @@ Under git since 2026-09-06, pushed to
 `github.com/shyamsunderprogramer-design/AI_Assitant_Job_Applier` (**public**).
 
 `.gitignore` keeps `.env`, `data/` (the SQLite DB and the tracker workbook),
-`logs/`, and `resume/` output out of the repo — so no API key, no scraped job
-data, and no resume is ever committed. **Check that before adding a file**: the
+`logs/`, `config/search_profile.yaml`, and **every resume document** out of the
+repo — so no API key, no scraped job data, and no resume is ever committed.
+
+That last one was a real near-miss: the pattern was `resume/base_resume.*`, so a
+resume saved under the person's own name was **not** ignored. It is now matched
+by extension (`resume/*.docx`, `*.pdf`, …). Nothing leaked — but check
+`git status` before committing if you add a new file type there. **Check that before adding a file**: the
 repo is public, and the DB in particular holds the full text of every posting.
 
 `data/` being gitignored also means the database is *not* backed up by git. A
@@ -355,7 +377,9 @@ Verified live: 10 companies, 3,110 postings seen, 105 matched, 0 duplicates on r
 - [x] CLI: `init-db`, `scrape`, `discover`, `import-csv`, `stats`, `failures`
 - [x] 20 offline unit tests (filters, parsers, hashing, slug derivation)
 - [x] Live verification run against real Greenhouse + Lever boards
-- [ ] Narrow `filters.title_keywords` to your actual target roles — **needs your input**
+- [x] Narrow the title filters to the user's actual roles — **solved by derivation
+      rather than by asking**: `resume/profile.py` reads the resume and writes the
+      search (2026-09-09)
 
 ### Phase 2 — Excel Tracking Sheet ✅
 
@@ -420,6 +444,48 @@ Verified live on 105 real postings and calibrated.
 
 **Done when:** a real tailored .docx exists for a real posting, the guard has been
 seen both to pass *and* to reject, and a run's cost is known before it starts.
+
+### Auto-search — the resume writes the filters ✅
+
+**Verified live 2026-09-09.** `filters.title_keywords` used to be a list the user
+had to write *before they knew the answer*, so it stayed at its generic default
+and searched for the wrong jobs. Against an 11-year SRE/DevOps resume it was
+hunting "software engineer / backend / full stack" — and **excluding "staff" and
+"principal"**, the two levels that person should most have been seeing.
+
+`main.py profile` now reads the resume and derives the search: held titles,
+skills, years of experience, seniority band, and location. Offline, deterministic,
+no API key.
+
+- [x] `resume/profile.py` — held titles, years, seniority, role families, locations
+- [x] Title evidence weighted 10× body evidence — unweighted counting ranked
+      "network engineer" (6 body mentions of *networking*) above SRE, the person's
+      actual job title
+- [x] Weak families dropped but **reported** as "considered", so they can be added back
+- [x] Exclusions derived from seniority — no junior roles for a lead, no staff/principal
+      exclusions for someone who should be seeing them
+- [x] An exclusion may never cancel a search term (a self-defeating filter returns nothing)
+- [x] A non-technical resume falls back to its own held titles rather than being
+      handed a software engineer's search — narrow, but never wrong
+- [x] Saved to `config/search_profile.yaml`, printed, and editable; `--force` regenerates
+- [x] `scraper/filters.resolve_filter` prefers the derived profile over `config.yaml`
+- [x] 22 unit tests, most covering cases where a wrong guess would be silent
+- [ ] `refine_with_claude()` — the API-backed layer for careers the offline
+      vocabulary does not cover (a nurse, an accountant). Hook exists, needs a key.
+
+**Live result:** the derived search matched 6 of 3,184 postings across the same
+10 boards — including **Staff Site Reliability Engineer** (Attentive),
+**Staff+ SRE** (Anthropic), and **Staff/Senior Infrastructure Engineer**
+(Coinbase). Every one of those would have been thrown away by the old filters.
+
+The low match count is an honest signal, not a bug: these 10 seed companies are
+product startups that hire mostly product engineers. It is the argument for P6.
+
+**Also recalibrated:** `resume.min_score` was 0.25, derived from a throwaway
+sample resume. Against the real one, 110 of 111 jobs cleared it and the "Manual
+Review" flag stopped filtering anything. Real distribution is max 76%, p90 60%,
+median 46% — threshold is now **0.60** (15 jobs). Recalibrate after any big
+resume change with `score --rescore`.
 
 ### Phase 5 — Pipeline Integrity ✅
 
@@ -596,9 +662,9 @@ rather than a feeling.
 
 | # | Item | Unblocks |
 |---|---|---|
-| 1 | **Base resume** (`.docx`/`.pdf`) into `resume/` — confirmed absent as of 2026-09-06 | P3B live run |
+| ~~1~~ | ~~Base resume into `resume/`~~ — ✅ supplied 2026-09-06 | done |
+| ~~3~~ | ~~Your actual target roles~~ — ✅ now derived from the resume automatically | done |
 | 2 | **`ANTHROPIC_API_KEY`** in `.env` — no `.env` file exists yet | P3B, P8 |
-| 3 | **Your actual target roles** — the filters are a broad SWE default | Signal quality, everywhere |
 | 4 | **Profile data** — contact, work history, EEO answers | P4 |
 | 5 | **Go/no-go on the P4 recast** — prefill-and-hand-over instead of auto-submit. This is a scope *reduction*; confirm it's the one you want | P4 |
 | 6 | **Breadth target** — is 300 boards right? | P6 |
