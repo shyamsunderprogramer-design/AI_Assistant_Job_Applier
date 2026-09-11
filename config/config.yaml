@@ -52,6 +52,13 @@ http:
   jitter_seconds: 0.75
   max_retries: 3
   backoff_base_seconds: 2.0
+  # A 401/403 on robots.txt means the file is UNAVAILABLE, not that everything
+  # is forbidden — RFC 9309 §2.3.1.3 says a crawler may then proceed, and
+  # Google's crawler documents the same reading. Set true for the stricter
+  # interpretation, which will silently exclude hosts that do permit crawling
+  # (e.g. api.ashbyhq.com, whose public job-board API sits behind a 401 on
+  # robots.txt). A real "Disallow" directive is always honoured either way.
+  strict_robots_on_4xx: false
 
 # ---------------------------------------------------------------------------
 # Which ATS platforms to scrape. Adding a company is a config/DB change only.
@@ -60,6 +67,8 @@ portals:
   greenhouse:
     enabled: true
   lever:
+    enabled: true
+  ashby:
     enabled: true
 
 # ---------------------------------------------------------------------------
@@ -174,7 +183,7 @@ limits:
 # Company discovery (name -> ATS slug probing). See README.md §C3.
 # ---------------------------------------------------------------------------
 discovery:
-  probe_sources: ["greenhouse", "lever"]
+  probe_sources: ["greenhouse", "lever", "ashby"]
   # Suffixes stripped when deriving a slug from a company name.
   strip_suffixes: ["inc", "inc.", "corp", "corp.", "corporation", "llc",
                    "ltd", "ltd.", "co", "co.", "plc", "group", "holdings",

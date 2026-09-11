@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from db.models import Company, Job, ScrapeLog, utcnow
 from db.session import get_session
+from scraper.ashby import AshbyScraper
 from scraper.base import CompanyRef, PortalScraper, RawJob
 from scraper.discovery import upsert_company
 from scraper.filters import JobFilter, resolve_filter
@@ -26,6 +27,7 @@ log = logging.getLogger(__name__)
 SCRAPER_TYPES: dict[str, type[PortalScraper]] = {
     "greenhouse": GreenhouseScraper,
     "lever": LeverScraper,
+    "ashby": AshbyScraper,
 }
 
 

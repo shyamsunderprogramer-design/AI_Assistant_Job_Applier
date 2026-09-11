@@ -34,6 +34,10 @@ class HttpSettings:
     jitter_seconds: float = 0.75
     max_retries: int = 3
     backoff_base_seconds: float = 2.0
+    # Treat a 401/403 on robots.txt as a blanket disallow. Stricter than
+    # RFC 9309, which says a 4xx means the file is unavailable and the crawler
+    # may proceed. Off by default; see _robots_for().
+    strict_robots_on_4xx: bool = False
 
     @classmethod
     def from_config(cls, cfg) -> "HttpSettings":
@@ -45,6 +49,7 @@ class HttpSettings:
             jitter_seconds=float(cfg.get("http.jitter_seconds", 0.75)),
             max_retries=int(cfg.get("http.max_retries", 3)),
             backoff_base_seconds=float(cfg.get("http.backoff_base_seconds", 2.0)),
+            strict_robots_on_4xx=bool(cfg.get("http.strict_robots_on_4xx", False)),
         )
 
 
@@ -70,12 +75,38 @@ class PoliteClient:
             resp = self._session.get(robots_url, timeout=self.settings.timeout_seconds)
             if resp.status_code == 200:
                 parser.parse(resp.text.splitlines())
-            elif resp.status_code in (401, 403):
-                # Explicitly protected — treat as full disallow, per RFC 9309.
-                parser.parse(["User-agent: *", "Disallow: /"])
+            elif 400 <= resp.status_code < 500:
+                # RFC 9309 §2.3.1.3 ("Unavailable" Status): a 4xx means the
+                # robots.txt file is unavailable, and "the crawler MAY access
+                # any resources on the server". 401 and 403 are not exceptions
+                # — an unreadable robots.txt is an ABSENT one, not a blanket
+                # Disallow. Google's crawler documents the same reading.
+                #
+                # This code previously did the opposite while citing this very
+                # RFC, and Python's stdlib RobotFileParser has the same
+                # non-compliant behaviour, which is probably where it came from.
+                # It made api.ashbyhq.com (401 on /robots.txt, but a documented
+                # PUBLIC job-board API) unscrapeable.
+                #
+                # Set http.strict_robots_on_4xx: true to restore the cautious
+                # reading — it is stricter than the standard, not politer than
+                # it, and it will silently exclude hosts that permit crawling.
+                if resp.status_code in (401, 403) and self.settings.strict_robots_on_4xx:
+                    log.info(
+                        "robots.txt for %s returned %d; strict mode treats that as "
+                        "full disallow", host_root, resp.status_code,
+                    )
+                    parser.parse(["User-agent: *", "Disallow: /"])
+                else:
+                    parser.parse([])
             else:
-                # 404 or other: no restrictions published.
-                parser.parse([])
+                # 5xx. RFC 9309 §2.3.1.4: unreachable means assume complete
+                # disallow. A server having a bad day is not permission.
+                log.warning(
+                    "robots.txt for %s returned %d — assuming disallow until it recovers",
+                    host_root, resp.status_code,
+                )
+                parser.parse(["User-agent: *", "Disallow: /"])
         except requests.RequestException as exc:
             log.warning("robots.txt unreachable for %s (%s) — proceeding politely", host_root, exc)
             self._robots[host_root] = None

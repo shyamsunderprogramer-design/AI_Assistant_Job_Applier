@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from db.models import Company
+from db.models import Company, ProbeLog, utcnow
 from db.session import get_session
 from scraper.base import PortalScraper
 
@@ -69,39 +69,114 @@ def candidate_slugs(name: str, strip_suffixes: list[str] | None = None) -> list[
     return [c for c in candidates if c and not (c in seen or seen.add(c))]
 
 
+def load_probe_cache() -> dict[tuple[str, str], bool]:
+    """Every (source, slug) already probed, mapped to whether it was a hit."""
+    with get_session() as session:
+        return {(row.source, row.slug): row.found for row in session.query(ProbeLog).all()}
+
+
+def record_probe(source: str, slug: str, found: bool, company_name: str | None = None) -> None:
+    """Remember a probe outcome so it is never re-sent."""
+    with get_session() as session:
+        existing = session.query(ProbeLog).filter_by(source=source, slug=slug).one_or_none()
+        if existing is None:
+            session.add(ProbeLog(source=source, slug=slug, found=found, company_name=company_name))
+        else:
+            existing.found = found
+            existing.probed_at = utcnow()
+            existing.company_name = company_name or existing.company_name
+
+
+@dataclass
+class DiscoveryProgress:
+    """Counters for one discovery run."""
+
+    names: int = 0
+    found: int = 0
+    probes_sent: int = 0
+    probes_skipped: int = 0  # answered from cache, never sent
+
+    def summary(self) -> str:
+        saved = f", {self.probes_skipped} from cache" if self.probes_skipped else ""
+        return (
+            f"{self.found} found from {self.names} names; "
+            f"{self.probes_sent} probes sent{saved}"
+        )
+
+
 class CompanyDiscoverer:
     def __init__(self, scrapers: dict[str, PortalScraper], strip_suffixes: list[str] | None = None):
         self.scrapers = scrapers
         self.strip_suffixes = strip_suffixes or []
+        self.progress = DiscoveryProgress()
+        self._cache: dict[tuple[str, str], bool] = {}
+
+    def plan(self, name: str, sources: list[str] | None = None) -> list[tuple[str, str]]:
+        """The (source, slug) pairs this name would probe. Used by --dry-run."""
+        return [
+            (source, slug)
+            for source in (sources or list(self.scrapers))
+            if source in self.scrapers
+            for slug in candidate_slugs(name, self.strip_suffixes)
+        ]
 
     def probe(self, name: str, sources: list[str] | None = None) -> DiscoveryResult:
-        """Probe each ATS for this company. First hit wins."""
-        for source in sources or list(self.scrapers):
-            scraper = self.scrapers.get(source)
-            if scraper is None:
-                continue
-            for slug in candidate_slugs(name, self.strip_suffixes):
-                try:
-                    exists = scraper.board_exists(slug)
-                except Exception as exc:  # a probe failure is not fatal
-                    log.debug("Probe error %s/%s: %s", source, slug, exc)
-                    continue
-                if exists:
-                    log.info("Found %s on %s (slug: %s)", name, source, slug)
+        """Probe each ATS for this company. First hit wins.
+
+        A (source, slug) already in the probe cache is never re-requested: a
+        dead slug stays dead, and re-asking is both slow and impolite.
+        """
+        for source, slug in self.plan(name, sources):
+            cached = self._cache.get((source, slug))
+            if cached is not None:
+                self.progress.probes_skipped += 1
+                if cached:
+                    log.info("Known board: %s on %s (slug: %s)", name, source, slug)
                     return DiscoveryResult(name=name, slug=slug, source=source, found=True)
-        log.debug("No Greenhouse/Lever board found for %s", name)
+                continue
+
+            try:
+                exists = self.scrapers[source].board_exists(slug)
+            except Exception as exc:  # a probe failure is not fatal
+                log.debug("Probe error %s/%s: %s", source, slug, exc)
+                continue
+
+            self.progress.probes_sent += 1
+            # Persist immediately rather than at the end: a run interrupted
+            # after 4,000 probes must not throw away what those 4,000 cost.
+            record_probe(source, slug, exists, company_name=name if exists else None)
+            self._cache[(source, slug)] = exists
+
+            if exists:
+                log.info("Found %s on %s (slug: %s)", name, source, slug)
+                return DiscoveryResult(name=name, slug=slug, source=source, found=True)
+
+        log.debug("No board found for %s", name)
         return DiscoveryResult(name=name, slug=None, source=None, found=False)
 
-    def discover_from_names(self, names: list[str], sources: list[str] | None = None) -> list[DiscoveryResult]:
+    def discover_from_names(
+        self,
+        names: list[str],
+        sources: list[str] | None = None,
+        on_progress=None,
+    ) -> list[DiscoveryResult]:
+        """Probe every name. Safe to interrupt — findings persist as they happen."""
+        self._cache = load_probe_cache()
+        self.progress = DiscoveryProgress()
         results: list[DiscoveryResult] = []
+
         for name in names:
             name = name.strip()
             if not name:
                 continue
+            self.progress.names += 1
             result = self.probe(name, sources)
             results.append(result)
             if result.found:
+                self.progress.found += 1
                 self._save(result.name, result.slug, result.source, origin="discovery")
+            if on_progress is not None:
+                on_progress(self.progress, result)
         return results
 
     def _save(self, name: str, slug: str, source: str, origin: str) -> None:
@@ -159,7 +234,7 @@ def import_inventory_csv(path: Path | str) -> int:
             slug = keys.get("slug") or keys.get("token") or keys.get("board_token")
             source = (keys.get("source") or keys.get("ats") or "").lower()
             name = keys.get("name") or keys.get("company") or slug
-            if not slug or source not in ("greenhouse", "lever"):
+            if not slug or source not in ("greenhouse", "lever", "ashby"):
                 continue
             upsert_company(name=name, slug=slug, source=source, origin="csv")
             imported += 1

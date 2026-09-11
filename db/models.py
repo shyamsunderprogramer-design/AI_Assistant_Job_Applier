@@ -125,6 +125,34 @@ class Job(Base):
         return f"<Job {self.company}: {self.title}>"
 
 
+class ProbeLog(Base):
+    """One row per (source, slug) ever probed by discovery.
+
+    Discovery is the one part of this tool that makes a request per GUESS
+    rather than per known company, so a 5,000-name list is tens of thousands of
+    requests, most of them misses. Without a memory of what has already been
+    asked, every re-run re-asks every board the same dead questions.
+
+    That makes this cache a politeness feature as much as a speed one
+    (README.md §C5): the cheapest request is the one never sent. It also makes
+    a long discovery run resumable — an interrupted run has already persisted
+    everything it learned.
+    """
+
+    __tablename__ = "probe_log"
+    __table_args__ = (UniqueConstraint("source", "slug", name="uq_probe_source_slug"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    slug: Mapped[str] = mapped_column(String(255), index=True)
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    found: Mapped[bool] = mapped_column(default=False)
+    probed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<ProbeLog {self.source}:{self.slug} found={self.found}>"
+
+
 class ScrapeLog(Base):
     """One row per company scrape attempt. Failures are logged, never raised."""
 

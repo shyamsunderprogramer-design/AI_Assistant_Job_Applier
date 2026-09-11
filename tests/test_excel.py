@@ -223,3 +223,57 @@ def test_reopened_job_clears_the_closed_status(tracker):
 
 def test_closed_is_a_selectable_status(tracker):
     assert "Closed" in STATUS_VALUES
+
+
+# -- Phase 6: prune must clean the sheet, not leave dead rows --------------
+
+def test_remove_deletes_a_pruned_row(tracker):
+    tracker.export([make_job("1"), make_job("2")])
+
+    assert tracker.remove({job_key(make_job("2"))}) == 1
+
+    ws = read(tracker)
+    keys = {ws.cell(row=r, column=COL["Job Key"]).value for r in range(2, ws.max_row + 1)}
+    assert keys == {job_key(make_job("1"))}
+
+
+def test_remove_never_deletes_a_row_the_user_acted_on(tracker):
+    """A posting you applied to can be pruned from the DB. The row stays."""
+    tracker.export([make_job("1")])
+    ws = read(tracker)
+    ws.cell(row=2, column=COL["Application Status"]).value = "Applied"
+    ws.parent.save(tracker.path)
+
+    assert tracker.remove({job_key(make_job("1"))}) == 0
+    assert read(tracker).cell(row=2, column=COL["Application Status"]).value == "Applied"
+
+
+def test_remove_reclaims_rows_rather_than_blanking_them(tracker):
+    """openpyxl's delete_rows leaves the row's dimensions and styling behind,
+    so deleting 111 rows left 111 blank-but-formatted ones and max_row never
+    shrank. The body is rebuilt instead."""
+    jobs = [make_job(str(i)) for i in range(1, 6)]
+    tracker.export(jobs)
+
+    tracker.remove({job_key(j) for j in jobs[:4]})
+
+    ws = read(tracker)
+    assert ws.max_row == 2  # header + the one survivor
+    assert ws.cell(row=2, column=COL["Job Key"]).value == job_key(jobs[4])
+
+
+def test_remove_preserves_hyperlinks_on_survivors(tracker):
+    tracker.export([make_job("1"), make_job("2")])
+    tracker.remove({job_key(make_job("1"))})
+    assert read(tracker).cell(row=2, column=COL["Application Link"]).hyperlink is not None
+
+
+def test_remove_of_an_unknown_key_changes_nothing(tracker):
+    tracker.export([make_job("1")])
+    assert tracker.remove({"greenhouse:other:99"}) == 0
+    assert read(tracker).max_row == 2
+
+
+def test_remove_with_no_keys_is_a_no_op(tracker):
+    tracker.export([make_job("1")])
+    assert tracker.remove(set()) == 0

@@ -21,13 +21,13 @@ those numbers are stable, don't renumber them.
 | **P3B** Resume tailoring | ⚠️ Built, **never run** | Blocked: needs an `ANTHROPIC_API_KEY` |
 | **Auto-search** | ✅ Done, verified live | Reads any resume, derives the search — no keywords to write |
 | **P5** Pipeline integrity | ✅ Done, verified live | Closed 3 vanished postings on a real run; a simulated outage closes nothing |
-| **P6** Breadth | ❌ Not started — **next** | Discovery works but was never used at scale — still 10 boards |
+| **P6** Breadth | ✅ Done, verified live | 10 boards → **149**; Ashby added; 13,242 postings scanned |
 | **P7** Daily loop | ❌ Not started | 5+ manual commands, so it gets run once |
 | **P8** Relevance v2 | ❌ Not started | Needs P6 first |
 | **P4** Assisted apply | ❌ Not started | Recast from auto-submit; needs your go/no-go |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
 
-**118 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
+**170 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
 
 ### Contents
 
@@ -87,9 +87,11 @@ main.py stats                            # counts + most recent finds
 main.py failures                         # which boards failed, and why
 
 # Building the company inventory
-main.py discover --names my_companies.txt        # name -> slug -> live ATS probe
-main.py discover --names fortune1000.csv --limit 200
+main.py discover --names data/seed_companies.txt  # name -> slug -> live ATS probe
+main.py discover --names my_list.txt --dry-run   # show the cost, send nothing
 main.py import-csv --file ats_companies.csv      # pre-built name,slug,source
+main.py prune                                    # preview jobs that no longer match
+main.py prune --apply                            # ...and remove them
 
 # Tracking sheet
 main.py export                           # append new jobs
@@ -113,8 +115,24 @@ runs its own board at a slug, so the name→slug map has to be **built, not fetc
 (§C3). `discover` derives candidate slugs from each name, asks each ATS whether that
 board exists, and stores the hits; later `scrape` runs pick them up automatically.
 
+`data/seed_companies.txt` ships 182 tech scale-up names as a starting point —
+**148 of them were found** (81%). Add your own freely, one per line.
+
+Discovery sends a request per *guess*, so two things protect the boards it asks
+(§C5): every outcome is cached in `probe_log` and never re-requested, and
+`--dry-run` prints the probe count and estimated runtime before anything is sent.
+A long run is safe to interrupt — findings are written as they happen.
+
 Fortune-1000 names have a low hit rate: big enterprises mostly use Workday, Taleo,
 and iCIMS. **Startup and tech-scaleup lists are a much richer seed.**
+
+### Keeping the list honest
+
+Filters apply at scrape time, so narrowing a search leaves the jobs that matched
+the *old* one sitting in the DB, still ranked and still recommended.
+`main.py prune` re-applies the current search to everything stored, previews what
+no longer matches, and removes it on `--apply` — including the sheet rows.
+Anything you have acted on (Applied, Rejected, …) is never touched.
 
 ## 3. Configuration
 
@@ -126,7 +144,7 @@ Everything tunable lives in `config/config.yaml`. No behaviour is hardcoded.
 | `excel` | tracker workbook path |
 | `resume` | base resume path (null = auto-detect), output dir, `min_score`, overwrite |
 | `http` | robots.txt enforcement, per-host delay, jitter, retries, backoff, UA |
-| `portals` | which ATSs are enabled |
+| `portals` | which ATSs are enabled (greenhouse, lever, ashby) |
 | `companies` | seed list; whether to also scrape discovered companies |
 | `filters` | JD keyword requirements; `use_derived_profile` (default true) makes the resume-derived search win over the hand-written lists here |
 | `limits` | companies per run, applications/day (P4), auto-deactivation, posting-closure safety (`close_on_empty_board`), staleness warning (`stale_company_warn_days`) |
@@ -149,12 +167,13 @@ Exclusions win over inclusions — that is what separates `Remote - USA` from
 config/     config.yaml + loader (YAML + .env, logging setup)
 db/         SQLAlchemy models (Company, Job, ScrapeLog), session, additive migrations
 scraper/    http_client (robots + rate limiting), base, greenhouse, lever,
-            filters, discovery, runner, lifecycle (closure + staleness)
+            ashby, filters, discovery (+ probe cache), runner,
+            lifecycle (closure + staleness)
 excel/      tracker.py — DB -> editable workbook, append-only
 resume/     parser, profile (resume -> search), scorer, tailor, guard,
             writer, pipeline (+ your base resume, gitignored)
 submitter/  submission + audit log — EMPTY, Phase 4 not started
-tests/      118 offline unit tests
+tests/      170 offline unit tests
 data/       SQLite database + job_tracker.xlsx (gitignored)
 logs/       run logs (gitignored)
 .archive/   the pre-merge README / PLAN / constraints, kept because there is no git
@@ -311,8 +330,8 @@ execution order below, which is deliberately *not* 0,1,2,3,4.
 |---|---|---|---|
 | ~~0~~ | ~~**git init** (§C11)~~ | ✅ Done 2026-09-06 — repo initialised and pushed. | — |
 | ~~1~~ | ~~**P5 — Pipeline integrity**~~ | ✅ Done 2026-09-06 — closure live, 3 dead postings retired on the first run. | — |
-| 2 | **P6 — Breadth** ← **next** | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
-| 3 | **P7 — Daily loop** | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
+| ~~2~~ | ~~**P6 — Breadth**~~ ✅ Done 2026-09-11 — 149 companies, 3 ATSs. | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
+| 3 | **P7 — Daily loop** ← **next** | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
 | 4 | **P3B — Live tailoring** | Fully built, never run. Unblocks the moment a resume + key exist. | Yes — you |
 | 5 | **P8 — Relevance v2** | Only worth it once the funnel is wide. Re-ranking 105 jobs is pointless; re-ranking 3,000 is not. | Yes — key |
 | 6 | **P4 — Assisted apply** | Highest risk, lowest reliability, ToS-constrained. Last on purpose, and recast from "auto-submit" to "prefill and hand over". | Yes — profile + go/no-go |
@@ -531,31 +550,65 @@ filtered set instead would have closed 4 live jobs.
 `utcnow()` is **tz-aware**, so any comparison between them raises `TypeError`.
 Every comparison now goes through `lifecycle.as_utc()`.
 
-### Phase 6 — Breadth ❌ — **DO SECOND**
+### Phase 6 — Breadth ✅
 
-P1 proved discovery *works*; it was never *used*. The DB holds 10 companies. Stripe
-alone had 580 postings and matched 6 — that ratio is what a real inventory has to
-overcome by volume.
+**Verified live 2026-09-11.** P1 proved discovery *worked*; it had never been
+*used*. The DB held 10 companies, which is why a correct SRE search matched only
+6 of 3,184 postings — the search was right, the company list was a demo.
 
-- [ ] **Ashby scraper** (`scraper/ashby.py`) — public posting API, same JSON shape as
-      Greenhouse/Lever. One module for a large slice of the startup market the current
-      two miss; the highest coverage-per-line available anywhere in this plan
-- [ ] Wire Ashby into `discovery.probe_sources` and `portals`
-- [ ] Source real seed name lists (YC companies, tech-scaleup lists) — per §C3,
-      startups are the rich seed, Fortune-1000 names are not
-- [ ] Discovery at scale: resumable, checkpointed, safe to Ctrl-C and restart
-- [ ] Cache negative probes so re-runs don't re-hammer boards for known misses
-- [ ] Record probe outcome + date per candidate slug (a board can appear later)
-- [ ] `discover --dry-run` to see candidate slugs before spending requests
-- [ ] Politeness at scale: breadth comes from more hosts, never a shorter delay (§C5)
-- [ ] Make `max_companies_per_run` meaningful — rotate so every company is scraped
-      over a few days rather than all of them every run
-- [ ] Cross-company duplicate detection (the same role reposted under two slugs)
+**Result: 10 boards → 149.** 148 companies found from 182 names (81% hit rate),
+13,242 postings scanned, and the matched-job count went from 6 to 95.
 
-**Done when:** ≥300 verified boards in `companies`, a full scrape completes in a
-reasonable window under the existing rate limits, and all three ATSs feed the tracker.
+- [x] **Ashby scraper** (`scraper/ashby.py`) — the third big startup ATS, and
+      companies on it were entirely invisible before. **45 of the 149 found
+      companies are Ashby-only** (Benchling, Cedar, Hims & Hers, …)
+- [x] Ashby's payload is richer than the other two: salary is captured into the
+      description, and remote-ness is folded into the location string — a fully
+      remote role reads "New York, NY (HQ)" and a "remote" filter would drop it
+- [x] `secondaryLocations` deliberately excluded from the filter string: a US
+      role also open to "Remote (Canada)" would be killed by a "canada" exclusion
+- [x] Wired into `portals`, `discovery.probe_sources`, and the CSV importer
+- [x] `data/seed_companies.txt` — 182 tech scale-up names (§C3: startups, not
+      the Fortune 1000)
+- [x] **Probe cache** (`probe_log`): every (source, slug) outcome is remembered
+      and never re-requested. A politeness feature as much as a speed one — the
+      cheapest request is the one never sent (§C5)
+- [x] Resumable: outcomes persist as they happen, so an interrupted run keeps
+      everything its probes cost
+- [x] `discover --dry-run` prints the probe count and runtime before spending it
+- [x] Live progress while running, so a 18-minute run is not a blank screen
+- [x] 16 discovery tests + 20 Ashby tests
+- [ ] Rotate companies across runs so `max_companies_per_run` becomes meaningful
+- [ ] Cross-company duplicate detection (one role reposted under two slugs)
 
-**To agree with you:** is 300 the right target? It's a starting number, not a researched one.
+**Three bugs this phase surfaced, all fixed:**
+
+1. **robots.txt handling was backwards.** `http_client` treated a 401/403 on
+   robots.txt as a blanket disallow *while citing RFC 9309 as the reason* — but
+   §2.3.1.3 of that RFC says a 4xx means the file is UNAVAILABLE and the crawler
+   may proceed, and Google's crawler documents the same. Python's stdlib
+   `RobotFileParser` has the same non-compliant behaviour, which is likely where
+   it came from. It made `api.ashbyhq.com` — a documented **public** job-board
+   API — unscrapeable. Now standard-compliant, with
+   `http.strict_robots_on_4xx: true` to restore the cautious reading. A real
+   `Disallow` directive is honoured exactly as before, and a 5xx still disallows.
+
+2. **Foreign roles reached the ranked list.** The location blocklist had 13
+   entries, so "Sweden (Remote)", "Spain (Remote)", "The Netherlands | Remote",
+   "Remote - European Union" and "Remote - UK" all matched the "remote" include
+   term and named no blocked country. Now 149 places, consulted only when the
+   resume's own contact line is US-based — and never excluding somewhere the
+   person actually is.
+
+3. **Narrowing a search left the old jobs behind.** Filters run at scrape time,
+   so the DB had accumulated every job matching any filter generation ever used:
+   126 stale postings, still ranked, still recommended. `main.py prune` fixes it,
+   and also clears their sheet rows — which exposed that `openpyxl.delete_rows`
+   leaves a deleted row's dimensions and styling behind, so removing 111 rows
+   left 111 blank ones. The sheet body is rebuilt instead.
+
+**Done when:** ≥300 verified boards. **Currently 149** — the seed list is the
+limit, not the machinery. Feed `discover` a longer name list to go further.
 
 ### Phase 7 — Daily Loop ❌ — **DO THIRD**
 

@@ -152,6 +152,61 @@ class ExcelTracker:
         wb.save(self.path)
         return appended, updated
 
+    def remove(self, keys: set[str]) -> int:
+        """Delete rows whose jobs no longer exist. Returns how many went.
+
+        The sheet is otherwise append-only, which is right while the DB only
+        grows — but `prune` deletes jobs that no longer match the search, and
+        without this their rows linger forever as dead entries the user would
+        still click on.
+
+        A row the user has acted on is never deleted, even when its job was
+        pruned: "Applied" outlives the posting, and is the row they most need
+        to keep. Deletion runs bottom-up so earlier deletions do not shift the
+        indices of rows not yet visited.
+        """
+        if not keys or not self.path.exists():
+            return 0
+
+        wb = self._open()
+        ws = self._sheet(wb)
+
+        survivors: list[list[object]] = []
+        removed = 0
+        blanks = 0
+        for row in range(2, ws.max_row + 1):
+            values = [ws.cell(row=row, column=col).value for col in range(1, len(COLUMNS) + 1)]
+            key = values[KEY_COL - 1]
+            if not key:
+                blanks += 1  # nothing to keep, and worth reclaiming
+                continue
+            status = (values[COL["Application Status"] - 1] or "").strip()
+            if str(key) in keys and status in SYSTEM_STATUSES:
+                removed += 1
+                continue
+            survivors.append(values)
+
+        if not removed and not blanks:
+            return 0
+
+        # Rewrite rather than delete_rows(): openpyxl leaves the row dimensions
+        # and styling of a deleted row behind, so deleting 111 rows left 111
+        # blank-but-formatted rows and max_row never shrank. Rebuilding the
+        # body is the only way to actually reclaim them.
+        ws.delete_rows(2, ws.max_row)
+        for offset, values in enumerate(survivors):
+            row = 2 + offset
+            for col, value in enumerate(values, start=1):
+                cell = ws.cell(row=row, column=col)
+                cell.value = value
+                if col == COL["Application Link"] and value:
+                    cell.hyperlink = str(value)
+                    cell.style = "Hyperlink"
+
+        self._format(ws)
+        wb.save(self.path)
+        return removed
+
     @staticmethod
     def _sync_status(ws: Worksheet, row_idx: int, db_status: str) -> None:
         """Let system-set statuses through only while the row is untouched.
