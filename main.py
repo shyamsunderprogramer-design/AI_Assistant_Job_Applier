@@ -17,7 +17,7 @@ import logging
 import sys
 
 from config.loader import load_config, setup_logging
-from db.models import Company, Job, ScrapeLog
+from db.models import SYSTEM_STATUSES, Company, Job, ScrapeLog
 from db.session import get_session, init_engine
 
 log = logging.getLogger("main")
@@ -67,20 +67,49 @@ def cmd_discover(cfg, args) -> int:
     names = load_names_from_file(args.names)
     if args.limit:
         names = names[: args.limit]
-    print(f"Probing {len(names)} company names against "
-          f"{', '.join(cfg.get('discovery.probe_sources', []))}...")
+    sources = cfg.get("discovery.probe_sources", [])
 
     client = PoliteClient(HttpSettings.from_config(cfg))
     discoverer = CompanyDiscoverer(
         scrapers=build_scrapers(cfg, client),
         strip_suffixes=cfg.get("discovery.strip_suffixes", []),
     )
-    results = discoverer.discover_from_names(names, cfg.get("discovery.probe_sources"))
+
+    if args.dry_run:
+        # Discovery spends a request per GUESS, so show what a run would cost
+        # before it is spent (README.md §C5).
+        pairs = [pair for name in names for pair in discoverer.plan(name, sources)]
+        delay = float(cfg.get("http.min_delay_seconds", 1.5))
+        print(f"{len(names)} names -> {len(pairs)} probes across {', '.join(sources)}")
+        print(f"Roughly {len(pairs) * delay / 60:.0f} minutes at the configured "
+              f"{delay}s per-host delay (minus anything already cached).\n")
+        for name in names[:10]:
+            planned = ", ".join(f"{s}/{sl}" for s, sl in discoverer.plan(name, sources))
+            print(f"  {name:<30} {planned}")
+        if len(names) > 10:
+            print(f"  ... and {len(names) - 10} more names")
+        return 0
+
+    print(f"Probing {len(names)} company names against {', '.join(sources)}...")
+    print("Safe to interrupt — every result is saved as it is found.\n")
+
+    def report(progress, result):
+        if result.found:
+            print(f"  [{progress.found:>4}] {result.name:<30} {result.source:<11} {result.slug}")
+        elif progress.names % 50 == 0:
+            print(f"  ... {progress.names}/{len(names)} names, {progress.found} found")
+
+    results = discoverer.discover_from_names(names, sources, on_progress=report)
 
     found = [r for r in results if r.found]
-    print(f"\nFound {len(found)} of {len(results)} on Greenhouse/Lever:")
+    print(f"\n{discoverer.progress.summary()}")
+    by_source: dict[str, int] = {}
     for r in found:
-        print(f"  {r.name:<34} {r.source:<11} {r.slug}")
+        by_source[r.source] = by_source.get(r.source, 0) + 1
+    for source, count in sorted(by_source.items()):
+        print(f"  {source:<12}: {count}")
+    if found:
+        print("\nNext: python main.py scrape")
     return 0
 
 
@@ -127,6 +156,70 @@ def cmd_reparse(cfg, args) -> int:
                 job.exported_to_excel = False
                 changed += 1
     print(f"Re-derived requirements for {changed} of {len(jobs)} jobs.")
+    return 0
+
+
+def cmd_prune(cfg, args) -> int:
+    """Re-apply the current search to jobs already stored.
+
+    Filters are only applied at scrape time, so the DB accumulates every job
+    that matched any filter generation ever used. After narrowing a search —
+    or deriving a new one from a resume — the old jobs stay, get ranked, and
+    get recommended. That is the same rot Phase 5 fixed for closed postings.
+    """
+    init_engine(cfg.database_url)
+    from scraper.base import RawJob
+    from scraper.filters import resolve_filter
+
+    job_filter = resolve_filter(cfg)
+    stale: list[tuple[Job, str]] = []
+
+    with get_session() as session:
+        for job in session.query(Job).all():
+            if job.status not in SYSTEM_STATUSES:
+                continue  # the user has acted on this one; it is theirs to keep
+            reason = job_filter.reject_reason(
+                RawJob(
+                    source=job.source, company=job.company, company_slug=job.company_slug,
+                    external_id=job.external_id, title=job.title, location=job.location,
+                    description=job.description, application_url=job.application_url,
+                )
+            )
+            if reason:
+                stale.append((job, reason))
+
+        if not stale:
+            print("Every stored job still matches the current search.")
+            return 0
+
+        from collections import Counter
+        counts = Counter(reason for _, reason in stale)
+        print(f"{len(stale)} stored jobs no longer match the current search:")
+        for reason, count in counts.most_common():
+            print(f"  {count:>4}  {reason}")
+
+        if not args.apply:
+            print("\nShowing the first 10:")
+            for job, reason in stale[:10]:
+                print(f"  {job.company:<18} {job.title[:44]:46} {job.location or ''}")
+            print("\nRe-run with --apply to remove them. Jobs you have already "
+                  "acted on (Applied, Rejected, ...) are never touched.")
+            return 0
+
+        from excel.tracker import ExcelTracker, job_key
+
+        # Take the keys before deleting — the objects are unusable afterwards.
+        keys = {job_key(job) for job, _ in stale}
+        for job, _ in stale:
+            session.delete(job)
+
+        # The sheet is append-only, so a pruned job's row would otherwise
+        # linger as a dead entry the user still clicks on.
+        removed_rows = ExcelTracker(cfg.get("excel.path", "data/job_tracker.xlsx")).remove(keys)
+        print(f"\nRemoved {len(stale)} jobs and {removed_rows} sheet rows.")
+        if removed_rows < len(stale):
+            print(f"  {len(stale) - removed_rows} row(s) kept — you had already "
+                  f"acted on them, or they were never exported.")
     return 0
 
 
@@ -311,6 +404,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_discover = sub.add_parser("discover", help="Probe company names for ATS boards")
     p_discover.add_argument("--names", required=True, help="A .txt (one name per line) or .csv")
     p_discover.add_argument("--limit", type=int, default=0, help="Only probe the first N names")
+    p_discover.add_argument(
+        "--dry-run", action="store_true", help="Show the probes and their cost, send nothing"
+    )
 
     p_import = sub.add_parser("import-csv", help="Import an inventory CSV (name,slug,source)")
     p_import.add_argument("--file", required=True)
@@ -327,6 +423,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_profile.add_argument("--force", action="store_true", help="Regenerate, overwriting edits")
     p_profile.add_argument("--show", action="store_true", help="Print without saving")
+
+    p_prune = sub.add_parser(
+        "prune", help="Remove stored jobs that no longer match the current search"
+    )
+    p_prune.add_argument("--apply", action="store_true", help="Actually delete (default: preview)")
 
     p_score = sub.add_parser("score", help="Score jobs against the base resume (no API cost)")
     p_score.add_argument("--limit", type=int, default=0, help="Only score N jobs")
@@ -359,6 +460,7 @@ COMMANDS = {
     "export": cmd_export,
     "reparse": cmd_reparse,
     "profile": cmd_profile,
+    "prune": cmd_prune,
     "score": cmd_score,
     "tailor": cmd_tailor,
     "stats": cmd_stats,

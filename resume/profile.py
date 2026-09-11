@@ -358,26 +358,76 @@ def build_exclusions(seniority: str, held_titles: list[str]) -> list[str]:
     return _dedupe(excludes)
 
 
+# Places that are NOT the US, as they actually appear in job-board location
+# strings. The previous blocklist had 13 entries and let through "Sweden
+# (Remote)", "Spain (Remote)", "The Netherlands | Remote", "Remote - European
+# Union" and "Remote - UK" — each matched the "remote" include term and named
+# no blocked country.
+#
+# A blocklist of guesses can never be complete. This one is instead broad
+# enough to cover where these boards actually hire, and it is consulted only
+# when the person's own contact details are US-based.
+NON_US_PLACES = [
+    # regions and shorthands
+    "emea", "apac", "latam", "anz", "europe", "european union", "eu remote",
+    "asia", "africa", "middle east", "nordics", "benelux", "dach", "iberia",
+    # countries
+    "argentina", "armenia", "australia", "austria", "bangladesh", "belarus",
+    "belgium", "bolivia", "brazil", "bulgaria", "cambodia", "canada", "chile",
+    "china", "colombia", "costa rica", "croatia", "cyprus", "czech republic",
+    "czechia", "denmark", "ecuador", "egypt", "estonia", "finland", "france",
+    "germany", "ghana", "greece", "guatemala", "hong kong", "hungary",
+    "iceland", "india", "indonesia", "ireland", "israel", "italy", "japan",
+    "jordan", "kenya", "latvia", "lebanon", "lithuania", "luxembourg",
+    "malaysia", "malta", "mexico", "morocco", "netherlands", "new zealand",
+    "nigeria", "norway", "pakistan", "panama", "paraguay", "peru",
+    "philippines", "poland", "portugal", "romania", "russia", "saudi arabia",
+    "serbia", "singapore", "slovakia", "slovenia", "south africa",
+    "south korea", "korea", "spain", "sri lanka", "sweden", "switzerland",
+    "taiwan", "thailand", "tunisia", "turkey", "ukraine",
+    "united arab emirates", "uae", "united kingdom", "uk", "uruguay",
+    "venezuela", "vietnam",
+    # cities that appear on job boards without their country
+    "bangalore", "bengaluru", "hyderabad", "pune", "mumbai", "chennai",
+    "gurgaon", "noida", "london", "dublin", "berlin", "munich", "paris",
+    "amsterdam", "barcelona", "madrid", "lisbon", "warsaw", "krakow", "prague",
+    "bucharest", "sofia", "vilnius", "tallinn", "stockholm", "oslo",
+    "copenhagen", "helsinki", "zurich", "tel aviv", "toronto", "vancouver",
+    "montreal", "ottawa", "sydney", "melbourne", "auckland", "tokyo", "seoul",
+    "shanghai", "beijing", "sao paulo", "mexico city", "buenos aires",
+    "bogota", "lagos", "nairobi", "cairo", "dubai",
+]
+
+
 def extract_locations(resume: Resume) -> tuple[list[str], list[str]]:
-    """Where this person can work, from the contact line."""
+    """Where this person can work, from the contact line.
+
+    Returns (include, exclude). Exclusions win over inclusions in the filter,
+    which is what separates "Remote - USA" from "Remote - India" when both
+    match the include term "remote".
+    """
     header = resume.section("HEADER")
     text = (header.text() if header else resume.text()[:400]).lower()
 
     include: list[str] = ["remote"]
-    if re.search(r"\b(usa|united states|u\.s\.)\b", text) or re.search(
-        r"\b(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|"
-        r"mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b,?\s*usa?\b",
-        text,
-    ):
+    us_based = bool(
+        re.search(r"\b(usa|united states|u\.s\.)\b", text)
+        or re.search(
+            r"\b(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|"
+            r"mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b,?\s*usa?\b",
+            text,
+        )
+    )
+    if us_based:
         include.extend(["united states", "usa", "us"])
+        # Never exclude somewhere this person actually is. Only the contact
+        # line is consulted, so a degree or past role abroad does not count.
+        return _dedupe(include), [p for p in NON_US_PLACES if p not in text]
 
-    exclude = [
-        "india", "brazil", "canada", "united kingdom", "ireland", "germany", "poland",
-        "australia", "singapore", "japan", "emea", "apac", "latam",
-    ]
-    # Don't exclude a country the person is actually in.
-    exclude = [c for c in exclude if c not in text]
-    return _dedupe(include), exclude
+    # Somewhere else, or undeterminable. Excluding every non-US place would be
+    # wrong, and inferring a country from a phone number is worse. Keep every
+    # location and let the person narrow it in the profile file.
+    return _dedupe(include), []
 
 
 def derive_search_profile(resume: Resume, now: datetime | None = None) -> SearchProfile:

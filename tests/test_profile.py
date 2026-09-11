@@ -219,3 +219,31 @@ def test_saved_profile_explains_itself(tmp_path):
 
 def test_load_profile_missing_file_returns_none(tmp_path):
     assert load_profile(tmp_path / "nope.yaml") is None
+
+
+# -- location exclusions: a blocklist of 13 countries was not enough --------
+
+def test_foreign_remote_roles_are_excluded():
+    """Each of these matched the "remote" include term and named no country on
+    the old 13-entry blocklist, so all of them reached the ranked list."""
+    excludes = [e.lower() for e in profile_of(SRE_RESUME).exclude_locations]
+    for place in ("sweden", "spain", "netherlands", "european union", "uk", "london"):
+        assert place in excludes, f"{place} should be excluded for a US-based resume"
+
+
+def test_common_offshore_hubs_are_excluded():
+    excludes = [e.lower() for e in profile_of(SRE_RESUME).exclude_locations]
+    for place in ("india", "hyderabad", "bengaluru", "toronto", "emea", "apac"):
+        assert place in excludes
+
+
+def test_a_non_us_resume_excludes_nothing():
+    """Guessing someone's country from a phone number is worse than keeping
+    every location and letting them narrow it in the profile file."""
+    resume = NURSE_RESUME.replace("Austin, TX, USA", "Berlin")
+    assert profile_of(resume).exclude_locations == []
+
+
+def test_us_resume_still_includes_remote_and_us():
+    locations = [x.lower() for x in profile_of(SRE_RESUME).locations]
+    assert "remote" in locations and "usa" in locations
