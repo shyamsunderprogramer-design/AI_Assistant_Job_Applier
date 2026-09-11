@@ -39,6 +39,30 @@ resume:
   # Re-tailor a job that already has an output file?
   overwrite: false
 
+  # ---------------------------------------------------------------------
+  # Cost control. Tailoring is the only part of this tool that spends money.
+  #
+  # Hard ceiling for ONE `tailor` run, in USD. The projected cost of each
+  # call is checked BEFORE it is sent, and the run stops cleanly when the
+  # next call would breach the cap — a cap discovered by exceeding it is not
+  # a cap. 0 disables, which is how this ran before the cap existed.
+  #
+  # See what a run would cost without sending anything:
+  #     python main.py tailor --estimate
+  # ---------------------------------------------------------------------
+  max_spend_per_run_usd: 2.00
+
+  # USD per MILLION tokens. A snapshot, kept here rather than hardcoded so a
+  # stale price cannot silently produce a wrong estimate. Check current
+  # pricing at https://www.anthropic.com/pricing before a large run.
+  pricing:
+    claude-opus-5:
+      input: 5.00
+      output: 25.00
+    claude-sonnet-5:
+      input: 3.00
+      output: 15.00
+
 # ---------------------------------------------------------------------------
 # Politeness. See README.md §C5 — do not weaken these to go faster.
 # ---------------------------------------------------------------------------

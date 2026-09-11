@@ -290,9 +290,28 @@ def cmd_score(cfg, args) -> int:
 
 def cmd_tailor(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from resume.pipeline import tailor_jobs
+    from resume.pipeline import estimate_tailoring, tailor_jobs
 
     job_ids = [int(i) for i in args.job_id] if args.job_id else None
+
+    if args.estimate:
+        est = estimate_tailoring(cfg, job_ids=job_ids, limit=args.limit)
+        if not est["jobs"]:
+            print("No jobs eligible for tailoring.")
+            return 0
+        print(f"{len(est['jobs'])} job(s) would be tailored with {est['model']}:\n")
+        for job_id, company, title, usd in est["jobs"][:15]:
+            print(f"  ~${usd:>6.3f}  [{job_id:>4}] {company:<20} {title[:44]}")
+        if len(est["jobs"]) > 15:
+            print(f"  ... and {len(est['jobs']) - 15} more")
+        print(f"\nEstimated total: ~${est['total']:.2f}")
+        if est["cap"] > 0:
+            print(f"Run cap        : ${est['cap']:.2f}"
+                  + ("  — the run would stop early" if est["total"] > est["cap"] else ""))
+        else:
+            print("Run cap        : none (resume.max_spend_per_run_usd is 0)")
+        print("\nEstimates assume a full-length response; real cost is usually lower.")
+        return 0
     outcomes = tailor_jobs(
         cfg, job_ids=job_ids, limit=args.limit, include_closed=args.include_closed
     )
@@ -311,6 +330,14 @@ def cmd_tailor(cfg, args) -> int:
     if rejected:
         print(f"\n{len(rejected)} tailoring(s) REJECTED by the fabrication guard "
               f"and flagged for manual review.")
+
+    cost = getattr(tailor_jobs, "last_run_cost", None)
+    if cost and cost.calls:
+        print(f"\nCost: ${cost.spent:.4f} across {cost.calls} call(s)"
+              + (f" of a ${cost.cap:.2f} cap" if cost.cap else ""))
+    if cost and cost.stopped_early:
+        print("Stopped early — the next call would have breached the cap. "
+              "Raise resume.max_spend_per_run_usd to continue.")
     return 0
 
 
@@ -442,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_tailor.add_argument("--limit", type=int, default=0, help="Cap how many jobs to tailor")
     p_tailor.add_argument(
         "--include-closed", action="store_true", help="Also tailor for closed postings"
+    )
+    p_tailor.add_argument(
+        "--estimate", action="store_true", help="Show projected cost and exit without calling"
     )
 
     sub.add_parser("stats", help="Show DB counts and recent finds")

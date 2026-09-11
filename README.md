@@ -27,7 +27,7 @@ those numbers are stable, don't renumber them.
 | **P4** Assisted apply | ❌ Not started | Recast from auto-submit; needs your go/no-go |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
 
-**170 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
+**189 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
 
 ### Contents
 
@@ -104,6 +104,7 @@ main.py profile --show                   # print it without saving
 main.py profile --force                  # regenerate, overwriting your edits
 main.py score --rescore --top 20
 main.py score --include-closed           # closed postings are skipped by default
+main.py tailor --estimate                # projected cost, sends nothing
 main.py tailor --limit 3                 # needs ANTHROPIC_API_KEY
 main.py reparse                          # re-derive requirements after a heuristic change
 ```
@@ -142,7 +143,7 @@ Everything tunable lives in `config/config.yaml`. No behaviour is hardcoded.
 |---|---|
 | `database` | SQLite path |
 | `excel` | tracker workbook path |
-| `resume` | base resume path (null = auto-detect), output dir, `min_score`, overwrite |
+| `resume` | base resume path (null = auto-detect), output dir, `min_score`, overwrite, `max_spend_per_run_usd`, per-model `pricing` |
 | `http` | robots.txt enforcement, per-host delay, jitter, retries, backoff, UA |
 | `portals` | which ATSs are enabled (greenhouse, lever, ashby) |
 | `companies` | seed list; whether to also scrape discovered companies |
@@ -171,9 +172,10 @@ scraper/    http_client (robots + rate limiting), base, greenhouse, lever,
             lifecycle (closure + staleness)
 excel/      tracker.py — DB -> editable workbook, append-only
 resume/     parser, profile (resume -> search), scorer, tailor, guard,
-            writer, pipeline (+ your base resume, gitignored)
+            cost (spend cap + ledger), writer, pipeline
+            (+ your base resume, gitignored)
 submitter/  submission + audit log — EMPTY, Phase 4 not started
-tests/      170 offline unit tests
+tests/      189 offline unit tests
 data/       SQLite database + job_tracker.xlsx (gitignored)
 logs/       run logs (gitignored)
 .archive/   the pre-merge README / PLAN / constraints, kept because there is no git
@@ -289,10 +291,18 @@ does not click Submit.** P4 is recast as *prefill and hand over* (see the plan b
 - A per-day application cap is enforced from `config.yaml`.
 
 ### §C10 — Cost control
-Tailoring is a per-job Opus call and there is currently **no budget ceiling** — the
-only brake is `resume.overwrite: false` skipping jobs that already have output. A
-hard spend cap, a cost estimate before a run, and model tiering are part of P3B and
-are not optional once the inventory grows past a few hundred jobs.
+Tailoring is a per-job Opus call and the **only** part of this tool that spends
+money. Three brakes, all in place as of 2026-09-11:
+
+- `resume.max_spend_per_run_usd` (default **$2.00**) is checked *before* each
+  call, from that call's projected cost. The run stops cleanly rather than
+  discovering the cap by exceeding it. `0` disables.
+- `tailor --estimate` prices a run from its real prompts and sends nothing.
+- `resume.overwrite: false` skips jobs that already have output.
+
+Every run reports what it actually spent. Prices live in `config.yaml` because a
+hardcoded stale price produces a confidently wrong estimate — check
+anthropic.com/pricing before a large run.
 
 ### §C11 — Version control
 Under git since 2026-09-06, pushed to
@@ -453,13 +463,27 @@ Verified live on 105 real postings and calibrated.
 - [x] 42 offline unit tests for scorer, guard, parser, writer, pipeline
 - [!] **Live tailoring run — blocked on you**: base resume in `resume/` + `ANTHROPIC_API_KEY`
 
-**New — cost control (§C10). None of this exists today:**
+**Cost control (§C10) — built 2026-09-11:**
 
-- [ ] `resume.max_spend_per_run_usd` — hard stop *before* exceeding it, not after
-- [ ] Log per-call input/output tokens and running cost to the DB
-- [ ] `--estimate` — print projected cost for a selection and exit without calling
-- [ ] Model tiering: draft on a cheaper model, escalate to Opus for the shortlist only
+- [x] `resume.max_spend_per_run_usd` — the projected cost of each call is checked
+      **before** it is sent, and the run stops cleanly when the next one would
+      breach the cap. A cap discovered by exceeding it is not a cap
+- [x] Per-call input/output tokens and USD recorded on a run ledger, reported at
+      the end of every run — so the estimate can be checked against reality
+- [x] Cached and cache-write tokens counted as input, so the ledger never
+      under-reports
+- [x] `tailor --estimate` — measures the **real** prompts and prints projected
+      cost without sending anything
+- [x] An unknown model prices at the most expensive known rate, never zero —
+      pricing it at zero would make every estimate say "free" and the cap inert
+- [x] Prices live in `config.yaml`, not hardcoded, so a stale price cannot
+      silently produce a wrong estimate
+- [x] 19 tests
+- [ ] Model tiering: draft on a cheaper model, escalate to Opus for the shortlist
 - [ ] Cache the JD→requirements analysis so re-tailoring is not re-paid for
+
+Measured on the real backlog: **~$0.14 per job** with `claude-opus-5`, so the
+full 80-job list is roughly $11 — which is exactly why the default cap is $2.
 
 **Done when:** a real tailored .docx exists for a real posting, the guard has been
 seen both to pass *and* to reject, and a run's cost is known before it starts.

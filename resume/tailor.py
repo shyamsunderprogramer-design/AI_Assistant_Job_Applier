@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 import anthropic
 
+from resume.cost import CallCost, Ledger, record_usage
 from resume.guard import GuardResult, check_no_fabrication
 from resume.parser import Resume
 
@@ -67,6 +68,7 @@ class TailorResult:
     gaps: list[str] = field(default_factory=list)
     guard: GuardResult | None = None
     raw_response: str = ""
+    cost: CallCost | None = None
 
     @property
     def accepted(self) -> bool:
@@ -100,21 +102,32 @@ def _extract_json(text: str) -> dict:
     return json.loads(cleaned[start : end + 1])
 
 
+def build_prompt(resume: Resume, job_title: str, company: str, jd_text: str) -> str:
+    """The user prompt for one tailoring call.
+
+    Exposed so the cost estimator can measure the real prompt rather than a
+    guess at its size.
+    """
+    return (
+        f"# Target role\n{job_title} at {company}\n\n"
+        f"# Job description\n{jd_text.strip()}\n\n"
+        f"# My current resume (the ONLY source of truth about me)\n{resume.text().strip()}"
+    )
+
+
 def tailor_resume(
     resume: Resume,
     job_title: str,
     company: str,
     jd_text: str,
     client: anthropic.Anthropic | None = None,
+    ledger: Ledger | None = None,
+    cfg=None,
 ) -> TailorResult:
     """Ask Claude to tailor the resume, then verify it invented nothing."""
     client = client or _client()
 
-    user_prompt = (
-        f"# Target role\n{job_title} at {company}\n\n"
-        f"# Job description\n{jd_text.strip()}\n\n"
-        f"# My current resume (the ONLY source of truth about me)\n{resume.text().strip()}"
-    )
+    user_prompt = build_prompt(resume, job_title, company, jd_text)
 
     # Streaming: JD + resume + reasoning can be long, and streaming avoids
     # HTTP timeouts on a big max_tokens.
@@ -126,6 +139,11 @@ def tailor_resume(
         messages=[{"role": "user", "content": user_prompt}],
     ) as stream:
         response = stream.get_final_message()
+
+    cost = None
+    if ledger is not None and getattr(response, "usage", None) is not None:
+        cost = record_usage(ledger, MODEL, response.usage, cfg)
+        log.info("Tailoring cost for %s at %s: %s", job_title, company, cost)
 
     if response.stop_reason == "refusal":
         raise RuntimeError(f"Model declined the request: {response.stop_details}")
@@ -140,6 +158,7 @@ def tailor_resume(
         omitted=[str(s) for s in payload.get("omitted", [])],
         gaps=[str(s) for s in payload.get("gaps", [])],
         raw_response=text,
+        cost=cost,
     )
 
     result.guard = check_no_fabrication(resume.text(), result.tailored_text())
