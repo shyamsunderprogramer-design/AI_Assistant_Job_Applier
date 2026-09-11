@@ -78,14 +78,22 @@ def cmd_discover(cfg, args) -> int:
     if args.dry_run:
         # Discovery spends a request per GUESS, so show what a run would cost
         # before it is spent (README.md §C5).
-        pairs = [pair for name in names for pair in discoverer.plan(name, sources)]
+        pairs = []
+        for raw in names:
+            nm, _, dom = str(raw).partition(",")
+            pairs.extend(discoverer.plan(nm.strip(), sources, domain=dom.strip() or None,
+                                         max_slugs=args.max_slugs))
         delay = float(cfg.get("http.min_delay_seconds", 1.5))
         print(f"{len(names)} names -> {len(pairs)} probes across {', '.join(sources)}")
         print(f"Roughly {len(pairs) * delay / 60:.0f} minutes at the configured "
               f"{delay}s per-host delay (minus anything already cached).\n")
-        for name in names[:10]:
-            planned = ", ".join(f"{s}/{sl}" for s, sl in discoverer.plan(name, sources))
-            print(f"  {name:<30} {planned}")
+        for raw in names[:10]:
+            nm, _, dom = str(raw).partition(",")
+            planned = ", ".join(
+                f"{s}/{sl}" for s, sl in discoverer.plan(
+                    nm.strip(), sources, domain=dom.strip() or None, max_slugs=args.max_slugs)
+            )
+            print(f"  {nm.strip():<30} {planned}")
         if len(names) > 10:
             print(f"  ... and {len(names) - 10} more names")
         return 0
@@ -99,7 +107,9 @@ def cmd_discover(cfg, args) -> int:
         elif progress.names % 50 == 0:
             print(f"  ... {progress.names}/{len(names)} names, {progress.found} found")
 
-    results = discoverer.discover_from_names(names, sources, on_progress=report)
+    results = discoverer.discover_from_names(
+        names, sources, on_progress=report, max_slugs=args.max_slugs
+    )
 
     found = [r for r in results if r.found]
     print(f"\n{discoverer.progress.summary()}")
@@ -110,6 +120,34 @@ def cmd_discover(cfg, args) -> int:
         print(f"  {source:<12}: {count}")
     if found:
         print("\nNext: python main.py scrape")
+    return 0
+
+
+def cmd_import_names(cfg, args) -> int:
+    """Turn a big company export into a filtered discovery list."""
+    from scraper.company_import import read_spreadsheet, write_names_file
+
+    records = read_spreadsheet(
+        args.file,
+        sheet=args.sheet,
+        countries=tuple(c.strip().lower() for c in args.countries.split(",")) if args.countries else (),
+        min_employees=args.min_employees,
+        max_employees=args.max_employees,
+        limit=args.limit,
+    )
+    if not records:
+        print("Nothing matched those filters.")
+        return 1
+
+    out = write_names_file(records, args.out)
+    with_domain = sum(1 for r in records if r.slug_hint())
+    print(f"{len(records):,} companies -> {out}")
+    print(f"  with a usable domain : {with_domain:,} ({with_domain * 100 // len(records)}%)")
+    print(f"  headcount band       : {args.min_employees}–{args.max_employees}")
+    print("\n  Largest first:")
+    for r in records[:8]:
+        print(f"    {r.name[:34]:36} {r.slug_hint() or '(no domain)':22} {r.employees:>7,}")
+    print(f"\nNext: python main.py discover --names {out} --dry-run")
     return 0
 
 
@@ -341,6 +379,57 @@ def cmd_tailor(cfg, args) -> int:
     return 0
 
 
+def cmd_brief(cfg, args) -> int:
+    """Write a paste-anywhere tailoring prompt. No API key, no cost."""
+    init_engine(cfg.database_url)
+    from resume.pipeline import brief_job
+
+    try:
+        path, company, title = brief_job(cfg, int(args.job_id))
+    except LookupError as exc:
+        print(exc)
+        return 1
+
+    print(f"Brief written for {company} — {title}")
+    print(f"  {path}")
+    print()
+    print("  1. Open that file and copy everything below 'COPY FROM HERE'")
+    print("  2. Paste it into Claude, ChatGPT, or any local model")
+    print("  3. Save the JSON reply to a file")
+    print(f"  4. python main.py accept {args.job_id} --file <that file>")
+    print()
+    print("The reply is checked for fabrication before anything is written.")
+    return 0
+
+
+def cmd_accept(cfg, args) -> int:
+    """Take a pasted model reply, guard it, and write the resume."""
+    init_engine(cfg.database_url)
+    from pathlib import Path
+
+    from resume.pipeline import accept_reply
+
+    text = Path(args.file).read_text(encoding="utf-8")
+    try:
+        outcome = accept_reply(cfg, int(args.job_id), text)
+    except (LookupError, ValueError) as exc:
+        print(f"Could not use that reply: {exc}")
+        return 1
+
+    print(f"[{outcome.status}] {outcome.company} — {outcome.title}")
+    if outcome.status == "rejected":
+        print("\nREJECTED by the fabrication guard — nothing was written.")
+        print(outcome.detail)
+        print("\nThe model claimed something your resume does not support. "
+              "Re-run the brief, or fix the reply by hand and try again.")
+        return 1
+
+    print(f"  {outcome.detail}")
+    print(f"  -> {outcome.resume_path}")
+    print(f"\nMatch score is now {outcome.score:.0%}. Run `export` to update the sheet.")
+    return 0
+
+
 def cmd_stats(cfg, args) -> int:
     init_engine(cfg.database_url)
     from statistics import median
@@ -434,6 +523,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_discover.add_argument(
         "--dry-run", action="store_true", help="Show the probes and their cost, send nothing"
     )
+    p_discover.add_argument(
+        "--max-slugs", type=int, default=0,
+        help="Cap slug guesses per company (1 = domain/best guess only). "
+             "The difference between a run that finishes and one that does not.",
+    )
+
+    p_names = sub.add_parser(
+        "import-names", help="Filter a big company export into a discovery name list"
+    )
+    p_names.add_argument("--file", required=True, help="A .xlsx or .csv company export")
+    p_names.add_argument("--sheet", default=None, help="Worksheet name (default: the first)")
+    p_names.add_argument("--out", default="data/discovery_names.txt")
+    p_names.add_argument("--countries", default="united states",
+                         help="Comma-separated; empty string for all")
+    p_names.add_argument("--min-employees", type=int, default=50)
+    p_names.add_argument("--max-employees", type=int, default=5000)
+    p_names.add_argument("--limit", type=int, default=0)
 
     p_import = sub.add_parser("import-csv", help="Import an inventory CSV (name,slug,source)")
     p_import.add_argument("--file", required=True)
@@ -474,6 +580,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--estimate", action="store_true", help="Show projected cost and exit without calling"
     )
 
+    p_brief = sub.add_parser(
+        "brief", help="Write a tailoring prompt to paste into any model (free, no API key)"
+    )
+    p_brief.add_argument("job_id", help="Job id, from `score`")
+
+    p_accept = sub.add_parser(
+        "accept", help="Read a model's reply back in, guard it, and write the resume"
+    )
+    p_accept.add_argument("job_id", help="Job id the reply is for")
+    p_accept.add_argument("--file", required=True, help="File holding the model's JSON reply")
+
     sub.add_parser("stats", help="Show DB counts and recent finds")
 
     p_failures = sub.add_parser("failures", help="Show logged scrape failures")
@@ -486,6 +603,7 @@ COMMANDS = {
     "init-db": cmd_init_db,
     "scrape": cmd_scrape,
     "discover": cmd_discover,
+    "import-names": cmd_import_names,
     "import-csv": cmd_import_csv,
     "export": cmd_export,
     "reparse": cmd_reparse,
@@ -493,6 +611,8 @@ COMMANDS = {
     "prune": cmd_prune,
     "score": cmd_score,
     "tailor": cmd_tailor,
+    "brief": cmd_brief,
+    "accept": cmd_accept,
     "stats": cmd_stats,
     "failures": cmd_failures,
 }

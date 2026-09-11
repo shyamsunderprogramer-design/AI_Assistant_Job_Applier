@@ -37,11 +37,19 @@ class DiscoveryResult:
     found: bool
 
 
-def candidate_slugs(name: str, strip_suffixes: list[str] | None = None) -> list[str]:
-    """Derive plausible ATS slugs from a company name, best guess first.
+def candidate_slugs(
+    name: str, strip_suffixes: list[str] | None = None, domain: str | None = None
+) -> list[str]:
+    """Derive plausible ATS slugs, best guess first.
 
-    Greenhouse/Lever slugs are usually the lowercased name with punctuation and
-    corporate suffixes removed, e.g. "Ramp Financial, Inc." -> "ramp".
+    Greenhouse/Lever/Ashby slugs are usually the lowercased name with
+    punctuation and corporate suffixes removed, e.g. "Ramp Financial, Inc." ->
+    "ramp".
+
+    A DOMAIN, when known, is the better guess and goes first: a slug matches the
+    domain root far more often than the trading name. "Custom Computer
+    Specialists" is at customtech.com, and no amount of name-mangling finds
+    that.
     """
     suffixes = {s.lower().strip(" .") for s in (strip_suffixes or [])}
     cleaned = name.lower().strip()
@@ -59,7 +67,14 @@ def candidate_slugs(name: str, strip_suffixes: list[str] | None = None) -> list[
     joined = "".join(words)
     hyphenated = "-".join(words)
 
-    candidates = [joined]
+    candidates = []
+    from scraper.company_import import domain_root
+
+    root = domain_root(domain)
+    if root:
+        candidates.append(root)
+
+    candidates.append(joined)
     if hyphenated != joined:
         candidates.append(hyphenated)
     if len(words) > 1:
@@ -111,22 +126,43 @@ class CompanyDiscoverer:
         self.progress = DiscoveryProgress()
         self._cache: dict[tuple[str, str], bool] = {}
 
-    def plan(self, name: str, sources: list[str] | None = None) -> list[tuple[str, str]]:
-        """The (source, slug) pairs this name would probe. Used by --dry-run."""
+    def plan(
+        self,
+        name: str,
+        sources: list[str] | None = None,
+        domain: str | None = None,
+        max_slugs: int = 0,
+    ) -> list[tuple[str, str]]:
+        """The (source, slug) pairs this name would probe. Used by --dry-run.
+
+        `max_slugs` caps the guesses per name. Across a large list this is the
+        difference between a run that finishes and one that does not: the first
+        candidate (the domain root, when known) carries most of the hit rate,
+        and each extra guess costs a request against a live board.
+        """
+        slugs = candidate_slugs(name, self.strip_suffixes, domain=domain)
+        if max_slugs:
+            slugs = slugs[:max_slugs]
         return [
             (source, slug)
             for source in (sources or list(self.scrapers))
             if source in self.scrapers
-            for slug in candidate_slugs(name, self.strip_suffixes)
+            for slug in slugs
         ]
 
-    def probe(self, name: str, sources: list[str] | None = None) -> DiscoveryResult:
+    def probe(
+        self,
+        name: str,
+        sources: list[str] | None = None,
+        domain: str | None = None,
+        max_slugs: int = 0,
+    ) -> DiscoveryResult:
         """Probe each ATS for this company. First hit wins.
 
         A (source, slug) already in the probe cache is never re-requested: a
         dead slug stays dead, and re-asking is both slow and impolite.
         """
-        for source, slug in self.plan(name, sources):
+        for source, slug in self.plan(name, sources, domain=domain, max_slugs=max_slugs):
             cached = self._cache.get((source, slug))
             if cached is not None:
                 self.progress.probes_skipped += 1
@@ -159,18 +195,25 @@ class CompanyDiscoverer:
         names: list[str],
         sources: list[str] | None = None,
         on_progress=None,
+        max_slugs: int = 0,
     ) -> list[DiscoveryResult]:
-        """Probe every name. Safe to interrupt — findings persist as they happen."""
+        """Probe every name. Safe to interrupt — findings persist as they happen.
+
+        A name may be "Company" or "Company,domain.com"; the domain becomes the
+        first slug guess.
+        """
         self._cache = load_probe_cache()
         self.progress = DiscoveryProgress()
         results: list[DiscoveryResult] = []
 
-        for name in names:
+        for raw in names:
+            name, _, domain = str(raw).partition(",")
             name = name.strip()
+            domain = domain.strip() or None
             if not name:
                 continue
             self.progress.names += 1
-            result = self.probe(name, sources)
+            result = self.probe(name, sources, domain=domain, max_slugs=max_slugs)
             results.append(result)
             if result.found:
                 self.progress.found += 1

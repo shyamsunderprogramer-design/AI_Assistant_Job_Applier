@@ -155,6 +155,65 @@ def _tailorable_jobs(cfg, job_ids, limit, include_closed):
     return jobs[:limit] if limit else jobs
 
 
+def brief_job(cfg, job_id: int, out_dir: Path | None = None) -> tuple[Path, str, str]:
+    """Write a paste-anywhere tailoring brief for one job. No API, no cost."""
+    from resume.manual import write_brief
+
+    resume = load_base_resume(cfg)
+    out_dir = out_dir or (PROJECT_ROOT / cfg.get("resume.output_dir", "resume/output"))
+
+    with get_session() as session:
+        job = session.query(Job).filter_by(id=job_id).one_or_none()
+        if job is None:
+            raise LookupError(f"No job with id {job_id}. Run `score` to list them.")
+        path = write_brief(
+            resume=resume, job_id=job.id, company=job.company, title=job.title,
+            jd_text=job.description or "", url=job.application_url,
+            path=out_dir / f"{output_filename(job.company, job.title, job.external_id)[:-5]}_brief.txt",
+        )
+        return path, job.company, job.title
+
+
+def accept_reply(cfg, job_id: int, reply_text: str) -> JobOutcome:
+    """Guard a pasted model reply and write the resume if it passes.
+
+    Everything after the model call is identical to the API path: same guard,
+    same writer, same review note. The guard matters more here, not less —
+    text pasted from a chat window has had no check at all before now.
+    """
+    from resume.manual import result_from_reply
+
+    resume = load_base_resume(cfg)
+    out_dir = PROJECT_ROOT / cfg.get("resume.output_dir", "resume/output")
+
+    with get_session() as session:
+        job = session.query(Job).filter_by(id=job_id).one_or_none()
+        if job is None:
+            raise LookupError(f"No job with id {job_id}.")
+
+        result = result_from_reply(resume, reply_text)
+        target = out_dir / output_filename(job.company, job.title, job.external_id)
+        write_review_note(result, out_dir / (target.stem + "_review.txt"))
+
+        if not result.accepted:
+            job.status = "Manual Review"
+            return JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0,
+                              "rejected", result.guard.report(), None)
+
+        write_tailored_resume(resume, result, target)
+        rescored = score_resume(
+            resume.text() + "\n" + result.tailored_text(),
+            job.description or job.title,
+            requirements=job.requirements,
+            company=job.company,
+        )
+        job.ats_match_score = rescored.score
+        job.exported_to_excel = False
+        return JobOutcome(job.id, job.company, job.title, rescored.score, "tailored",
+                          f"{len(result.bullets)} bullets rewritten; "
+                          f"{len(result.gaps)} gap(s) noted", target)
+
+
 def tailor_jobs(
     cfg,
     job_ids: list[int] | None = None,
