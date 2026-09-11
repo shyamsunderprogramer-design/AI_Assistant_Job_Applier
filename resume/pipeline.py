@@ -21,6 +21,16 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class RunCost:
+    """What a tailoring run cost, and what it was allowed to cost."""
+
+    spent: float = 0.0
+    cap: float = 0.0
+    calls: int = 0
+    stopped_early: bool = False
+
+
+@dataclass
 class JobOutcome:
     job_id: int
     company: str
@@ -106,6 +116,45 @@ def score_jobs(
     return outcomes
 
 
+def estimate_tailoring(cfg, job_ids: list[int] | None = None, limit: int = 0) -> dict:
+    """What a tailoring run would cost, without making a single API call.
+
+    Measures the real prompts rather than guessing at their size, so the number
+    is checkable against the ledger afterwards.
+    """
+    from resume.cost import estimate_call
+    from resume.tailor import MODEL, build_prompt
+
+    resume = load_base_resume(cfg)
+    jobs = _tailorable_jobs(cfg, job_ids, limit, include_closed=False)
+    per_job = []
+    for job in jobs:
+        prompt = build_prompt(resume, job.title, job.company, job.description or "")
+        per_job.append((job, estimate_call(MODEL, prompt, cfg=cfg)))
+
+    return {
+        "model": MODEL,
+        "jobs": [(job.id, job.company, job.title, usd) for job, usd in per_job],
+        "total": sum(usd for _, usd in per_job),
+        "cap": float(cfg.get("resume.max_spend_per_run_usd", 0) or 0),
+    }
+
+
+def _tailorable_jobs(cfg, job_ids, limit, include_closed):
+    """The jobs a tailoring run would touch. Shared by estimate and run."""
+    threshold = float(cfg.get("resume.min_score", 0.45))
+    with get_session() as session:
+        query = session.query(Job)
+        if job_ids:
+            query = query.filter(Job.id.in_(job_ids))
+        else:
+            query = query.filter(Job.ats_match_score >= threshold)
+            if not include_closed:
+                query = query.filter(Job.is_open.is_(True))
+        jobs = query.order_by(Job.ats_match_score.desc()).all()
+    return jobs[:limit] if limit else jobs
+
+
 def tailor_jobs(
     cfg,
     job_ids: list[int] | None = None,
@@ -117,26 +166,24 @@ def tailor_jobs(
     Closed postings are skipped by default — a tailoring call is the most
     expensive thing here, and spending one on a filled role buys nothing.
     An explicit --job-id still wins, so a deliberate choice is never blocked.
+
+    Every call is costed and checked against `resume.max_spend_per_run_usd`
+    BEFORE it is made. A cap discovered by exceeding it is not a cap.
     """
-    from resume.tailor import tailor_resume  # lazy: needs the anthropic SDK + key
+    from resume.cost import Ledger, estimate_call
+    from resume.tailor import MODEL, build_prompt, tailor_resume  # lazy: needs SDK + key
 
     resume = load_base_resume(cfg)
     threshold = float(cfg.get("resume.min_score", 0.45))
     out_dir = PROJECT_ROOT / cfg.get("resume.output_dir", "resume/output")
+    ledger = Ledger(cap_usd=float(cfg.get("resume.max_spend_per_run_usd", 0) or 0))
+    run_cost = RunCost(cap=ledger.cap_usd)
     outcomes: list[JobOutcome] = []
 
     with get_session() as session:
-        query = session.query(Job)
-        if job_ids:
-            # Naming a job id is an explicit decision; honour it either way.
-            query = query.filter(Job.id.in_(job_ids))
-        else:
-            query = query.filter(Job.ats_match_score >= threshold)
-            if not include_closed:
-                query = query.filter(Job.is_open.is_(True))
-        jobs = query.order_by(Job.ats_match_score.desc()).all()
-        if limit:
-            jobs = jobs[:limit]
+        ids = [j.id for j in _tailorable_jobs(cfg, job_ids, limit, include_closed)]
+        jobs = session.query(Job).filter(Job.id.in_(ids)).all() if ids else []
+        jobs.sort(key=lambda j: j.ats_match_score or 0, reverse=True)
 
         for job in jobs:
             filename = output_filename(job.company, job.title, job.external_id)
@@ -156,12 +203,30 @@ def tailor_jobs(
                 )
                 continue
 
+            # Check the cap before spending, not after.
+            projected = estimate_call(
+                MODEL, build_prompt(resume, job.title, job.company, job.description or ""),
+                cfg=cfg,
+            )
+            if ledger.would_exceed(projected):
+                run_cost.stopped_early = True
+                outcomes.append(
+                    JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0,
+                               "cap-reached",
+                               f"would cost ~${projected:.3f}, only "
+                               f"${ledger.remaining:.3f} left of the "
+                               f"${ledger.cap_usd:.2f} cap")
+                )
+                break
+
             try:
                 result = tailor_resume(
                     resume=resume,
                     job_title=job.title,
                     company=job.company,
                     jd_text=job.description or "",
+                    ledger=ledger,
+                    cfg=cfg,
                 )
             except Exception as exc:
                 log.error("Tailoring failed for job %s: %s", job.id, exc)
@@ -200,4 +265,8 @@ def tailor_jobs(
                            f"{len(result.gaps)} gap(s) noted", target)
             )
 
+    run_cost.spent = ledger.spent
+    run_cost.calls = len(ledger.calls)
+    tailor_jobs.last_run_cost = run_cost
+    log.info("Tailoring run: %s", ledger.summary())
     return outcomes
