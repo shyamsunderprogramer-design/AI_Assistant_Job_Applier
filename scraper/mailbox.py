@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import email
 import email.policy
+import html
 import imaplib
 import logging
 import re
@@ -87,6 +88,9 @@ STOPWORDS = {
     "remote", "hybrid", "onsite", "full", "part", "time", "senior", "junior",
     "lead", "staff", "principal", "manager", "director", "engineer",
     "unsubscribe", "privacy", "terms", "help", "support", "email", "reply",
+    "client", "clients", "based", "work", "what", "please", "apply", "position",
+    "opportunity", "candidate", "hiring", "recruiting", "talent", "urgent",
+    "immediate", "direct", "contract", "w2", "c2c", "usc", "gc", "visa",
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     "january", "february", "march", "april", "may", "june", "july", "august",
     "september", "october", "november", "december",
@@ -139,7 +143,7 @@ def _body_text(message) -> str:
             parts.append(payload)
     except Exception as exc:  # a malformed message must not stop the scan
         log.debug("Could not read a message body: %s", exc)
-    text = "\n".join(parts)
+    text = html.unescape("\n".join(parts))
     return re.sub(r"[ \t\xa0]+", " ", text)
 
 
@@ -151,20 +155,72 @@ def is_job_related(sender: str, subject: str) -> bool:
     return any(term in lowered_subject for term in JOB_SUBJECT_TERMS)
 
 
+# Capitalised words that start the NEXT sentence rather than continue a name.
+# "at Meta If you are interested" captures "Meta If"; trimming the tail keeps
+# the company and drops the leak.
+SENTENCE_TAIL = {
+    "if", "we", "are", "you", "your", "this", "that", "the", "a", "an",
+    "please", "for", "and", "with", "our", "they", "it", "is", "was", "will",
+    "what", "who", "when", "where", "why", "how", "based", "work", "looking",
+    "hiring", "seeking", "apply", "position", "role", "job", "opportunity",
+    "client", "contract", "remote", "onsite", "hybrid", "location", "salary",
+}
+
+US_STATES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+}
+
+# Corporate suffixes that end a name. Anything after one is the next sentence
+# leaking in ("Sun Technologies Inc. Based in..."), not part of the company.
+SUFFIX_END = re.compile(
+    r"\b(inc|llc|ltd|corp|corporation|co|plc|gmbh|sa|ag|nv|bv|pvt|limited)\b\.?",
+    re.I,
+)
+
+
 def clean_company(raw: str) -> str | None:
     """Normalise a captured name, or None if it is not a company."""
-    name = re.sub(r"\s+", " ", (raw or "")).strip(" .,:;|-–—")
+    name = html.unescape(raw or "")
+    name = name.replace("\xa0", " ")
+    name = re.sub(r"\s+", " ", name).strip()
+
+    # A full stop ends the sentence, not the company. "at Messagepoint. If you
+    # are interested" was capturing "Messagepoint. If", because the character
+    # class allows a period inside a token (needed for "Inc." and "U.S.A").
+    sentence = re.split(r"(?<=[a-z])\.\s+(?=[A-Z])|\.\s*$", name)[0]
+    if sentence:
+        name = sentence
+    # Same leak through a corporate suffix: keep the suffix, drop what follows.
+    match = SUFFIX_END.search(name)
+    if match and match.end() < len(name):
+        name = name[: match.end()]
+
+    name = name.strip(" .,:;|-–—&")
     name = re.sub(r"['’]s$", "", name)
+
     if not 2 <= len(name) <= 60:
         return None
     words = name.split()
     if len(words) > 4:
         return None
-    if all(w.lower() in STOPWORDS for w in words):
-        return None
-    if words[0].lower() in STOPWORDS and len(words) == 1:
-        return None
     if not re.search(r"[A-Za-z]", name):
+        return None
+    if all(w.lower().strip(".,") in STOPWORDS for w in words):
+        return None
+    # A trailing stopword is the next sentence leaking in: "at Meta If you are
+    # interested" captures "Meta If", because both words are capitalised.
+    # Trimming it is better than rejecting — the company part is still good.
+    while len(words) > 1 and words[-1].lower().strip(".,") in SENTENCE_TAIL:
+        words.pop()
+    name = " ".join(words)
+    if len(name) < 2:
+        return None
+    # "Waltham MA", "Austin TX" — a place, not an employer.
+    if len(words) >= 2 and words[-1].upper().strip(".") in US_STATES:
         return None
     # ALL-CAPS shouting ("APPLY NOW") is not a company name; real acronyms
     # (IBM, SAP) are short, so keep those.

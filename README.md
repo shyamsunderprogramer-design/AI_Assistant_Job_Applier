@@ -22,12 +22,12 @@ those numbers are stable, don't renumber them.
 | **Auto-search** | ✅ Done, verified live | Reads any resume, derives the search — no keywords to write |
 | **P5** Pipeline integrity | ✅ Done, verified live | Closed 3 vanished postings on a real run; a simulated outage closes nothing |
 | **P6** Breadth | ✅ Done, verified live | 10 boards → **149**; Ashby added; 13,242 postings scanned |
-| **P7** Daily loop | ❌ Not started | 5+ manual commands, so it gets run once |
+| **P7** Daily loop | ✅ Done | `main.py daily` — one command, one digest |
 | **P8** Relevance v2 | ❌ Not started | Needs P6 first |
 | **P4** Assisted apply | ❌ Not started | Recast from auto-submit; needs your go/no-go |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
 
-**189 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
+**260 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
 
 ### Contents
 
@@ -38,6 +38,16 @@ those numbers are stable, don't renumber them.
 ---
 
 ## 1. Quick start
+
+**Once it is set up, this is the whole daily routine:**
+
+```bash
+.venv/bin/python main.py daily
+```
+
+That scrapes every board, retires postings that vanished, re-ranks against your
+resume, updates the spreadsheet, and prints a digest of what changed. Everything
+below is the setup and the individual pieces.
 
 ```bash
 python3 -m venv .venv
@@ -96,6 +106,15 @@ main.py prune --apply                            # ...and remove them
 # Tracking sheet
 main.py export                           # append new jobs
 main.py export --all                     # re-export everything
+
+# The daily loop — everything below, in one command
+main.py daily                            # scrape -> retire -> rank -> export -> digest
+main.py daily --no-scrape                # re-rank what is stored, no network
+main.py daily --since-hours 72           # widen what counts as "new"
+
+# Reading your mailbox for companies that are hiring now
+main.py scan-mail                        # read-only; prints setup if no credentials
+main.py scan-mail --mbox export.mbox     # offline, from a Takeout export
 
 # Scoring and tailoring
 main.py score                            # free, no API key
@@ -175,7 +194,7 @@ resume/     parser, profile (resume -> search), scorer, tailor, guard,
             cost (spend cap + ledger), writer, pipeline
             (+ your base resume, gitignored)
 submitter/  submission + audit log — EMPTY, Phase 4 not started
-tests/      189 offline unit tests
+tests/      260 offline unit tests
 data/       SQLite database + job_tracker.xlsx (gitignored)
 logs/       run logs (gitignored)
 .archive/   the pre-merge README / PLAN / constraints, kept because there is no git
@@ -341,7 +360,7 @@ execution order below, which is deliberately *not* 0,1,2,3,4.
 | ~~0~~ | ~~**git init** (§C11)~~ | ✅ Done 2026-09-06 — repo initialised and pushed. | — |
 | ~~1~~ | ~~**P5 — Pipeline integrity**~~ | ✅ Done 2026-09-06 — closure live, 3 dead postings retired on the first run. | — |
 | ~~2~~ | ~~**P6 — Breadth**~~ ✅ Done 2026-09-11 — 149 companies, 3 ATSs. | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
-| 3 | **P7 — Daily loop** ← **next** | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
+| ~~3~~ | ~~**P7 — Daily loop**~~ ✅ Done 2026-09-12. | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
 | 4 | **P3B — Live tailoring** | Fully built, never run. Unblocks the moment a resume + key exist. | Yes — you |
 | 5 | **P8 — Relevance v2** | Only worth it once the funnel is wide. Re-ranking 105 jobs is pointless; re-ranking 3,000 is not. | Yes — key |
 | 6 | **P4 — Assisted apply** | Highest risk, lowest reliability, ToS-constrained. Last on purpose, and recast from "auto-submit" to "prefill and hand over". | Yes — profile + go/no-go |
@@ -634,19 +653,33 @@ Every comparison now goes through `lifecycle.as_utc()`.
 **Done when:** ≥300 verified boards. **Currently 149** — the seed list is the
 limit, not the machinery. Feed `discover` a longer name list to go further.
 
-### Phase 7 — Daily Loop ❌ — **DO THIRD**
+### Phase 7 — Daily Loop ✅
 
-Today the workflow is five-plus commands run by hand, which in practice means it is
-run once and then not again.
+**Built 2026-09-12.** Everything it runs already existed as a separate command,
+and that was the problem: a five-command routine gets run once, enthusiastically,
+and then never again. The tool only pays off if it runs daily, so the friction of
+remembering the order was the thing most worth removing.
 
-- [ ] `main.py daily` — scrape → close stale → score → export, one command
-- [ ] Idempotent and safe to run twice in a day
-- [ ] A digest of what changed: new matches, newly closed, top new scores
-- [ ] `--since` so "what's new since yesterday" is answerable
-- [ ] Digest to a file (and optionally email), not only stdout
-- [ ] Meaningful exit codes so it can sit behind `cron`/`launchd`
-- [ ] A partially-failed run still reports what succeeded
-- [ ] Split the CLI into `cli/` — `main.py` is ~330 lines and grows a command per phase
+- [x] `main.py daily` — scrape → retire vanished postings → rank → export → digest
+- [x] **A failing stage never aborts the run.** The scrape can die and yesterday's
+      ranking still reaches you; each stage is caught, recorded, and the next runs
+- [x] The digest leads with **what changed**, not with totals that look identical
+      every morning — new roles with apply links, then what closed
+- [x] `--since-hours` controls what counts as new; `--no-scrape` re-ranks offline
+- [x] Digest written to `data/digest.txt` as well as stdout, because a cron run's
+      stdout goes nowhere a human will look
+- [x] Meaningful exit codes: `0` clean, `1` a stage failed, `2` nothing ran —
+      so cron/launchd can act without a human reading the output
+- [x] Stale-company and failed-board warnings surface in the digest
+- [x] 16 tests, most of them about partial failure
+- [ ] Email the digest rather than only writing it
+- [ ] Split the CLI into `cli/` — `main.py` is past 700 lines
+
+**To run it every morning at 8am**, add to `crontab -e`:
+
+```
+0 8 * * * cd /path/to/AI_Assitant_Job_Applier && .venv/bin/python main.py daily
+```
 
 **Done when:** one command, run daily, produces a digest you actually read.
 
