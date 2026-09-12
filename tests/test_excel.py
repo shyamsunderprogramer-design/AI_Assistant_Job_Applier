@@ -3,7 +3,8 @@
 from datetime import datetime, timezone
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 from db.models import Job
 from excel.tracker import COL, SHEET_NAME, STATUS_VALUES, ExcelTracker, job_key
@@ -32,6 +33,11 @@ def make_job(external_id="1", title="Software Engineer", description="Build thin
 @pytest.fixture
 def tracker(tmp_path):
     return ExcelTracker(tmp_path / "tracker.xlsx")
+
+
+def headers(ws) -> dict[str, int]:
+    """Header name -> 1-based column, read from the sheet itself."""
+    return {ws.cell(row=1, column=c).value: c for c in range(1, ws.max_column + 1)}
 
 
 def read(tracker):
@@ -118,7 +124,9 @@ def test_formatting_applied(tracker):
     ws = read(tracker)
     assert ws.freeze_panes == "A2"
     assert ws.cell(row=1, column=1).font.bold
-    assert ws.column_dimensions["K"].hidden  # Job Key column
+    # Read the position from the sheet: hardcoding a letter is the assumption
+    # that made adding a column dangerous in the first place.
+    assert ws.column_dimensions[get_column_letter(headers(ws)["Job Key"])].hidden
     assert ws.auto_filter.ref is not None
 
 
@@ -277,3 +285,174 @@ def test_remove_of_an_unknown_key_changes_nothing(tracker):
 def test_remove_with_no_keys_is_a_no_op(tracker):
     tracker.export([make_job("1")])
     assert tracker.remove(set()) == 0
+
+
+# -- workbooks written before a column was added ----------------------------
+#
+# The sheet on disk predates the Age column. Everything below exists because
+# indexing by position meant a new column silently reindexed those files: rows
+# were re-appended as duplicates, a user's "Applied" was overwritten, and
+# remove() read every key as empty and deleted the entire body.
+
+LEGACY_HEADERS = [
+    "Company", "Job Title", "Application Link", "JD", "Location",
+    "Posting Date", "Required Skills", "Date Found",
+    "Application Status", "ATS Match Score", "Job Key",
+]
+
+
+def write_sheet(path, header_names, rows):
+    """Build a workbook with an arbitrary header row, as an older build would."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = SHEET_NAME
+    ws.append(header_names)
+    for row in rows:
+        ws.append([row.get(name, "") for name in header_names])
+    wb.save(path)
+    return path
+
+
+@pytest.fixture
+def legacy(tmp_path):
+    """A tracker over a sheet with the old columns and a hand-edited status."""
+    path = tmp_path / "tracker.xlsx"
+    write_sheet(path, LEGACY_HEADERS, [
+        {"Company": "Acme", "Job Title": "Software Engineer",
+         "Application Link": "https://example.com/jobs/1",
+         "Posting Date": "2026-08-01", "Date Found": "2026-08-30",
+         "Application Status": "Applied", "Job Key": job_key(make_job("1"))},
+        {"Company": "Acme", "Job Title": "Data Engineer",
+         "Posting Date": "2026-08-01", "Date Found": "2026-08-30",
+         "Application Status": "Not Applied", "Job Key": job_key(make_job("2"))},
+        {"Company": "Acme", "Job Title": "ML Engineer",
+         "Posting Date": "2026-08-01", "Date Found": "2026-08-30",
+         "Application Status": "Manual Review", "Job Key": job_key(make_job("3"))},
+    ])
+    return ExcelTracker(path)
+
+
+def test_legacy_sheet_gains_age_without_moving_job_key(legacy):
+    legacy.export([make_job("1")])
+    ws = read(legacy)
+    head = headers(ws)
+
+    assert "Age" in head
+    assert head["Job Key"] == 11        # appended right; nothing shifted
+
+
+def test_legacy_sheet_is_not_duplicated_on_export(legacy):
+    appended, updated = legacy.export([make_job("1"), make_job("2")])
+    ws = read(legacy)
+
+    assert (appended, updated) == (0, 2)
+    assert ws.max_row == 4              # three rows plus the header, as before
+
+
+def test_legacy_user_status_survives_export(legacy):
+    legacy.export([make_job("1", status="Manual Review")])
+    ws = read(legacy)
+    status_col = headers(ws)["Application Status"]
+
+    assert ws.cell(row=2, column=status_col).value == "Applied"
+
+
+def test_legacy_remove_never_wipes_the_sheet(legacy):
+    """The regression test. This wiped every row, Applied ones included."""
+    before = [r for r in read(legacy).iter_rows(min_row=2, values_only=True)]
+
+    removed = legacy.remove({job_key(make_job("1"))})
+    ws = read(legacy)
+
+    assert removed == 0                 # row 1 is "Applied" — a user decision
+    assert ws.max_row == 4
+    keys = {ws.cell(row=r, column=headers(ws)["Job Key"]).value for r in range(2, 5)}
+    assert keys == {job_key(make_job(n)) for n in ("1", "2", "3")}
+    assert len(before) == 3
+
+
+def test_legacy_remove_still_prunes_the_row_it_should(legacy):
+    removed = legacy.remove({job_key(make_job("2"))})
+    ws = read(legacy)
+
+    assert removed == 1
+    assert ws.max_row == 3
+    keys = {ws.cell(row=r, column=headers(ws)["Job Key"]).value for r in range(2, 4)}
+    assert keys == {job_key(make_job("1")), job_key(make_job("3"))}
+
+
+def test_legacy_export_fills_the_new_age_column(legacy):
+    legacy.export([make_job("1")])
+    ws = read(legacy)
+
+    assert ws.cell(row=2, column=headers(ws)["Age"]).value
+
+
+# -- sheets we cannot safely interpret --------------------------------------
+
+def test_remove_without_a_job_key_column_changes_nothing(tmp_path):
+    path = write_sheet(tmp_path / "t.xlsx", ["Company", "Job Title"],
+                       [{"Company": "Acme", "Job Title": "Engineer"}])
+    tracker = ExcelTracker(path)
+
+    assert tracker.remove({"greenhouse:acme:1"}) == 0
+    assert load_workbook(path)[SHEET_NAME].max_row == 2
+
+
+def test_a_sheet_missing_job_key_gets_one_and_keeps_its_rows(tmp_path):
+    path = write_sheet(tmp_path / "t.xlsx", ["Company", "Job Title"],
+                       [{"Company": "Acme", "Job Title": "Hand typed"}])
+    tracker = ExcelTracker(path)
+
+    tracker.export([make_job("1")])
+    ws = load_workbook(path)[SHEET_NAME]
+
+    assert "Job Key" in headers(ws)
+    assert ws.cell(row=2, column=2).value == "Hand typed"   # untouched
+    assert ws.max_row == 3                                   # plus the new job
+
+
+def test_a_hand_typed_row_without_a_key_is_kept(legacy):
+    wb = load_workbook(legacy.path)
+    ws = wb[SHEET_NAME]
+    ws.cell(row=5, column=1).value = "A note to myself"
+    wb.save(legacy.path)
+
+    legacy.remove({job_key(make_job("2"))})
+    ws = read(legacy)
+
+    kept = {ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)}
+    assert "A note to myself" in kept
+
+
+# -- position independence ---------------------------------------------------
+
+def test_columns_are_found_by_name_not_position(tmp_path):
+    shuffled = ["Job Key", "Application Status", "Company", "Job Title",
+                "Posting Date", "Age", "Location", "Application Link",
+                "JD", "Required Skills", "Date Found", "ATS Match Score"]
+    path = write_sheet(tmp_path / "t.xlsx", shuffled, [])
+    tracker = ExcelTracker(path)
+
+    tracker.export([make_job("1")])
+    ws = read(tracker)
+    head = headers(ws)
+
+    assert ws.cell(row=2, column=head["Company"]).value == "Acme"
+    assert ws.cell(row=2, column=head["Job Title"]).value == "Software Engineer"
+    assert tracker.export([make_job("1")]) == (0, 1)      # matched, not re-added
+
+
+def test_a_column_the_user_added_survives_remove(legacy):
+    wb = load_workbook(legacy.path)
+    ws = wb[SHEET_NAME]
+    ws.cell(row=1, column=12).value = "Notes"
+    ws.cell(row=4, column=12).value = "call them back"   # on a row that survives
+    wb.save(legacy.path)
+
+    legacy.remove({job_key(make_job("2"))})
+    ws = read(legacy)
+
+    notes_col = headers(ws)["Notes"]
+    surviving = {ws.cell(row=r, column=notes_col).value for r in range(2, ws.max_row + 1)}
+    assert "call them back" in surviving
