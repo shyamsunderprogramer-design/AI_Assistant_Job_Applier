@@ -202,3 +202,36 @@ def test_csv_import_skips_unknown_sources(db, tmp_path):
     path = tmp_path / "inv.csv"
     path.write_text("name,slug,source\nBig Co,bigco,workday\n")
     assert import_inventory_csv(path) == 0
+
+
+# -- reading a names file ---------------------------------------------------
+
+def test_an_inline_comment_is_not_part_of_the_name(tmp_path):
+    """scan-mail writes "Acme    # seen 284x"; the annotation is not the name.
+
+    Treating "#" as a comment only at column one turned every harvested name
+    into a slug like "stacklogyseen284x" — 15,000 probes that could not hit.
+    """
+    from scraper.discovery import load_names_from_file
+
+    path = tmp_path / "names.txt"
+    path.write_text(
+        "# Company names harvested from a mailbox.\n"
+        "# 17248 messages scanned\n"
+        "\n"
+        "Stacklogy    # seen 284x\n"
+        "Booz Allen Hamilton    # seen 216x\n"
+        "Plain Name\n",
+        encoding="utf-8",
+    )
+
+    assert load_names_from_file(path) == ["Stacklogy", "Booz Allen Hamilton", "Plain Name"]
+
+
+def test_a_whole_line_comment_is_still_skipped(tmp_path):
+    from scraper.discovery import load_names_from_file
+
+    path = tmp_path / "names.txt"
+    path.write_text("# just a header\n\nAcme\n", encoding="utf-8")
+
+    assert load_names_from_file(path) == ["Acme"]
