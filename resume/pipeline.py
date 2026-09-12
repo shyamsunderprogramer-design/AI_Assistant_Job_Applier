@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config.loader import PROJECT_ROOT
-from db.models import Job
+from db.models import Job, utcnow
 from db.session import get_session
 from jobage import age_days
 from resume.parser import Resume, find_base_resume, parse_resume
@@ -369,3 +369,92 @@ def tailor_jobs(
     tailor_jobs.last_run_cost = run_cost
     log.info("Tailoring run: %s", ledger.summary())
     return outcomes
+
+
+# -- cover letters ----------------------------------------------------------
+
+def letter_brief(cfg, job_id: int, out_dir: Path | None = None) -> tuple[Path, str, str]:
+    """Write a paste-anywhere cover-letter prompt. Mirrors brief_job."""
+    from resume.letter import SYSTEM_PROMPT, build_prompt
+
+    resume = load_base_resume(cfg)
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise LookupError(f"No job with id {job_id}.")
+        company, title = job.company, job.title
+        jd_text = job.description or job.title
+        url = job.application_url
+
+    out_dir = out_dir or PROJECT_ROOT / cfg.get("resume.output_dir", "resume/output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / (output_filename(company, title, "")[:-5] + "_letter_brief.txt")
+
+    path.write_text(
+        f"COVER LETTER BRIEF — {company}: {title}\n"
+        f"{'=' * 70}\n\n"
+        f"  1. Copy everything below COPY FROM HERE\n"
+        f"  2. Paste it into any model\n"
+        f"  3. Save the JSON reply to a file\n"
+        f"  4. python main.py accept {job_id} --file <that file> --letter\n\n"
+        f"The reply is checked for fabrication before anything is written: it\n"
+        f"may not claim a skill, number or date your resume does not support,\n"
+        f"even one this posting asks for.\n\n"
+        f"Job    : {title}\nCompany: {company}\nApply  : {url or '(none)'}\n\n"
+        f"{'-' * 70}\nCOPY FROM HERE\n{'-' * 70}\n\n"
+        f"{SYSTEM_PROMPT}\n\n---\n\n"
+        f"{build_prompt(resume, title, company, jd_text)}",
+        encoding="utf-8",
+    )
+    return path, company, title
+
+
+def accept_letter(cfg, job_id: int, reply_text: str) -> JobOutcome:
+    """Guard a pasted cover-letter reply and, if clean, write the packet."""
+    from resume.letter import result_from_reply
+    from resume.packet import build_packet
+
+    resume = load_base_resume(cfg)
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise LookupError(f"No job with id {job_id}.")
+
+        result = result_from_reply(resume, job.description or job.title, reply_text)
+
+        # The folder and its job summary are written either way: a rejected
+        # letter still leaves something useful, and the review explains why.
+        packet = build_packet(
+            cfg, job, letter_text=result.text() if result.accepted else None
+        )
+        (packet.path / "letter-review.txt").write_text(
+            _letter_review(result), encoding="utf-8"
+        )
+
+        if not result.accepted:
+            job.status = "Manual Review"
+            return JobOutcome(
+                job_id=job.id, company=job.company, title=job.title,
+                score=job.ats_match_score or 0.0, status="rejected",
+                detail=result.guard.report() if result.guard else "no guard ran",
+            )
+        return JobOutcome(
+            job_id=job.id, company=job.company, title=job.title,
+            score=job.ats_match_score or 0.0, status="letter",
+            detail=f"{result.word_count()} words", resume_path=packet.path,
+        )
+
+
+def _letter_review(result) -> str:
+    lines = [f"COVER LETTER REVIEW — {utcnow():%Y-%m-%d %H:%M} UTC", "=" * 60, ""]
+    if result.why_this_company:
+        lines += ["WHY THIS COMPANY", f"  {result.why_this_company}", ""]
+    if result.left_out:
+        lines += ["LEFT OUT — the posting wants these, the resume does not support them"]
+        lines += [f"  - {item}" for item in result.left_out] + [""]
+    if result.guard and not result.guard.ok:
+        lines += ["FABRICATION GUARD — REJECTED:", result.guard.report(), "",
+                  "Nothing was written. Fix the reply or re-run the brief."]
+    else:
+        lines += [f"Guard passed. {result.word_count()} words."]
+    return "\n".join(lines) + "\n"
