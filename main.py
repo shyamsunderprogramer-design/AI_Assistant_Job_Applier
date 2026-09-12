@@ -534,6 +534,34 @@ def cmd_accept(cfg, args) -> int:
     return 0
 
 
+def cmd_daily(cfg, args) -> int:
+    """Everything that should happen once a day, in one command."""
+    init_engine(cfg.database_url)
+    from pathlib import Path
+
+    from config.loader import PROJECT_ROOT
+    from daily import render_digest, run_daily
+
+    report = run_daily(cfg, skip_scrape=args.no_scrape, since_hours=args.since_hours)
+    digest = render_digest(report, cfg, top=args.top)
+    print()
+    print(digest)
+
+    # Writing the digest matters for a cron run, where stdout goes nowhere a
+    # human will look.
+    out = Path(args.out) if args.out else PROJECT_ROOT / "data" / "digest.txt"
+    if not out.is_absolute():
+        out = PROJECT_ROOT / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(digest + "\n", encoding="utf-8")
+    print(f"\nSaved to {out}")
+
+    if report.failed_stages:
+        print(f"{len(report.failed_stages)} stage(s) failed — see above. "
+              f"Everything else still ran.")
+    return report.exit_code()
+
+
 def cmd_stats(cfg, args) -> int:
     init_engine(cfg.database_url)
     from statistics import median
@@ -711,6 +739,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_accept.add_argument("job_id", help="Job id the reply is for")
     p_accept.add_argument("--file", required=True, help="File holding the model's JSON reply")
 
+    p_daily = sub.add_parser(
+        "daily", help="Scrape, retire, rank and export in one go, then print a digest"
+    )
+    p_daily.add_argument("--no-scrape", action="store_true",
+                         help="Skip scraping; just re-rank and export what is stored")
+    p_daily.add_argument("--since-hours", type=int, default=24,
+                         help='What counts as "new" in the digest (default 24)')
+    p_daily.add_argument("--top", type=int, default=10, help="New jobs to list in the digest")
+    p_daily.add_argument("--out", default=None, help="Where to write the digest")
+
     sub.add_parser("stats", help="Show DB counts and recent finds")
 
     p_failures = sub.add_parser("failures", help="Show logged scrape failures")
@@ -730,6 +768,7 @@ COMMANDS = {
     "reparse": cmd_reparse,
     "profile": cmd_profile,
     "prune": cmd_prune,
+    "daily": cmd_daily,
     "score": cmd_score,
     "tailor": cmd_tailor,
     "brief": cmd_brief,
