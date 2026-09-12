@@ -1,0 +1,254 @@
+{
+  "name": "Job Applier \u2014 daily pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "13 7 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every morning",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        0
+      ],
+      "id": "every-morning"
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh\" daily"
+      },
+      "name": "Run daily pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        60,
+        0
+      ],
+      "id": "run-daily-pipeline"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The script prints human output to its log and one JSON line last.\nconst out = ($input.first().json.stdout || '').trim().split('\\n');\nlet summary = {ok: false, error: 'no summary line'};\nfor (let i = out.length - 1; i >= 0; i--) {\n  const line = out[i].trim();\n  if (!line.startsWith('{')) continue;\n  try { summary = JSON.parse(line); break; } catch (e) { /* keep looking */ }\n}\nreturn [{json: summary}];"
+      },
+      "name": "Read summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ],
+      "id": "read-summary"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.notify }}",
+              "rightValue": ""
+            }
+          ]
+        }
+      },
+      "name": "Worth interrupting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ],
+      "id": "worth-interrupting?"
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.ok ? `osascript -e 'display notification \"' + $json.new_strong + ' new strong matches, ' + $json.open + ' open\" with title \"Job pipeline\"'` : `osascript -e 'display notification \"pipeline failed (exit ' + $json.exit + ')\" with title \"Job pipeline\" sound name \"Basso\"'` }}"
+      },
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        720,
+        -60
+      ],
+      "id": "notify"
+    },
+    {
+      "parameters": {},
+      "name": "Nothing to say",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        720,
+        80
+      ],
+      "id": "nothing-to-say"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "7 3 * * 0"
+            }
+          ]
+        }
+      },
+      "name": "Sunday night",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        240
+      ],
+      "id": "sunday-night"
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh\" discover"
+      },
+      "name": "Discover new boards",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        60,
+        240
+      ],
+      "id": "discover-new-boards"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "23 2,14 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Twice a day",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        400
+      ],
+      "id": "twice-a-day"
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh\" enrich"
+      },
+      "name": "Continue enrichment",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        60,
+        400
+      ],
+      "id": "continue-enrichment"
+    }
+  ],
+  "connections": {
+    "Every morning": {
+      "main": [
+        [
+          {
+            "node": "Run daily pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run daily pipeline": {
+      "main": [
+        [
+          {
+            "node": "Read summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read summary": {
+      "main": [
+        [
+          {
+            "node": "Worth interrupting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Worth interrupting?": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing to say",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sunday night": {
+      "main": [
+        [
+          {
+            "node": "Discover new boards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Twice a day": {
+      "main": [
+        [
+          {
+            "node": "Continue enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "active": false
+}
