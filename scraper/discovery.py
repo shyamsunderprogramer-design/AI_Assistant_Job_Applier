@@ -264,7 +264,15 @@ def load_names_from_file(path: Path | str) -> list[str]:
         return [r[name_idx].strip() for r in rows[1:] if len(r) > name_idx and r[name_idx].strip()]
 
     with open(path, encoding="utf-8") as fh:
-        return [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+        names = []
+        for line in fh:
+            # A "#" starts a comment anywhere on the line, not just at column
+            # one: scan-mail writes "Acme    # seen 284x", and treating that
+            # annotation as part of the name probes "acmeseen284x" instead.
+            name = line.split("#", 1)[0].strip()
+            if name:
+                names.append(name)
+        return names
 
 
 def import_inventory_csv(path: Path | str) -> int:
