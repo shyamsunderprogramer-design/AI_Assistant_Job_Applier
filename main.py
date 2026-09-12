@@ -20,6 +20,8 @@ from config.loader import load_config, setup_logging
 from db.models import SYSTEM_STATUSES, Company, Job, ScrapeLog
 from db.session import get_session, init_engine
 from jobage import age_label
+from jobfields import (UNSTATED, experience_label,
+                       salary_label, workplace_label)
 
 log = logging.getLogger("main")
 
@@ -306,18 +308,47 @@ def cmd_reparse(cfg, args) -> int:
     the source, so nothing needs re-scraping.
     """
     init_engine(cfg.database_url)
+    from jobfields import derive
     from scraper.base import extract_requirements
 
     changed = 0
+    filled = {"workplace": 0, "experience": 0, "salary": 0}
     with get_session() as session:
-        jobs = session.query(Job).all()
+        query = session.query(Job).order_by(Job.found_at.desc())
+        jobs = query.limit(args.limit).all() if args.limit else query.all()
         for job in jobs:
+            touched = False
             fresh = extract_requirements(job.description)
             if fresh != job.requirements:
                 job.requirements = fresh
+                touched = True
+
+            # A re-scrape cannot do this: content_hash covers only title,
+            # location and description, so a row whose text has not changed is
+            # never rewritten and these columns would stay empty forever.
+            for column, value in derive(job.title, job.location,
+                                        job.description, job.requirements).items():
+                if getattr(job, column) != value:
+                    setattr(job, column, value)
+                    touched = True
+            if job.workplace:
+                filled["workplace"] += 1
+            if job.experience_min_years:
+                filled["experience"] += 1
+            if job.salary_min:
+                filled["salary"] += 1
+
+            if touched:
                 job.exported_to_excel = False
                 changed += 1
-    print(f"Re-derived requirements for {changed} of {len(jobs)} jobs.")
+        if args.dry_run:
+            session.rollback()
+
+    total = len(jobs)
+    verb = "Would update" if args.dry_run else "Updated"
+    print(f"{verb} {changed} of {total} jobs.")
+    for name, count in filled.items():
+        print(f"  {name:11} {count:>4} / {total}  ({count / max(total, 1) * 100:.0f}%)")
     return 0
 
 
@@ -436,6 +467,8 @@ def cmd_score(cfg, args) -> int:
     outcomes = score_jobs(
         cfg, limit=args.limit, rescore=args.rescore,
         include_closed=args.include_closed, max_age_days=max_age,
+        remote_only=args.remote_only, min_salary=args.min_salary,
+        max_experience=args.max_experience,
     )
     if not outcomes:
         print("Nothing to score. Use --rescore to recompute existing scores.")
@@ -446,11 +479,18 @@ def cmd_score(cfg, args) -> int:
     print(f"Scored {len(outcomes)} jobs (threshold {threshold:.0%}):\n")
     if max_age:
         print(f"Only postings up to {max_age:.0f} days old.\n")
-    print(f"{'score':>6}  {'age':>8}  {'company':<20} title")
+    print(f"{'score':>6}  {'age':>8}  {'where':<8} {'exp':>8}  {'salary':>14}  "
+          f"{'company':<18} title")
     for outcome in outcomes[: args.top or len(outcomes)]:
         flag = " " if outcome.score >= threshold else "!"
+        pay = salary_label(outcome.salary_min, outcome.salary_max,
+                           outcome.salary_currency, outcome.salary_period)
+        exp = experience_label(outcome.experience_min_years, outcome.experience_max_years)
+        # A blank column is quieter than "not published" repeated 25 times.
+        blank = lambda v: "" if v == UNSTATED else v
         print(f"{outcome.score:>6.0%}{flag} {age_label(outcome):>8}  "
-              f"{outcome.company:<20} {outcome.title[:44]}")
+              f"{blank(workplace_label(outcome.workplace)):<8} {blank(exp):>8}  "
+              f"{blank(pay):>14}  {outcome.company[:18]:<18} {outcome.title[:34]}")
 
     below = sum(1 for o in outcomes if o.score < threshold)
     print(f"\n{below} below threshold — marked 'Manual Review'.")
@@ -747,7 +787,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--all", action="store_true", help="Re-export every job, not just new ones"
     )
 
-    sub.add_parser("reparse", help="Re-derive requirements from stored JDs (no network)")
+    p_reparse = sub.add_parser(
+        "reparse", help="Re-derive fields from stored JDs (no network)")
+    p_reparse.add_argument("--limit", type=int, default=0,
+                           help="Only the N most recent jobs")
+    p_reparse.add_argument("--dry-run", action="store_true",
+                           help="Report what would change, write nothing")
 
     p_profile = sub.add_parser(
         "profile", help="Derive your job search from your resume (no keywords to write)"
@@ -762,6 +807,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_score = sub.add_parser("score", help="Score jobs against the base resume (no API cost)")
     p_score.add_argument("--limit", type=int, default=0, help="Only score N jobs")
+    p_score.add_argument("--remote-only", action="store_true",
+                         help="Only remote and hybrid roles")
+    p_score.add_argument("--min-salary", type=int, default=0, metavar="USD",
+                         help="Skip roles whose published top end is below this")
+    p_score.add_argument("--max-experience", type=int, default=0, metavar="YEARS",
+                         help="Skip roles demanding more years than this")
     p_score.add_argument("--max-age", type=float, default=None, metavar="DAYS",
                          help="Skip postings older than this (default: no limit)")
     p_score.add_argument("--rescore", action="store_true", help="Recompute existing scores")
