@@ -122,6 +122,21 @@ def _pid_of(pattern: str) -> int | None:
     return None
 
 
+def _tail_match(path: Path, pattern: re.Pattern) -> str | None:
+    """First capture of the last match of `pattern` in a log's tail."""
+    if not path.exists():
+        return None
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 8192))
+            text = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    found = pattern.findall(text)
+    return found[-1] if found else None
+
+
 def _tail_progress(path: Path, pattern: re.Pattern) -> tuple[int, int, str]:
     """Last (done, total, line) matching `pattern` in a log file."""
     if not path.exists():
@@ -144,6 +159,8 @@ def _tail_progress(path: Path, pattern: re.Pattern) -> tuple[int, int, str]:
 
 
 MAIL_LINE = re.compile(r"(\d+)/(\d+) messages — (\d+) names, (\d+) boards")
+# Printed only once the scan has written its output file and finished.
+MAIL_DONE = re.compile(r"Wrote (\d+) names to")
 
 # enrich_loop.sh runs this many rounds before it stops on its own.
 ENRICH_ROUNDS = 60
@@ -196,6 +213,13 @@ def collect(cfg) -> list[Task]:
     if _not_yet_written(mail_log, mail_pid):
         # Numbers in the log belong to a run that has already died.
         done, detail = 0, "searching the server"
+    elif not mail_pid:
+        # Progress lines land on multiples of 25, so a finished scan stops a
+        # few short of the total and would otherwise read as "died at 99%".
+        written = _tail_match(mail_log, MAIL_DONE)
+        if written:
+            done = total
+            detail = f"{written} names written"
     tasks.append(
         Task(
             name="Mailbox scan",
