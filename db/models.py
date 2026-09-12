@@ -110,6 +110,20 @@ class Job(Base):
     is_open: Mapped[bool] = mapped_column(default=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # Facts the posting states about itself, parsed from its own text by
+    # jobfields.py. NULL means the posting did not say — never "unknown" as a
+    # word, or every filter would have to parse English back out. These are
+    # derived from the description, which content_hash covers, so a re-scrape
+    # only refreshes them when the text itself changed; `reparse` is what
+    # backfills existing rows and re-derives after a parser fix.
+    workplace: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    experience_min_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    experience_max_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    salary_period: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
     # Phase 2/3 fields, unused in Phase 1
     status: Mapped[str] = mapped_column(String(32), default=DEFAULT_STATUS)
     ats_match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
