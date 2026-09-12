@@ -123,6 +123,110 @@ def cmd_discover(cfg, args) -> int:
     return 0
 
 
+SETUP_HELP = """
+No mailbox credentials found. Two ways in — pick either.
+
+  A. GMAIL APP PASSWORD  (2 minutes, read-only)
+     1. Turn on 2-Step Verification:  https://myaccount.google.com/security
+     2. Create an app password:       https://myaccount.google.com/apppasswords
+        Name it anything, e.g. "job applier". Google shows 16 characters once.
+     3. Put both lines in .env (it is gitignored — the key never leaves this machine):
+
+          MAIL_ADDRESS=you@gmail.com
+          MAIL_APP_PASSWORD=abcd efgh ijkl mnop
+
+     4. python main.py scan-mail
+
+     The connection is opened READ-ONLY, so nothing can be deleted, moved, or
+     marked read. Revoke the password any time on that same Google page.
+
+  B. NO CREDENTIALS AT ALL
+     Export your mail at https://takeout.google.com (Mail only), then:
+
+          python main.py scan-mail --mbox ~/Downloads/All\\ mail.mbox
+
+     Slower to obtain, but nothing leaves your machine.
+"""
+
+
+def cmd_scan_mail(cfg, args) -> int:
+    """Harvest company names from a mailbox. Read-only."""
+    import os
+
+    from scraper.mailbox import scan_imap, scan_mbox, write_findings
+
+    if args.mbox:
+        print(f"Scanning {args.mbox} — offline, nothing leaves this machine.\n")
+        findings = scan_mbox(args.mbox, limit=args.limit)
+    else:
+        address = args.address or os.getenv("MAIL_ADDRESS")
+        password = args.password or os.getenv("MAIL_APP_PASSWORD")
+        if not address or not password:
+            print(SETUP_HELP)
+            return 1
+
+        password = password.replace(" ", "")  # Google prints it in groups of 4
+        print(f"Connecting to {args.host} as {address} (read-only)...")
+        try:
+            findings = scan_imap(
+                address, password, host=args.host, folder=args.folder,
+                since=args.since, limit=args.limit,
+                progress=lambda i, n, f: print(
+                    f"  {i}/{n} messages — {len(f.names)} names, "
+                    f"{len(f.ats_slugs)} boards so far"
+                ),
+            )
+        except Exception as exc:
+            message = str(exc)
+            print(f"\nCould not read the mailbox: {message}")
+            if "AUTHENTICATIONFAILED" in message.upper() or "Invalid credentials" in message:
+                print("\nThat usually means the app password is wrong, or a normal")
+                print("account password was used. App passwords are 16 characters and")
+                print("come from https://myaccount.google.com/apppasswords")
+            return 1
+
+    print(f"\n{findings.summary()}")
+
+    if findings.ats_slugs:
+        print(f"\nConfirmed ATS boards ({len(findings.ats_slugs)}) — these are slugs, not guesses:")
+        for slug, source in sorted(findings.ats_slugs.items())[:20]:
+            print(f"  {source:<11} {slug}")
+        if len(findings.ats_slugs) > 20:
+            print(f"  ... and {len(findings.ats_slugs) - 20} more")
+
+    ranked = findings.ranked_names(args.min_mentions)
+    if ranked:
+        print(f"\nTop company names ({len(ranked)} total):")
+        for name, count in ranked[:20]:
+            print(f"  {count:>3}x  {name}")
+
+    if not ranked and not findings.ats_slugs:
+        print("\nNothing found. Try --since 01-Jan-2025, a different --folder, "
+              "or lower --min-mentions.")
+        return 0
+
+    path, written = write_findings(findings, args.out, args.min_mentions)
+    print(f"\nWrote {written} names to {path}")
+
+    if findings.ats_slugs and not args.no_save_boards:
+        init_engine(cfg.database_url)
+        from scraper.discovery import record_probe, upsert_company
+        from scraper.runner import SCRAPER_TYPES
+
+        added = 0
+        for slug, source in findings.ats_slugs.items():
+            if source not in SCRAPER_TYPES:
+                continue
+            upsert_company(name=slug, slug=slug, source=source, origin="mailbox")
+            record_probe(source, slug, True, company_name=slug)
+            added += 1
+        print(f"Added {added} confirmed boards straight to the company list "
+              f"(no probing needed — the URL named the slug).")
+
+    print(f"\nNext: python main.py discover --names {path} --max-slugs 2")
+    return 0
+
+
 def cmd_import_names(cfg, args) -> int:
     """Turn a big company export into a filtered discovery list."""
     from scraper.company_import import read_spreadsheet, write_names_file
@@ -541,6 +645,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_names.add_argument("--max-employees", type=int, default=5000)
     p_names.add_argument("--limit", type=int, default=0)
 
+    p_mail = sub.add_parser(
+        "scan-mail", help="Harvest company names from your mailbox (read-only)"
+    )
+    p_mail.add_argument("--mbox", help="Scan a .mbox export instead of connecting")
+    p_mail.add_argument("--address", help="Overrides MAIL_ADDRESS from .env")
+    p_mail.add_argument("--password", help="Overrides MAIL_APP_PASSWORD from .env")
+    p_mail.add_argument("--host", default="imap.gmail.com")
+    p_mail.add_argument("--folder", default="INBOX")
+    p_mail.add_argument("--since", help='Only mail after this date, e.g. 01-Jan-2025')
+    p_mail.add_argument("--limit", type=int, default=0, help="Cap messages scanned")
+    p_mail.add_argument("--min-mentions", type=int, default=1,
+                        help="Only keep names seen at least this many times")
+    p_mail.add_argument("--out", default="data/mailbox_names.txt")
+    p_mail.add_argument("--no-save-boards", action="store_true",
+                        help="Do not add confirmed ATS boards to the company list")
+
     p_import = sub.add_parser("import-csv", help="Import an inventory CSV (name,slug,source)")
     p_import.add_argument("--file", required=True)
 
@@ -603,6 +723,7 @@ COMMANDS = {
     "init-db": cmd_init_db,
     "scrape": cmd_scrape,
     "discover": cmd_discover,
+    "scan-mail": cmd_scan_mail,
     "import-names": cmd_import_names,
     "import-csv": cmd_import_csv,
     "export": cmd_export,
