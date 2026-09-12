@@ -15,6 +15,7 @@ sys.path.insert(0, ROOT)
 
 def main():
     from config.loader import load_config
+    from jobfields import experience_label, salary_label
     from db.models import Company, Job
     from db.session import get_session, init_engine
     import status
@@ -48,6 +49,11 @@ def main():
                 "score": round((j.ats_match_score or 0) * 100),
                 "posted": (j.posted_at or j.found_at).isoformat() if (j.posted_at or j.found_at) else None,
                 "exact": j.posted_at is not None,
+                "workplace": j.workplace,
+                "experience": experience_label(j.experience_min_years,
+                                               j.experience_max_years),
+                "salary": salary_label(j.salary_min, j.salary_max,
+                                       j.salary_currency, j.salary_period),
             }
             for j in (
                 session.query(Job)
