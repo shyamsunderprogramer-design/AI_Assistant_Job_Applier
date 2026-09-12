@@ -47,6 +47,62 @@ def _alive(pid: int | None) -> bool:
     return True
 
 
+def _pid_of_script(name: str) -> int | None:
+    """Find a running shell script; _pid_of only matches `main.py` commands."""
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,command="],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        line = line.strip()
+        # Skip the shell that is running this very lookup.
+        if name in line and "ps -eo" not in line and "-c " not in line:
+            try:
+                return int(line.split()[0])
+            except (ValueError, IndexError):
+                continue
+    return None
+
+
+def _started_at(pid: int | None) -> float | None:
+    """Wall-clock start of a process, or None if it is not running."""
+    if not pid:
+        return None
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not out:
+        return None
+    days, _, rest = out.partition("-")
+    if not rest:
+        days, rest = "0", days
+    parts = [int(x) for x in rest.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    seconds = int(days) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return time.time() - seconds
+
+
+def _not_yet_written(log: Path, pid: int | None) -> bool:
+    """True when a running job has not written since it started.
+
+    Its log still holds the previous run's tail, and reporting those numbers as
+    current is worse than admitting the job is still warming up.
+    """
+    started = _started_at(pid)
+    if started is None:
+        return False
+    try:
+        return log.stat().st_mtime < started - 3
+    except OSError:
+        return True
+
+
 def _pid_of(pattern: str) -> int | None:
     """Find a running `main.py <command>` process without shelling out to pgrep."""
     import subprocess
@@ -89,6 +145,9 @@ def _tail_progress(path: Path, pattern: re.Pattern) -> tuple[int, int, str]:
 
 MAIL_LINE = re.compile(r"(\d+)/(\d+) messages — (\d+) names, (\d+) boards")
 
+# enrich_loop.sh runs this many rounds before it stops on its own.
+ENRICH_ROUNDS = 60
+
 
 def collect(cfg) -> list[Task]:
     """Current state of every long-running job, plus the pipeline totals."""
@@ -129,15 +188,40 @@ def collect(cfg) -> list[Task]:
     )
 
     # -- mail scan ----------------------------------------------------------
-    done, total, line = _tail_progress(PROJECT_ROOT / "data" / "mailscan.log", MAIL_LINE)
+    mail_log = PROJECT_ROOT / "data" / "mailscan.log"
+    mail_pid = _pid_of("scan-mail")
+    done, total, line = _tail_progress(mail_log, MAIL_LINE)
     found = re.search(r"(\d+) names", line)
+    detail = f"{found.group(1)} names" if found else "searching the server"
+    if _not_yet_written(mail_log, mail_pid):
+        # Numbers in the log belong to a run that has already died.
+        done, detail = 0, "searching the server"
     tasks.append(
         Task(
             name="Mailbox scan",
             done=done,
             total=total,
-            running=_alive(_pid_of("scan-mail")),
-            detail=f"{found.group(1)} names" if found else "searching the server",
+            running=_alive(mail_pid),
+            detail=detail,
+        )
+    )
+
+    # -- website / careers enrichment ---------------------------------------
+    enrich_log = PROJECT_ROOT / "data" / "companies_build" / "enrich_loop.log"
+    enrich_pid = _pid_of_script("enrich_loop.sh")
+    rounds = 0
+    if enrich_log.exists():
+        found_rounds = re.findall(
+            r"round (\d+)", enrich_log.read_text(encoding="utf-8", errors="replace")
+        )
+        rounds = int(found_rounds[-1]) if found_rounds else 0
+    tasks.append(
+        Task(
+            name="Website enrichment",
+            done=rounds,
+            total=ENRICH_ROUNDS,
+            running=_alive(enrich_pid),
+            detail=f"round {rounds} of {ENRICH_ROUNDS}" if rounds else "not started",
         )
     )
 

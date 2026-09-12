@@ -51,7 +51,7 @@
 </style>
 <div class="wrap">
   <h1>Job console</h1>
-  <div class="sub">AI_Assitant_Job_Applier — background jobs, refreshed every 5s</div>
+  <div class="sub">Background jobs and pipeline totals — refreshed every 5s</div>
   <div id="jobs"></div>
   <div class="foot" id="foot">loading…</div>
 </div>
@@ -59,37 +59,40 @@
 const box = document.getElementById('jobs'), foot = document.getElementById('foot');
 
 function state(job) {
-  if (!job.alive) return ['dead', 'stopped'];
-  if (job.stale)  return ['wait', 'starting'];
-  return ['go', 'running'];
+  if (job.alive) return ['go', 'running'];
+  // A finished pipeline stat is not a dead process; do not alarm about it.
+  if (job.total && job.done >= job.total) return ['go', 'done'];
+  return ['dead', 'stopped'];
 }
 
 function render(data) {
   box.innerHTML = '';
+  if (data.error) {
+    box.innerHTML = '<div class="job">could not read status: ' +
+      String(data.error).replace(/[<&]/g, '') + '</div>';
+    return;
+  }
   for (const job of data.jobs) {
     const [cls, label] = state(job);
-    const pct = job.total ? Math.min(100, job.done / job.total * 100) : 0;
-    // A job that is still starting has no real progress to show yet.
-    const width = job.stale ? 0 : pct;
     const el = document.createElement('div');
     el.className = 'job';
     el.innerHTML = `
       <div class="top">
         <span class="name"></span>
         <span class="pill ${cls}">${label}</span>
-        <span class="pct">${job.stale || !job.total ? '—' : pct.toFixed(1) + '%'}</span>
+        <span class="pct">${job.total ? job.pct.toFixed(1) + '%' : '—'}</span>
       </div>
       <div class="detail"></div>
-      <div class="track"><div class="fill ${cls}" style="width:${width}%"></div></div>
+      <div class="track"><div class="fill ${cls}" style="width:${job.pct}%"></div></div>
       <div class="meta">
         <span class="count"></span>
         <span><code class="log"></code></span>
       </div>`;
     el.querySelector('.name').textContent = job.name;
     el.querySelector('.detail').textContent = job.detail;
-    el.querySelector('.count').textContent = job.stale
-      ? 'no progress line yet — ' + job.extra
-      : (job.total ? `${job.done.toLocaleString()} / ${job.total.toLocaleString()} — ` : '') + job.extra;
+    el.querySelector('.count').textContent = job.total
+      ? `${job.done.toLocaleString()} / ${job.total.toLocaleString()}`
+      : job.detail;
     el.querySelector('.log').textContent = job.log;
     box.appendChild(el);
   }
