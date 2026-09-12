@@ -3,6 +3,9 @@
 The numbers come from status.collect(), the same source `main.py status` uses,
 so the terminal view and the browser page can never disagree. This module only
 turns those tasks into JSON and keeps the served directory stocked.
+
+Long-running: it holds status.py in memory, so restart it after changing how a
+task is measured or the page will keep serving the old reading.
 """
 import json
 import os
