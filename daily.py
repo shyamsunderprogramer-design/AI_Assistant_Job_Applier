@@ -26,6 +26,22 @@ from datetime import datetime, timedelta
 from db.models import Job, utcnow
 from db.session import get_session
 from jobage import age_label
+from jobfields import UNSTATED, experience_label, salary_label, workplace_label
+
+
+def _facts(job) -> str:
+    """The three facts that decide whether a posting is worth opening.
+
+    Only what the posting actually states: a line of "not published" three
+    times over is noise, so an unstated field is simply absent.
+    """
+    parts = [
+        workplace_label(job.workplace),
+        experience_label(job.experience_min_years, job.experience_max_years),
+        salary_label(job.salary_min, job.salary_max,
+                     job.salary_currency, job.salary_period),
+    ]
+    return "  ·  ".join(p for p in parts if p != UNSTATED)
 from scraper.lifecycle import as_utc, stale_companies
 
 log = logging.getLogger(__name__)
@@ -57,7 +73,7 @@ class DailyReport:
     scored: int = 0
     exported: int = 0
 
-    new_jobs: list[tuple[str, str, float, str, str]] = field(default_factory=list)
+    new_jobs: list[tuple[str, str, float, str, str, str]] = field(default_factory=list)
     closed_jobs: list[tuple[str, str]] = field(default_factory=list)
     stale: list = field(default_factory=list)
 
@@ -162,7 +178,7 @@ def run_daily(cfg, skip_scrape: bool = False, since_hours: int = 24) -> DailyRep
             # digest renders from plain tuples, with no session behind them.
             report.new_jobs = [
                 (j.company, j.title, j.ats_match_score or 0.0, j.application_url,
-                 age_label(j))
+                 age_label(j), _facts(j))
                 for j in fresh
                 if as_utc(j.found_at) and as_utc(j.found_at) >= cutoff
             ]
@@ -194,9 +210,11 @@ def render_digest(report: DailyReport, cfg, top: int = 10) -> str:
         lines.append(f"{len(report.new_jobs)} NEW since yesterday"
                      + (f" — {len(strong)} worth a look" if strong else ""))
         lines.append("")
-        for company, title, score, url, age in report.new_jobs[:top]:
+        for company, title, score, url, age, facts in report.new_jobs[:top]:
             mark = "*" if score >= threshold else " "
             lines.append(f"  {score:>4.0%}{mark} {age:>8}  {company[:18]:<20} {title[:38]}")
+            if facts:
+                lines.append(f"        {facts}")
             if score >= threshold:
                 lines.append(f"        {url}")
         if len(report.new_jobs) > top:
