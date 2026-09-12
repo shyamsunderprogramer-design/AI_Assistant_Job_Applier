@@ -56,6 +56,12 @@ TLD_BY_COUNTRY = {
 }
 
 
+# A DNS label is at most 63 octets. Joining every word of a long company name
+# overruns that, and the idna codec raises UnicodeError from deep inside the
+# request — past `requests.RequestException`, so it killed the whole batch.
+MAX_LABEL = 63
+
+
 def slug_candidates(name: str) -> list[str]:
     base = LEGAL_SUFFIXES.sub("", name)
     base = re.sub(r"[^a-z0-9 ]", "", base.lower())
@@ -66,7 +72,7 @@ def slug_candidates(name: str) -> list[str]:
     out = [joined]
     if len(joined) > 16 and len(words) > 1:
         out.append(words[0])  # very long names often shorten to the first word
-    return out
+    return [s for s in out if 0 < len(s) <= MAX_LABEL]
 
 
 def distinctive_token(name: str) -> str | None:
@@ -78,7 +84,9 @@ def distinctive_token(name: str) -> str | None:
 def verify(url: str, token: str | None) -> bool:
     try:
         r = requests.get(url, headers=UA, timeout=10, allow_redirects=True)
-    except requests.RequestException:
+    except (requests.RequestException, UnicodeError, ValueError):
+        # UnicodeError escapes RequestException: it comes from the idna encode
+        # in urllib's proxy lookup, before requests can wrap it.
         return False
     if r.status_code != 200:
         return False
