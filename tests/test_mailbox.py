@@ -8,6 +8,7 @@ rejection cases below are therefore the bulk of this file.
 
 import pytest
 
+from scraper import mailbox
 from scraper.mailbox import (
     MailboxFindings,
     clean_company,
@@ -196,3 +197,132 @@ def test_summary_reports_counts():
     findings = harvest(("Role at Stripe", "https://jobs.lever.co/ramp/x"))
     findings.messages_scanned = 10
     assert "10 messages scanned" in findings.summary()
+
+
+# -- checkpointing: an interrupted scan must not start over ----------------
+#
+# A full scan is tens of thousands of fetches over IMAP. Before checkpointing,
+# a scan that died at 99% wrote nothing at all, so the whole run was repeated.
+
+def fake_message(company: str) -> bytes:
+    return (
+        f"From: recruiter@{company.lower()}.com\r\n"
+        f"Subject: job opportunity at {company}\r\n"
+        f"\r\nWe are hiring at {company}.\r\n"
+    ).encode()
+
+
+class FakeIMAP:
+    """The slice of imaplib that scan_imap actually uses."""
+
+    def __init__(self, count: int, die_after: int | None = None):
+        self.count = count
+        self.die_after = die_after
+        self.fetched: list[int] = []
+
+    def login(self, *a):
+        pass
+
+    def select(self, *a, **k):
+        pass
+
+    def search(self, charset, *criteria):
+        if "FROM" in criteria:
+            return "OK", [b" ".join(str(i).encode() for i in range(1, self.count + 1))]
+        return "OK", [b""]
+
+    def fetch(self, uid, spec):
+        if self.die_after is not None and len(self.fetched) >= self.die_after:
+            raise KeyboardInterrupt("process killed")
+        self.fetched.append(int(uid))
+        return "OK", [(b"header", fake_message(f"Corp{int(uid)}"))]
+
+    def close(self):
+        pass
+
+    def logout(self):
+        pass
+
+
+@pytest.fixture
+def imap(monkeypatch):
+    def install(conn):
+        monkeypatch.setattr(mailbox.imaplib, "IMAP4_SSL", lambda host: conn)
+        return conn
+    return install
+
+
+def test_state_round_trips(tmp_path):
+    findings = harvest(("job at Acme", "Acme is hiring"))
+    state = tmp_path / "s.json"
+    mailbox.save_scan_state(state, findings, {1, 2, 3})
+
+    restored, done = mailbox.load_scan_state(state)
+    assert restored.names == findings.names
+    assert done == {1, 2, 3}
+
+
+def test_missing_state_starts_clean(tmp_path):
+    findings, done = mailbox.load_scan_state(tmp_path / "absent.json")
+    assert findings.messages_scanned == 0 and done == set()
+
+
+def test_corrupt_state_is_ignored_not_fatal(tmp_path):
+    state = tmp_path / "s.json"
+    state.write_text("{ truncated", encoding="utf-8")
+
+    findings, done = mailbox.load_scan_state(state)
+    assert findings.messages_scanned == 0 and done == set()
+
+
+def test_interrupted_scan_keeps_completed_work(tmp_path, imap):
+    state = tmp_path / "s.json"
+    conn = imap(FakeIMAP(60, die_after=25))
+
+    with pytest.raises(KeyboardInterrupt):
+        mailbox.scan_imap("a@b.c", "pw", state_path=state, checkpoint_every=10)
+
+    saved, done = mailbox.load_scan_state(state)
+    assert len(done) == 20        # the last checkpoint, not zero
+    assert len(saved.names) == 20
+
+
+def test_resumed_scan_refetches_nothing_already_done(tmp_path, imap):
+    state = tmp_path / "s.json"
+    imap(FakeIMAP(60, die_after=25))
+    with pytest.raises(KeyboardInterrupt):
+        mailbox.scan_imap("a@b.c", "pw", state_path=state, checkpoint_every=10)
+
+    resumed = imap(FakeIMAP(60))
+    findings = mailbox.scan_imap("a@b.c", "pw", state_path=state, checkpoint_every=10)
+
+    assert resumed.fetched == list(range(21, 61))   # only the remainder
+    assert findings.messages_scanned == 60
+
+
+def test_second_scan_of_unchanged_mailbox_fetches_nothing(tmp_path, imap):
+    state = tmp_path / "s.json"
+    imap(FakeIMAP(10))
+    mailbox.scan_imap("a@b.c", "pw", state_path=state)
+
+    again = imap(FakeIMAP(10))
+    mailbox.scan_imap("a@b.c", "pw", state_path=state)
+    assert again.fetched == []
+
+
+def test_scan_without_state_path_still_works(tmp_path, imap):
+    conn = imap(FakeIMAP(5))
+    findings = mailbox.scan_imap("a@b.c", "pw")
+    assert conn.fetched == [1, 2, 3, 4, 5]
+    assert findings.messages_scanned == 5
+
+
+def test_search_phase_reports_progress(tmp_path, imap):
+    imap(FakeIMAP(3))
+    notes: list[str] = []
+    mailbox.scan_imap("a@b.c", "pw", search_progress=notes.append)
+
+    # The search phase is minutes of silence otherwise, indistinguishable
+    # from a hang.
+    assert len(notes) == 30
+    assert "search 1/30" in notes[0]
