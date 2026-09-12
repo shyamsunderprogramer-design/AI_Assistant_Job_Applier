@@ -74,16 +74,20 @@ function render(data) {
   }
   for (const job of data.jobs) {
     const [cls, label] = state(job);
+    // A row with no total is a state, not a quantity: an empty track reads as
+    // a job that has done nothing, when it is simply waiting its turn.
+    const stateOnly = !job.total;
     const el = document.createElement('div');
     el.className = 'job';
     el.innerHTML = `
       <div class="top">
         <span class="name"></span>
         <span class="pill ${cls}">${label}</span>
-        <span class="pct">${job.total ? job.pct.toFixed(1) + '%' : '—'}</span>
+        <span class="pct">${stateOnly ? '' : job.pct.toFixed(1) + '%'}</span>
       </div>
       <div class="detail"></div>
-      <div class="track"><div class="fill ${cls}" style="width:${job.pct}%"></div></div>
+      ${stateOnly ? '' :
+        `<div class="track"><div class="fill ${cls}" style="width:${job.pct}%"></div></div>`}
       <div class="meta">
         <span class="count"></span>
         <span><code class="log"></code></span>

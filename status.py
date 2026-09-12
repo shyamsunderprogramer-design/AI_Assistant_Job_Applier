@@ -294,6 +294,27 @@ def collect(cfg) -> list[Task]:
         )
     )
 
+    # -- the queued daily run ------------------------------------------------
+    # A chained run is real pending work: it is waiting on purpose, and a view
+    # that showed nothing would look like nobody had arranged anything.
+    chained = _pid_of_script("after_discovery.sh")
+    daily_running = _pid_of("main.py daily")
+    daily_lock = (PROJECT_ROOT / "data" / "daily.lock").exists()
+    if chained or daily_running or daily_lock:
+        if daily_running or daily_lock:
+            detail = "running now — scrape, score, export"
+        else:
+            detail = "queued, waiting for discovery to finish"
+        tasks.append(
+            Task(
+                name="Daily pipeline",
+                done=0,
+                total=0,          # a state, not a quantity: no bar to fill
+                running=True,
+                detail=detail,
+            )
+        )
+
     # -- the pipeline itself ------------------------------------------------
     tasks.append(
         Task(
@@ -320,9 +341,16 @@ def render(tasks: list[Task]) -> str:
         else:
             state = "idle"
 
-        counts = f"{task.done:,}/{task.total:,}" if task.total else f"{task.done:,}"
+        # A task with no total is a state, not a quantity: an empty bar and a
+        # bare "0.0%  0" reads as a job that has done nothing.
+        if task.total:
+            counts = f"{task.done:,}/{task.total:,}"
+            bar, pct = task.bar(), f"{task.pct:>5.1f}%"
+        else:
+            counts = ""
+            bar, pct = " " * BAR_WIDTH, " " * 6
         lines.append(
-            f"  {task.name:<{width}}  {task.bar()}  {task.pct:>5.1f}%  "
+            f"  {task.name:<{width}}  {bar}  {pct}  "
             f"{counts:>15}  {state:<8} {task.detail}"
         )
     return "\n".join(lines)
