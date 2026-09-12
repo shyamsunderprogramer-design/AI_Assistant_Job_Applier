@@ -574,6 +574,62 @@ def cmd_brief(cfg, args) -> int:
     return 0
 
 
+def cmd_letter(cfg, args) -> int:
+    """Write a paste-anywhere cover-letter prompt. No API key, no cost."""
+    init_engine(cfg.database_url)
+    from resume.pipeline import letter_brief
+
+    try:
+        path, company, title = letter_brief(cfg, int(args.job_id))
+    except LookupError as exc:
+        print(exc)
+        return 1
+
+    print(f"Cover letter brief written for {company} — {title}")
+    print(f"  {path}")
+    print()
+    print("  1. Open that file and copy everything below 'COPY FROM HERE'")
+    print("  2. Paste it into Claude, ChatGPT, or any local model")
+    print("  3. Save the JSON reply to a file")
+    print(f"  4. python main.py accept {args.job_id} --file <that file> --letter")
+    print()
+    print("A letter may not claim a skill, number or date your resume does not")
+    print("support — not even one this posting asks for.")
+    return 0
+
+
+def cmd_packet(cfg, args) -> int:
+    """Gather everything needed to apply to one job into a single folder."""
+    init_engine(cfg.database_url)
+    from db.models import Job
+    from resume.packet import build_packet
+
+    with get_session() as session:
+        job = session.get(Job, int(args.job_id))
+        if job is None:
+            print(f"No job with id {args.job_id}.")
+            return 1
+        packet = build_packet(cfg, job)
+        company, title = job.company, job.title
+
+    print(f"Packet for {company} — {title}")
+    print(f"  {packet.path}")
+    for note in packet.notes:
+        print(f"  ({note})")
+    print()
+    for name, present in (("job summary", True),
+                          ("tailored resume", packet.has_resume),
+                          ("cover letter", packet.has_letter)):
+        print(f"  [{'x' if present else ' '}] {name}")
+    if not packet.complete:
+        print()
+        if not packet.has_resume:
+            print(f"  Tailor the resume : python main.py brief {args.job_id}")
+        if not packet.has_letter:
+            print(f"  Draft the letter  : python main.py letter {args.job_id}")
+    return 0
+
+
 def cmd_accept(cfg, args) -> int:
     """Take a pasted model reply, guard it, and write the resume."""
     init_engine(cfg.database_url)
@@ -583,7 +639,11 @@ def cmd_accept(cfg, args) -> int:
 
     text = Path(args.file).read_text(encoding="utf-8")
     try:
-        outcome = accept_reply(cfg, int(args.job_id), text)
+        if getattr(args, "letter", False):
+            from resume.pipeline import accept_letter
+            outcome = accept_letter(cfg, int(args.job_id), text)
+        else:
+            outcome = accept_reply(cfg, int(args.job_id), text)
     except (LookupError, ValueError) as exc:
         print(f"Could not use that reply: {exc}")
         return 1
@@ -598,7 +658,13 @@ def cmd_accept(cfg, args) -> int:
 
     print(f"  {outcome.detail}")
     print(f"  -> {outcome.resume_path}")
-    print(f"\nMatch score is now {outcome.score:.0%}. Run `export` to update the sheet.")
+    if outcome.status == "letter":
+        # A letter changes nothing the sheet tracks; only a resume re-scores.
+        print(f"\nRun `python main.py packet {args.job_id}` to see what the "
+              f"packet still needs.")
+    else:
+        print(f"\nMatch score is now {outcome.score:.0%}. "
+              f"Run `export` to update the sheet.")
     return 0
 
 
@@ -836,11 +902,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_brief.add_argument("job_id", help="Job id, from `score`")
 
+    p_letter = sub.add_parser(
+        "letter", help="Write a cover-letter prompt to paste into any model (free)")
+    p_letter.add_argument("job_id")
+
+    p_packet = sub.add_parser(
+        "packet", help="Gather resume, letter and job summary into one folder")
+    p_packet.add_argument("job_id")
+
     p_accept = sub.add_parser(
         "accept", help="Read a model's reply back in, guard it, and write the resume"
     )
     p_accept.add_argument("job_id", help="Job id the reply is for")
     p_accept.add_argument("--file", required=True, help="File holding the model's JSON reply")
+    p_accept.add_argument("--letter", action="store_true",
+                          help="The reply is a cover letter, not a resume")
 
     p_daily = sub.add_parser(
         "daily", help="Scrape, retire, rank and export in one go, then print a digest"
@@ -882,6 +958,8 @@ COMMANDS = {
     "score": cmd_score,
     "tailor": cmd_tailor,
     "brief": cmd_brief,
+    "letter": cmd_letter,
+    "packet": cmd_packet,
     "accept": cmd_accept,
     "stats": cmd_stats,
     "failures": cmd_failures,
