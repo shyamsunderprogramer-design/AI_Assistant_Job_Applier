@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 
 from db.models import Job, utcnow
 from db.session import get_session
+from jobage import age_label
 from scraper.lifecycle import as_utc, stale_companies
 
 log = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ class DailyReport:
     scored: int = 0
     exported: int = 0
 
-    new_jobs: list[tuple[str, str, float, str]] = field(default_factory=list)
+    new_jobs: list[tuple[str, str, float, str, str]] = field(default_factory=list)
     closed_jobs: list[tuple[str, str]] = field(default_factory=list)
     stale: list = field(default_factory=list)
 
@@ -157,8 +158,11 @@ def run_daily(cfg, skip_scrape: bool = False, since_hours: int = 24) -> DailyRep
                 .order_by(Job.ats_match_score.desc())
                 .all()
             )
+            # The age is resolved here, while the row is still in scope: the
+            # digest renders from plain tuples, with no session behind them.
             report.new_jobs = [
-                (j.company, j.title, j.ats_match_score or 0.0, j.application_url)
+                (j.company, j.title, j.ats_match_score or 0.0, j.application_url,
+                 age_label(j))
                 for j in fresh
                 if as_utc(j.found_at) and as_utc(j.found_at) >= cutoff
             ]
@@ -190,9 +194,9 @@ def render_digest(report: DailyReport, cfg, top: int = 10) -> str:
         lines.append(f"{len(report.new_jobs)} NEW since yesterday"
                      + (f" — {len(strong)} worth a look" if strong else ""))
         lines.append("")
-        for company, title, score, url in report.new_jobs[:top]:
+        for company, title, score, url, age in report.new_jobs[:top]:
             mark = "*" if score >= threshold else " "
-            lines.append(f"  {score:>4.0%}{mark} {company[:18]:<20} {title[:46]}")
+            lines.append(f"  {score:>4.0%}{mark} {age:>8}  {company[:18]:<20} {title[:38]}")
             if score >= threshold:
                 lines.append(f"        {url}")
         if len(report.new_jobs) > top:

@@ -19,6 +19,7 @@ import sys
 from config.loader import load_config, setup_logging
 from db.models import SYSTEM_STATUSES, Company, Job, ScrapeLog
 from db.session import get_session, init_engine
+from jobage import age_label
 
 log = logging.getLogger("main")
 
@@ -362,7 +363,8 @@ def cmd_prune(cfg, args) -> int:
         if not args.apply:
             print("\nShowing the first 10:")
             for job, reason in stale[:10]:
-                print(f"  {job.company:<18} {job.title[:44]:46} {job.location or ''}")
+                print(f"  {age_label(job):>8}  {job.company:<18} {job.title[:40]:42} "
+              f"{job.location or ''}")
             print("\nRe-run with --apply to remove them. Jobs you have already "
                   "acted on (Applied, Rejected, ...) are never touched.")
             return 0
@@ -428,8 +430,12 @@ def cmd_score(cfg, args) -> int:
     init_engine(cfg.database_url)
     from resume.pipeline import score_jobs
 
+    max_age = args.max_age if args.max_age is not None else float(
+        cfg.get("limits.max_posting_age_days", 0)
+    )
     outcomes = score_jobs(
-        cfg, limit=args.limit, rescore=args.rescore, include_closed=args.include_closed
+        cfg, limit=args.limit, rescore=args.rescore,
+        include_closed=args.include_closed, max_age_days=max_age,
     )
     if not outcomes:
         print("Nothing to score. Use --rescore to recompute existing scores.")
@@ -438,10 +444,13 @@ def cmd_score(cfg, args) -> int:
     threshold = float(cfg.get("resume.min_score", 0.45))
     outcomes.sort(key=lambda o: o.score, reverse=True)
     print(f"Scored {len(outcomes)} jobs (threshold {threshold:.0%}):\n")
-    print(f"{'score':>6}  {'company':<20} title")
+    if max_age:
+        print(f"Only postings up to {max_age:.0f} days old.\n")
+    print(f"{'score':>6}  {'age':>8}  {'company':<20} title")
     for outcome in outcomes[: args.top or len(outcomes)]:
         flag = " " if outcome.score >= threshold else "!"
-        print(f"{outcome.score:>6.0%}{flag} {outcome.company:<20} {outcome.title[:52]}")
+        print(f"{outcome.score:>6.0%}{flag} {age_label(outcome):>8}  "
+              f"{outcome.company:<20} {outcome.title[:44]}")
 
     below = sum(1 for o in outcomes if o.score < threshold)
     print(f"\n{below} below threshold — marked 'Manual Review'.")
@@ -653,7 +662,7 @@ def cmd_stats(cfg, args) -> int:
     if recent:
         print("\nMost recent open finds:")
         for job in recent:
-            print(f"  {job.company:<20} {job.title[:56]}")
+            print(f"  {age_label(job):>8}  {job.company:<20} {job.title[:46]}")
     return 0
 
 
@@ -753,6 +762,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_score = sub.add_parser("score", help="Score jobs against the base resume (no API cost)")
     p_score.add_argument("--limit", type=int, default=0, help="Only score N jobs")
+    p_score.add_argument("--max-age", type=float, default=None, metavar="DAYS",
+                         help="Skip postings older than this (default: no limit)")
     p_score.add_argument("--rescore", action="store_true", help="Recompute existing scores")
     p_score.add_argument("--top", type=int, default=25, help="Rows to print")
     p_score.add_argument(

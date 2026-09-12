@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from config.loader import PROJECT_ROOT
 from db.models import Job
 from db.session import get_session
+from jobage import age_days
 from resume.parser import Resume, find_base_resume, parse_resume
 from resume.scorer import score_resume
 from resume.writer import output_filename, write_review_note, write_tailored_resume
@@ -39,6 +41,8 @@ class JobOutcome:
     status: str            # scored | tailored | rejected | below-threshold | error
     detail: str = ""
     resume_path: Path | None = None
+    posted_at: datetime | None = None      # for display; None when unknown
+    found_at: datetime | None = None
 
 
 def load_base_resume(cfg) -> Resume:
@@ -59,12 +63,14 @@ def load_base_resume(cfg) -> Resume:
 
 
 def score_jobs(
-    cfg, limit: int = 0, rescore: bool = False, include_closed: bool = False
+    cfg, limit: int = 0, rescore: bool = False, include_closed: bool = False,
+    max_age_days: float = 0,
 ) -> list[JobOutcome]:
     """Score every open job against the base resume. No API calls, no cost.
 
     Closed postings are skipped: ranking a filled role wastes the user's
-    attention, which is the whole point of the ranking.
+    attention, which is the whole point of the ranking. `max_age_days` drops
+    postings older than a cutoff for the same reason; 0 keeps everything.
     """
     resume = load_base_resume(cfg)
     resume_text = resume.text()
@@ -78,6 +84,13 @@ def score_jobs(
         if not rescore:
             query = query.filter(Job.ats_match_score.is_(None))
         jobs = query.order_by(Job.found_at.desc()).all()
+        if max_age_days:
+            # A posting with no date is kept: not knowing its age is not
+            # evidence that it is old.
+            jobs = [
+                j for j in jobs
+                if (age_days(j) or 0) <= max_age_days
+            ]
         if limit:
             jobs = jobs[:limit]
 
@@ -110,6 +123,8 @@ def score_jobs(
                     score=result.score,
                     status="below-threshold" if below else "scored",
                     detail=result.summary(),
+                    posted_at=job.posted_at,
+                    found_at=job.found_at,
                 )
             )
 
