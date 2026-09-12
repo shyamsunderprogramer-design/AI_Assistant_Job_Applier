@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.ssdaggupati.jobapplier.enrich</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>5</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh</string>
+		<string>enrich</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/data/launchd_enrich.log</string>
+	<key>StandardOutPath</key>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/data/launchd_enrich.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>2</integer>
+			<key>Minute</key>
+			<integer>23</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>14</integer>
+			<key>Minute</key>
+			<integer>23</integer>
+		</dict>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier</string>
+</dict>
+</plist>
