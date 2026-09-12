@@ -162,8 +162,39 @@ MAIL_LINE = re.compile(r"(\d+)/(\d+) messages — (\d+) names, (\d+) boards")
 # Printed only once the scan has written its output file and finished.
 MAIL_DONE = re.compile(r"Wrote (\d+) names to")
 
-# enrich_loop.sh runs this many rounds before it stops on its own.
-ENRICH_ROUNDS = 60
+
+
+def _enrichment_counts() -> tuple[int, int, int]:
+    """(companies probed, still unprobed, websites found) in the company DB.
+
+    Separate database from the job pipeline, and read-only here: this view must
+    never take a write lock the enricher is waiting on.
+    """
+    import sqlite3
+    from companies.db import DB_PATH
+
+    if not DB_PATH.exists():
+        return 0, 0, 0
+    try:
+        db = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return 0, 0, 0
+    try:
+        probed = db.execute("SELECT COUNT(*) FROM website_probe").fetchone()[0]
+        sites = db.execute(
+            "SELECT COUNT(*) FROM companies WHERE website IS NOT NULL"
+        ).fetchone()[0]
+        outstanding = db.execute(
+            """SELECT COUNT(*) FROM companies
+               WHERE website IS NULL AND tier = 'sponsor' AND NOT EXISTS (
+                   SELECT 1 FROM website_probe p WHERE p.company_id = companies.id
+               )"""
+        ).fetchone()[0]
+        return probed, outstanding, sites
+    except sqlite3.Error:
+        return 0, 0, 0            # mid-migration or locked: report nothing, not a crash
+    finally:
+        db.close()
 
 
 def collect(cfg) -> list[Task]:
@@ -231,21 +262,18 @@ def collect(cfg) -> list[Task]:
     )
 
     # -- website / careers enrichment ---------------------------------------
-    enrich_log = PROJECT_ROOT / "data" / "companies_build" / "enrich_loop.log"
+    # Rounds are a poor measure: each is a fixed 500 companies out of a few
+    # hundred thousand, so "round 2 of 60" reads as 3% of a job that has barely
+    # started. Count companies actually asked instead.
     enrich_pid = _pid_of_script("enrich_loop.sh")
-    rounds = 0
-    if enrich_log.exists():
-        found_rounds = re.findall(
-            r"round (\d+)", enrich_log.read_text(encoding="utf-8", errors="replace")
-        )
-        rounds = int(found_rounds[-1]) if found_rounds else 0
+    probed, outstanding, sites = _enrichment_counts()
     tasks.append(
         Task(
             name="Website enrichment",
-            done=rounds,
-            total=ENRICH_ROUNDS,
+            done=probed,
+            total=probed + outstanding,
             running=_alive(enrich_pid),
-            detail=f"round {rounds} of {ENRICH_ROUNDS}" if rounds else "not started",
+            detail=f"{sites:,} websites found",
         )
     )
 
