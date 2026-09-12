@@ -100,6 +100,8 @@ def verify(url: str, token: str | None) -> bool:
 def run(argv: list[str]) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--country", default=None)
+    ap.add_argument("--retry-failed", action="store_true",
+                    help="Also re-probe companies whose earlier probes all missed")
     ap.add_argument("--tier", default="sponsor")
     ap.add_argument("--limit", type=int, default=300)
     args = ap.parse_args(argv[1:])
@@ -112,6 +114,13 @@ def run(argv: list[str]) -> None:
     if args.country:
         where += " AND country = ?"
         params.append(args.country)
+    if not args.retry_failed:
+        # A probe that found nothing still leaves website NULL, so without this
+        # every round re-probes the same failures and never reaches new
+        # companies. Most probes fail, and a dead host costs the full timeout.
+        where += """ AND NOT EXISTS (
+            SELECT 1 FROM website_probe p WHERE p.company_id = companies.id
+        )"""
     rows = db.execute(
         f"SELECT id, name, country FROM companies WHERE {where} LIMIT ?",
         (*params, args.limit),
