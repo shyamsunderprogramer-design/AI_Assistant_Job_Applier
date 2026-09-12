@@ -562,6 +562,23 @@ def cmd_daily(cfg, args) -> int:
     return report.exit_code()
 
 
+def cmd_status(cfg, args) -> int:
+    """Live progress of the long-running background jobs."""
+    init_engine(cfg.database_url)
+    import status as status_mod
+
+    if args.watch:
+        return status_mod.watch(cfg, interval=args.interval)
+
+    tasks = status_mod.collect(cfg)
+    print()
+    print(status_mod.render(tasks))
+    print()
+    if any(t.running for t in tasks):
+        print("  Add --watch for a live view that refreshes itself.")
+    return 0
+
+
 def cmd_stats(cfg, args) -> int:
     init_engine(cfg.database_url)
     from statistics import median
@@ -749,6 +766,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_daily.add_argument("--top", type=int, default=10, help="New jobs to list in the digest")
     p_daily.add_argument("--out", default=None, help="Where to write the digest")
 
+    p_status = sub.add_parser(
+        "status", help="Progress of the long-running background jobs"
+    )
+    p_status.add_argument("--watch", action="store_true", help="Refresh until everything stops")
+    p_status.add_argument("--interval", type=float, default=5.0, help="Seconds between refreshes")
+
     sub.add_parser("stats", help="Show DB counts and recent finds")
 
     p_failures = sub.add_parser("failures", help="Show logged scrape failures")
@@ -769,6 +792,7 @@ COMMANDS = {
     "profile": cmd_profile,
     "prune": cmd_prune,
     "daily": cmd_daily,
+    "status": cmd_status,
     "score": cmd_score,
     "tailor": cmd_tailor,
     "brief": cmd_brief,
