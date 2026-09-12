@@ -103,6 +103,13 @@ def _not_yet_written(log: Path, pid: int | None) -> bool:
         return True
 
 
+# A shell invoked as `sh -c "<script>"` carries the whole script on its command
+# line, so a script that merely mentions a job looks exactly like the job. The
+# view is often called from such a script, and would report work as running
+# minutes after it finished.
+_WRAPPERS = (" -c ", "ps -eo", "pgrep", "grep ")
+
+
 def _pid_of(pattern: str) -> int | None:
     """Find a running `main.py <command>` process without shelling out to pgrep."""
     import subprocess
@@ -114,7 +121,9 @@ def _pid_of(pattern: str) -> int | None:
     except Exception:
         return None
     for line in out.splitlines():
-        if pattern in line and "main.py" in line and "ps -eo" not in line:
+        if any(w in line for w in _WRAPPERS):
+            continue
+        if pattern in line and "main.py" in line:
             try:
                 return int(line.split(None, 1)[0])
             except (ValueError, IndexError):
@@ -161,6 +170,9 @@ def _tail_progress(path: Path, pattern: re.Pattern) -> tuple[int, int, str]:
 MAIL_LINE = re.compile(r"(\d+)/(\d+) messages — (\d+) names, (\d+) boards")
 # Printed only once the scan has written its output file and finished.
 MAIL_DONE = re.compile(r"Wrote (\d+) names to")
+DISCOVERY_LINE = re.compile(r"(\d+)/(\d+) names")
+# Printed only on a completed sweep of the whole name list.
+DISCOVERY_DONE = re.compile(r"(\d+) found from \d+ names")
 
 
 
@@ -216,22 +228,27 @@ def collect(cfg) -> list[Task]:
     tasks: list[Task] = []
 
     # -- discovery ----------------------------------------------------------
-    names_file = PROJECT_ROOT / "data" / "discovery_names.txt"
-    planned = 0
-    if names_file.exists():
-        planned = sum(
-            1 for line in names_file.read_text(encoding="utf-8", errors="replace").splitlines()
-            if line.strip() and not line.startswith("#")
-        )
-    # One probe per source per name, capped at --max-slugs 1 in the live run.
-    expected_probes = planned * 3
+    # Count names, not probes: a name costs one probe per source, minus every
+    # one the cache already answers, so a probe estimate runs far ahead of the
+    # truth and a finished run looks like it stopped short.
+    discovery_log = PROJECT_ROOT / "data" / "discovery_run.log"
+    discovery_pid = _pid_of("discover")
+    done, total, _ = _tail_progress(discovery_log, DISCOVERY_LINE)
+    detail = f"{boards} boards found"
+    if _not_yet_written(discovery_log, discovery_pid):
+        done, detail = 0, "starting"
+    elif not discovery_pid:
+        finished = _tail_match(discovery_log, DISCOVERY_DONE)
+        if finished:
+            done = total
+            detail = f"{finished} boards found"
     tasks.append(
         Task(
             name="Company discovery",
-            done=probes,
-            total=expected_probes,
-            running=_alive(_pid_of("discover")),
-            detail=f"{boards} boards found",
+            done=done,
+            total=total,
+            running=_alive(discovery_pid),
+            detail=detail,
         )
     )
 
