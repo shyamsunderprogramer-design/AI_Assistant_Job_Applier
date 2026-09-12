@@ -152,6 +152,7 @@ No mailbox credentials found. Two ways in — pick either.
 def cmd_scan_mail(cfg, args) -> int:
     """Harvest company names from a mailbox. Read-only."""
     import os
+    from pathlib import Path
 
     from scraper.mailbox import scan_imap, scan_mbox, write_findings
 
@@ -167,13 +168,31 @@ def cmd_scan_mail(cfg, args) -> int:
 
         password = password.replace(" ", "")  # Google prints it in groups of 4
         print(f"Connecting to {args.host} as {address} (read-only)...")
+
+        # The scan is slow and costly to redo, so it checkpoints as it goes:
+        # the names file and the state file are both current at every
+        # checkpoint, and a re-run picks up where the last one stopped.
+        state_path = args.state or f"{args.out}.state.json"
+        if args.restart and Path(state_path).exists():
+            Path(state_path).unlink()
+            print(f"Discarded earlier progress ({state_path})")
+
+        def checkpoint(f):
+            write_findings(f, args.out, args.min_mentions)
+
         try:
             findings = scan_imap(
                 address, password, host=args.host, folder=args.folder,
                 since=args.since, limit=args.limit,
+                state_path=state_path,
+                checkpoint_every=args.checkpoint_every,
+                on_checkpoint=checkpoint,
+                # The 30 server-side searches take minutes and used to print
+                # nothing, which looked exactly like a hang.
+                search_progress=lambda note: print(f"  {note}", flush=True),
                 progress=lambda i, n, f: print(
                     f"  {i}/{n} messages — {len(f.names)} names, "
-                    f"{len(f.ats_slugs)} boards so far"
+                    f"{len(f.ats_slugs)} boards so far", flush=True
                 ),
             )
         except Exception as exc:
@@ -703,6 +722,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_mail.add_argument("--min-mentions", type=int, default=1,
                         help="Only keep names seen at least this many times")
     p_mail.add_argument("--out", default="data/mailbox_names.txt")
+    p_mail.add_argument("--state", help="Progress file (default: <out>.state.json)")
+    p_mail.add_argument("--checkpoint-every", type=int, default=200,
+                        metavar="N", help="Save progress every N messages")
+    p_mail.add_argument("--restart", action="store_true",
+                        help="Ignore saved progress and scan from the start")
     p_mail.add_argument("--no-save-boards", action="store_true",
                         help="Do not add confirmed ATS boards to the company list")
 

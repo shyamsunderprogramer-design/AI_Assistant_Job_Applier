@@ -23,6 +23,7 @@ import email
 import email.policy
 import html
 import imaplib
+import json
 import logging
 import re
 from collections import Counter
@@ -274,6 +275,49 @@ def scan_mbox(path: Path | str, limit: int = 0) -> MailboxFindings:
     return findings
 
 
+def load_scan_state(state_path) -> tuple["MailboxFindings", set[int]]:
+    """Findings and already-fetched UIDs from an earlier run, if any.
+
+    A mailbox scan is long and entirely re-doable work: without this, an
+    interrupted run throws away every message it already paid to fetch.
+    """
+    findings = MailboxFindings()
+    if not state_path:
+        return findings, set()
+    path = Path(state_path)
+    if not path.exists():
+        return findings, set()
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("Ignoring unreadable scan state %s: %s", path, exc)
+        return findings, set()
+
+    findings.names = Counter(state.get("names", {}))
+    findings.ats_slugs = dict(state.get("ats_slugs", {}))
+    findings.messages_scanned = int(state.get("messages_scanned", 0))
+    findings.messages_matched = int(state.get("messages_matched", 0))
+    return findings, {int(u) for u in state.get("done_uids", [])}
+
+
+def save_scan_state(state_path, findings: "MailboxFindings", done_uids) -> None:
+    """Persist progress atomically, so a kill mid-write cannot corrupt it."""
+    if not state_path:
+        return
+    path = Path(state_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "names": dict(findings.names),
+        "ats_slugs": findings.ats_slugs,
+        "messages_scanned": findings.messages_scanned,
+        "messages_matched": findings.messages_matched,
+        "done_uids": sorted(done_uids),
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.replace(path)
+
+
 def scan_imap(
     email_address: str,
     app_password: str,
@@ -282,6 +326,10 @@ def scan_imap(
     since: str | None = None,
     limit: int = 0,
     progress=None,
+    state_path=None,
+    checkpoint_every: int = 200,
+    on_checkpoint=None,
+    search_progress=None,
 ) -> MailboxFindings:
     """Scan a mailbox over IMAP, read-only.
 
@@ -289,18 +337,28 @@ def scan_imap(
     The connection is opened readonly, so nothing can be modified or deleted,
     and the password is not written anywhere by this function.
     """
-    findings = MailboxFindings()
+    findings, done_uids = load_scan_state(state_path)
     connection = imaplib.IMAP4_SSL(host)
     try:
         connection.login(email_address, app_password)
         connection.select(folder, readonly=True)
 
-        uids = _search_job_mail(connection, since)
+        uids = _search_job_mail(connection, since, progress=search_progress)
         if limit:
             uids = uids[-limit:]  # newest first — a partial scan gets fresh data
 
-        for index, uid in enumerate(uids, start=1):
+        total = len(uids)
+        pending = [u for u in uids if int(u) not in done_uids]
+        if done_uids and search_progress:
+            search_progress(
+                f"resuming: {total - len(pending)} of {total} already fetched"
+            )
+
+        index = total - len(pending)
+        for uid in pending:
+            index += 1
             findings.messages_scanned += 1
+            done_uids.add(int(uid))
             try:
                 status, data = connection.fetch(uid, "(RFC822)")
                 if status != "OK" or not data or not isinstance(data[0], tuple):
@@ -318,7 +376,13 @@ def scan_imap(
             extract_from_message(subject, _body_text(message), findings)
 
             if progress and index % 25 == 0:
-                progress(index, len(uids), findings)
+                progress(index, total, findings)
+            if checkpoint_every and index % checkpoint_every == 0:
+                save_scan_state(state_path, findings, done_uids)
+                if on_checkpoint:
+                    on_checkpoint(findings)
+
+        save_scan_state(state_path, findings, done_uids)
         return findings
     finally:
         try:
@@ -328,7 +392,7 @@ def scan_imap(
         connection.logout()
 
 
-def _search_job_mail(connection, since: str | None) -> list[bytes]:
+def _search_job_mail(connection, since: str | None, progress=None) -> list[bytes]:
     """UIDs worth fetching.
 
     Searching server-side matters: fetching an entire mailbox to filter locally
@@ -337,8 +401,14 @@ def _search_job_mail(connection, since: str | None) -> list[bytes]:
     date_clause = ["SINCE", since] if since else []
     uids: list[bytes] = []
     seen: set[bytes] = set()
+    subject_terms = ("job", "role", "opportunity", "hiring", "interview", "application")
+    total_searches = len(JOB_SENDERS) + len(subject_terms)
+    step = 0
 
     for domain in JOB_SENDERS:
+        step += 1
+        if progress:
+            progress(f"search {step}/{total_searches}: from {domain} ({len(uids)} so far)")
         try:
             status, data = connection.search(None, *date_clause, "FROM", domain)
         except Exception as exc:
@@ -351,7 +421,10 @@ def _search_job_mail(connection, since: str | None) -> list[bytes]:
                     uids.append(uid)
 
     # Recruiters mail from their own domains, so also sweep by subject.
-    for term in ("job", "role", "opportunity", "hiring", "interview", "application"):
+    for term in subject_terms:
+        step += 1
+        if progress:
+            progress(f"search {step}/{total_searches}: subject {term!r} ({len(uids)} so far)")
         try:
             status, data = connection.search(None, *date_clause, "SUBJECT", term)
         except Exception:
