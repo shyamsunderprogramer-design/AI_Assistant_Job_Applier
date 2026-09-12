@@ -24,6 +24,7 @@ from config.loader import PROJECT_ROOT
 from db.models import STATUS_VALUES, SYSTEM_STATUSES, Job
 from db.session import get_session
 from jobage import age_label
+from jobfields import experience_label, salary_label, workplace_label
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ COLUMNS: list[tuple[str, int]] = [
     # Age is text so it reads at a glance; that means it sorts alphabetically,
     # so Posting Date stays the column to sort by and --max-age does filtering.
     ("Age", 10),
+    ("Workplace", 12),
+    ("Experience", 12),
+    ("Salary", 16),
     ("Required Skills", 60),
     ("Date Found", 14),
     ("Application Status", 20),
@@ -136,6 +140,10 @@ def _row_values(job: Job) -> dict[str, object]:
         "Location": job.location or "",
         "Posting Date": _fmt_date(job.posted_at),
         "Age": age_label(job),
+        "Workplace": workplace_label(job.workplace),
+        "Experience": experience_label(job.experience_min_years, job.experience_max_years),
+        "Salary": salary_label(job.salary_min, job.salary_max,
+                               job.salary_currency, job.salary_period),
         "Required Skills": _truncate(job.requirements, 4000),
         "Date Found": _fmt_date(job.found_at),
         "ATS Match Score": job.ats_match_score if job.ats_match_score is not None else "",

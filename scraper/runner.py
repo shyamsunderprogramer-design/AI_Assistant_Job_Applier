@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from db.models import Company, Job, ScrapeLog, utcnow
 from db.session import get_session
+from jobfields import derive
 from scraper.ashby import AshbyScraper
 from scraper.base import CompanyRef, PortalScraper, RawJob
 from scraper.discovery import upsert_company
@@ -182,6 +183,8 @@ def _persist(jobs: list[RawJob]) -> tuple[int, int]:
                         application_url=raw.application_url,
                         posted_at=raw.posted_at,
                         content_hash=content_hash,
+                        **derive(raw.title, raw.location,
+                                 raw.description, raw.requirements),
                     )
                 )
                 new_count += 1
@@ -193,6 +196,9 @@ def _persist(jobs: list[RawJob]) -> tuple[int, int]:
                 existing.requirements = raw.requirements
                 existing.application_url = raw.application_url
                 existing.content_hash = content_hash
+                for field, value in derive(raw.title, raw.location,
+                                           raw.description, raw.requirements).items():
+                    setattr(existing, field, value)
                 existing.exported_to_excel = False  # re-export in Phase 2
                 updated_count += 1
 

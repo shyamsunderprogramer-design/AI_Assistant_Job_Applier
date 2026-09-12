@@ -43,6 +43,13 @@ class JobOutcome:
     resume_path: Path | None = None
     posted_at: datetime | None = None      # for display; None when unknown
     found_at: datetime | None = None
+    workplace: str | None = None
+    experience_min_years: int | None = None
+    experience_max_years: int | None = None
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str | None = None
+    salary_period: str | None = None
 
 
 def load_base_resume(cfg) -> Resume:
@@ -64,7 +71,8 @@ def load_base_resume(cfg) -> Resume:
 
 def score_jobs(
     cfg, limit: int = 0, rescore: bool = False, include_closed: bool = False,
-    max_age_days: float = 0,
+    max_age_days: float = 0, remote_only: bool = False,
+    min_salary: int = 0, max_experience: int = 0,
 ) -> list[JobOutcome]:
     """Score every open job against the base resume. No API calls, no cost.
 
@@ -91,6 +99,16 @@ def score_jobs(
                 j for j in jobs
                 if (age_days(j) or 0) <= max_age_days
             ]
+        if remote_only:
+            jobs = [j for j in jobs if j.workplace in ("remote", "hybrid")]
+        if min_salary:
+            # A posting that published nothing is kept: silence is not a low
+            # offer, and dropping it would hide roles that simply do not say.
+            jobs = [j for j in jobs if j.salary_max is None or j.salary_max >= min_salary]
+        if max_experience:
+            jobs = [j for j in jobs
+                    if j.experience_min_years is None
+                    or j.experience_min_years <= max_experience]
         if limit:
             jobs = jobs[:limit]
 
@@ -125,6 +143,13 @@ def score_jobs(
                     detail=result.summary(),
                     posted_at=job.posted_at,
                     found_at=job.found_at,
+                    workplace=job.workplace,
+                    experience_min_years=job.experience_min_years,
+                    experience_max_years=job.experience_max_years,
+                    salary_min=job.salary_min,
+                    salary_max=job.salary_max,
+                    salary_currency=job.salary_currency,
+                    salary_period=job.salary_period,
                 )
             )
 
