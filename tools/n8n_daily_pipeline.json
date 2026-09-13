@@ -24,7 +24,7 @@
     {
       "parameters": {
         "executeOnce": true,
-        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh\" daily"
+        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/tools/daily_pipeline.sh\" daily"
       },
       "name": "Run daily pipeline",
       "type": "n8n-nodes-base.executeCommand",
@@ -125,7 +125,7 @@
     {
       "parameters": {
         "executeOnce": true,
-        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh\" discover"
+        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/tools/daily_pipeline.sh\" discover"
       },
       "name": "Discover new boards",
       "type": "n8n-nodes-base.executeCommand",
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "executeOnce": true,
-        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh\" enrich"
+        "command": "bash \"/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/tools/daily_pipeline.sh\" enrich"
       },
       "name": "Continue enrichment",
       "type": "n8n-nodes-base.executeCommand",

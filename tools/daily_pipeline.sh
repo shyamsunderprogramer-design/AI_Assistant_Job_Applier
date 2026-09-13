@@ -13,7 +13,7 @@
 
 set -uo pipefail
 
-PROJECT="/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier"
+PROJECT="/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier"
 PY="$PROJECT/.venv/bin/python"
 TASK="${1:-daily}"
 LOG="$PROJECT/data/daily_run.log"

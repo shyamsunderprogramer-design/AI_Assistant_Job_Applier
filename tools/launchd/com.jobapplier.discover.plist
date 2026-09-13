@@ -13,15 +13,15 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/tools/daily_pipeline.sh</string>
+		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/tools/daily_pipeline.sh</string>
 		<string>discover</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
 	<key>StandardErrorPath</key>
-	<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/data/launchd_discover.log</string>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_discover.log</string>
 	<key>StandardOutPath</key>
-	<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier/data/launchd_discover.log</string>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_discover.log</string>
 	<key>StartCalendarInterval</key>
 	<array>
 		<dict>
@@ -34,6 +34,6 @@
 		</dict>
 	</array>
 	<key>WorkingDirectory</key>
-	<string>/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier</string>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier</string>
 </dict>
 </plist>
