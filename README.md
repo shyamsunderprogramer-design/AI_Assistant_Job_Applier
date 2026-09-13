@@ -325,7 +325,7 @@ anthropic.com/pricing before a large run.
 
 ### §C11 — Version control
 Under git since 2026-09-06, pushed to
-`github.com/shyamsunderprogramer-design/AI_Assitant_Job_Applier` (**public**).
+`github.com/shyamsunderprogramer-design/AI_Assistant_Job_Applier` (**public**).
 
 `.gitignore` keeps `.env`, `data/` (the SQLite DB and the tracker workbook),
 `logs/`, `config/search_profile.yaml`, and **every resume document** out of the
@@ -678,7 +678,7 @@ remembering the order was the thing most worth removing.
 **To run it every morning at 8am**, add to `crontab -e`:
 
 ```
-0 8 * * * cd /path/to/AI_Assitant_Job_Applier && .venv/bin/python main.py daily
+0 8 * * * cd /path/to/AI_Assistant_Job_Applier && .venv/bin/python main.py daily
 ```
 
 **Done when:** one command, run daily, produces a digest you actually read.

@@ -2,7 +2,7 @@
 # Wait for discovery to finish, then run the daily pipeline once.
 # Waits on the absence of the process rather than one PID, so a discovery
 # restart is waited out too instead of racing it.
-PROJECT="/Volumes/Storage/D Drive /Rep/AI_Assitant_Job_Applier"
+PROJECT="/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier"
 cd "$PROJECT" || exit 1
 LOG="$PROJECT/data/daily_run.log"
 
