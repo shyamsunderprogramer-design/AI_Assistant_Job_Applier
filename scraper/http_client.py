@@ -138,6 +138,18 @@ class PoliteClient:
     # -- requests ----------------------------------------------------------
     def get(self, url: str, **kwargs) -> requests.Response:
         """GET with robots check, pacing, and bounded backoff on 429/5xx."""
+        return self._request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> requests.Response:
+        """POST under exactly the same rules as GET.
+
+        Some boards only answer a search over POST — Workday's career-site API
+        is one. Sharing `_request` means a new verb cannot quietly skip the
+        robots check or the pacing.
+        """
+        return self._request("POST", url, **kwargs)
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         if not self.allowed(url):
             raise RobotsDisallowed(f"robots.txt disallows {url}")
 
@@ -147,8 +159,8 @@ class PoliteClient:
         for attempt in range(self.settings.max_retries + 1):
             self._wait_turn(host)
             try:
-                resp = self._session.get(
-                    url, timeout=self.settings.timeout_seconds, **kwargs
+                resp = self._session.request(
+                    method, url, timeout=self.settings.timeout_seconds, **kwargs
                 )
             except requests.RequestException as exc:
                 last_exc = exc

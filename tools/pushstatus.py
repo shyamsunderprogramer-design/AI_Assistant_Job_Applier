@@ -41,30 +41,43 @@ def main():
     with get_session() as session:
         ranked = [
             {
-                "company": j.company,
-                "title": j.title,
-                "location": j.location or "",
-                "url": j.application_url,
-                "source": j.source,
-                "score": round((j.ats_match_score or 0) * 100),
-                "posted": (j.posted_at or j.found_at).isoformat() if (j.posted_at or j.found_at) else None,
-                "exact": j.posted_at is not None,
-                "workplace": j.workplace,
-                "experience": experience_label(j.experience_min_years,
-                                               j.experience_max_years),
-                "salary": salary_label(j.salary_min, j.salary_max,
-                                       j.salary_currency, j.salary_period),
+                "c": j.company,
+                "t": j.title,
+                "l": j.location or "",
+                "u": j.application_url,
+                "b": j.source,
+                "s": round((j.ats_match_score or 0) * 100),
+                "p": (j.posted_at or j.found_at).isoformat() if (j.posted_at or j.found_at) else None,
+                "x": j.posted_at is not None,
+                "w": j.workplace,
+                "e": experience_label(j.experience_min_years, j.experience_max_years),
+                "y": salary_label(j.salary_min, j.salary_max,
+                                  j.salary_currency, j.salary_period),
+                "st": j.status,
             }
             for j in (
                 session.query(Job)
                 .filter(Job.is_open.is_(True), Job.ats_match_score.isnot(None))
                 .order_by(Job.ats_match_score.desc())
-                .limit(120)
                 .all()
             )
         ]
 
-    counters = {"boards": boards, "open": open_roles, "strong": strong}
+    # Board coverage by ATS: which platforms are actually feeding the pipeline.
+    with get_session() as session:
+        from sqlalchemy import func
+        by_board = dict(
+            session.query(Company.source, func.count())
+            .filter(Company.active.is_(True))
+            .group_by(Company.source).all()
+        )
+        by_status = dict(
+            session.query(Job.status, func.count())
+            .filter(Job.is_open.is_(True)).group_by(Job.status).all()
+        )
+
+    counters = {"boards": boards, "open": open_roles, "strong": strong,
+                "by_board": by_board, "by_status": by_status}
     try:
         from companies.db import DB_PATH
         c = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5)

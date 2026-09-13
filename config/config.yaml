@@ -94,6 +94,8 @@ portals:
     enabled: true
   ashby:
     enabled: true
+  workday:
+    enabled: true
 
 # ---------------------------------------------------------------------------
 # Companies to scrape.
