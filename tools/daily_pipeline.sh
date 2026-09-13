@@ -61,6 +61,13 @@ esac
 STATUS=$?
 log "=== $TASK finished, exit $STATUS ==="
 
+# Rebuild the standalone console so the file on disk is never stale. It owes
+# nothing to any account or network, which is the point of it.
+if [ "$TASK" = "daily" ]; then
+  "$PY" tools/build_dashboard.py "$PROJECT/data/console/dashboard.html" >> "$LOG" 2>&1 \
+    && log "rebuilt data/console/dashboard.html"
+fi
+
 # The summary is what a scheduler reads to decide whether to notify.
 SUMMARY="$("$PY" tools/run_summary.py "$TASK" "$STATUS" 2>/dev/null)"
 [ -n "$SUMMARY" ] \
