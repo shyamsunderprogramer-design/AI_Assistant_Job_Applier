@@ -39,10 +39,26 @@
 <div id="upload-out" hidden></div>
 
 <section class="stats">
-  <div class="stat"><span class="k">Open roles</span><span class="v">{{ rows|length }}</span></div>
-  <div class="stat lead"><span class="k">Strong fit</span><span class="v">{{ strong }}</span></div>
-  <div class="stat"><span class="k">Boards</span><span class="v">{{ boards }}</span></div>
-  <div class="stat"><span class="k">Applied</span><span class="v" id="n-applied">0</span></div>
+  <div class="stat">
+    <span class="k">Boards watched</span><span class="v">{{ "{:,}".format(boards) }}</span>
+    <span class="note">{% for src, n in by_source.items() %}{{ src|capitalize }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
+  </div>
+  <div class="stat">
+    <span class="k">Postings scanned</span><span class="v">{{ "{:,}".format(scanned) }}</span>
+    <span class="note">{% if last_run %}last full scrape {{ last_run.strftime('%d %b, %H:%M') }}{% else %}no scrape yet{% endif %}{% if failed %} · {{ failed }} board{{ '' if failed == 1 else 's' }} failed{% endif %}</span>
+  </div>
+  <div class="stat">
+    <span class="k">Matched your search</span><span class="v">{{ "{:,}".format(rows|length) }}</span>
+    <span class="note">open, and still on the board</span>
+  </div>
+  <div class="stat lead">
+    <span class="k">Strong fit</span><span class="v">{{ strong }}</span>
+    <span class="note">scored 70%+ against your resume</span>
+  </div>
+  <div class="stat">
+    <span class="k">Applied</span><span class="v" id="n-applied">0</span>
+    <span class="note">marked by you</span>
+  </div>
 </section>
 
 <div class="bar">
