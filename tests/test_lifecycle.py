@@ -263,3 +263,27 @@ def test_successful_fetch_closes_the_vanished_job(db, monkeypatch):
     assert summary.jobs_closed == 1
     assert get_job("1").is_open is True
     assert get_job("2").is_open is False
+
+
+def test_a_partially_read_board_closes_nothing(db):
+    """Workday hands over a posting's durable id only with its description, and
+    only the first MAX_DETAILS descriptions are fetched. The ids past that point
+    are unknown, not absent — closing on them would shut a live posting every
+    run and reopen it the next."""
+    add_job("JR1")
+    add_job("JR2")
+
+    result = reconcile_board("greenhouse", "acme", ["JR1"], partial=True)
+
+    assert result.closed == 0
+    assert result.seen == 1
+    assert result.skipped_partial is True
+    assert get_job("JR1").is_open is True
+    assert get_job("JR2").is_open is True
+
+
+def test_a_completely_read_board_still_closes(db):
+    add_job("JR1")
+    add_job("JR2")
+
+    assert reconcile_board("greenhouse", "acme", ["JR1"], partial=False).closed == 1
