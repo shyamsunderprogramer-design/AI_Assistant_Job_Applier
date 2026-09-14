@@ -106,10 +106,6 @@ def index():
             .order_by(Job.ats_match_score.desc()).all()
         )
         rows = [job_row(j) for j in jobs]
-        # Boards, not ATS platforms. This counted `Job.source`, of which there
-        # are only ever four, so the dashboard read "BOARDS 4" next to 413 open
-        # roles gathered from fourteen hundred of them.
-        boards = board_count()
 
     resume = current_resume()
     return render_template(
@@ -119,8 +115,61 @@ def index():
         resume=resume.name if resume else None,
         resume_dir=str(resume_dir()),
         strong=sum(1 for r in rows if r["score"] >= 70),
-        boards=boards,
+        **last_run_stats(),
     )
+
+
+def last_run_stats() -> dict:
+    """What the last full scrape actually did.
+
+    The page showed "BOARDS 4" — a count of DISTINCT Job.source, of which there
+    are only ever four — beside 413 open roles gathered from fourteen hundred
+    boards. Worse, it showed nothing at all about the size of the haystack:
+    413 matches reads very differently once you know they came out of 59,284
+    postings. `scrape_log` has recorded all of this per board since the
+    beginning; none of it was being read.
+    """
+    from sqlalchemy import func
+
+    from db.models import Company, ScrapeLog
+
+    with get_session() as session:
+        boards = session.query(Company).filter(Company.active.is_(True)).count()
+        by_source = dict(
+            session.query(Company.source, func.count(Company.id))
+            .filter(Company.active.is_(True)).group_by(Company.source)
+            .order_by(func.count(Company.id).desc()).all()
+        )
+
+        # The most recent run, by its own last log line.
+        latest = (
+            session.query(ScrapeLog.run_id)
+            .order_by(ScrapeLog.created_at.desc()).limit(1).scalar()
+        )
+        scanned = failed = walked = 0
+        finished_at = None
+        if latest:
+            scanned, walked, finished_at = session.query(
+                func.coalesce(func.sum(ScrapeLog.jobs_seen), 0),
+                func.count(ScrapeLog.id),
+                func.max(ScrapeLog.created_at),
+            ).filter(ScrapeLog.run_id == latest).one()
+            # Counted with a filter, not SUM(ok == False): SQLite hands that
+            # expression back as a bool, so "3 boards failed" printed "True".
+            failed = (
+                session.query(func.count(ScrapeLog.id))
+                .filter(ScrapeLog.run_id == latest, ScrapeLog.ok.is_(False))
+                .scalar() or 0
+            )
+
+    return {
+        "boards": boards,
+        "by_source": by_source,
+        "scanned": scanned,
+        "walked": walked,
+        "failed": failed,
+        "last_run": finished_at,
+    }
 
 
 @app.route("/job/<int:job_id>")
@@ -359,7 +408,37 @@ def task_pid(task: str) -> int | None:
         os.kill(pid, 0)          # signal 0 just asks "are you there?"
     except OSError:
         return None
-    return pid
+
+    # A zombie answers signal 0 for as long as nobody reaps it, and this app
+    # never reaps: tasks are started with Popen and start_new_session, the
+    # request that started them returns immediately, and no later request
+    # holds the handle to wait() on. So a score that exited at 10:45 was still
+    # "running" at 16:54 — six hours of a button reading "Re-scoring against
+    # your resume" for a process that had been dead all day.
+    #
+    # Reap it if it is ours to reap, and either way report it as finished.
+    try:
+        reaped, _ = os.waitpid(pid, os.WNOHANG)
+        if reaped == pid:
+            return None
+    except ChildProcessError:
+        pass                     # not our child — an app restart loses that
+    except OSError:
+        return None
+
+    return None if _is_zombie(pid) else pid
+
+
+def _is_zombie(pid: int) -> bool:
+    """Has this process exited and simply not been cleaned up?"""
+    try:
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return state.startswith("Z")
 
 
 @app.post("/run/<task>")
