@@ -262,15 +262,60 @@ def brief_text(job_id: int):
     return jsonify(ok=True, text=text, path=str(path))
 
 
+# A scrape walks 1,455 boards at a polite pace and takes about half an hour.
+# Running it inside the request meant the browser gave up long before the work
+# finished, so the button looked broken and the postings never arrived. Start
+# it, return at once, and let the page watch the log.
+TASKS = {"scrape": ["scrape"], "score": ["score"], "export": ["export"],
+         "daily": ["daily"], "discover": ["discover", "--names",
+                                          "data/mailbox_names.txt", "--max-slugs", "2"]}
+_running: dict[str, subprocess.Popen] = {}
+
+
+def task_log(task: str) -> Path:
+    return PROJECT_ROOT / "data" / f"webapp_{task}.log"
+
+
 @app.post("/run/<task>")
 def run_task(task: str):
-    """Kick off a pipeline command from the browser."""
-    allowed = {"scrape": ["scrape"], "score": ["score"], "export": ["export"],
-               "daily": ["daily"]}
-    if task not in allowed:
+    """Start a pipeline command and return immediately."""
+    if task not in TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
-    ok, output = run_command(*allowed[task])
-    return jsonify(ok=ok, output=output[-4000:])
+
+    live = _running.get(task)
+    if live and live.poll() is None:
+        return jsonify(ok=True, started=False, note="already running")
+
+    log_path = task_log(task)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = log_path.open("w")          # each run starts a fresh log
+    _running[task] = subprocess.Popen(
+        [sys.executable, "-u", "main.py", *TASKS[task]],
+        cwd=PROJECT_ROOT, stdout=handle, stderr=subprocess.STDOUT,
+    )
+    return jsonify(ok=True, started=True)
+
+
+@app.get("/run/<task>/status")
+def run_status(task: str):
+    """Whether it is still going, and the last thing it said."""
+    if task not in TASKS:
+        return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
+
+    process = _running.get(task)
+    running = process is not None and process.poll() is None
+    path = task_log(task)
+    tail, progress = "", None
+    if path.exists():
+        lines = [ln for ln in path.read_text(errors="replace").splitlines() if ln.strip()]
+        tail = "\n".join(lines[-12:])
+        # Surface the runner's own progress line rather than inventing one.
+        for line in reversed(lines):
+            if "seen" in line and "match" in line:
+                progress = " ".join(line.split()[-9:])
+                break
+    return jsonify(ok=True, running=running, tail=tail, progress=progress,
+                   exit=None if running or process is None else process.returncode)
 
 
 def main() -> int:

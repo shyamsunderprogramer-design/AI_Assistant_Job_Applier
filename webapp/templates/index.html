@@ -6,7 +6,7 @@
     <div class="sub">{{ rows|length }} open roles from company boards, ranked against your resume.</div>
   </div>
   <div class="row">
-    <button class="btn" id="run-scrape">Fetch new postings</button>
+    <button class="btn primary" id="run-scrape">Get latest postings</button>
     <button class="btn" id="run-score">Re-score</button>
   </div>
 </header>
@@ -40,26 +40,63 @@
   <button class="chip" id="f-strong" aria-pressed="false">70%+</button>
   <button class="chip" id="f-paid" aria-pressed="false">Salary published</button>
   <button class="chip" id="f-new" aria-pressed="false">Not yet applied</button>
+  <button class="chip" id="f-fresh" aria-pressed="false">Under 3 months</button>
+  <select id="board" aria-label="Board">
+    <option value="">Any board</option>
+    <option value="greenhouse">Greenhouse</option>
+    <option value="lever">Lever</option>
+    <option value="ashby">Ashby</option>
+    <option value="workday">Workday</option>
+  </select>
+  <button class="chip" id="f-clear">Clear</button>
   <span class="count" id="count"></span>
 </div>
 
 <div class="tw">
   <table>
     <thead><tr>
-      <th>Fit</th><th>Age</th><th>Where</th><th>Exp</th><th>Salary</th>
-      <th>Company</th><th>Role</th><th>Board</th><th>Status</th>
+      <th data-k="score" aria-sort="descending">Fit <span class="ar">▼</span></th>
+      <th data-k="ageDays">Age</th>
+      <th data-k="workplace">Where</th>
+      <th data-k="expMin">Exp</th>
+      <th data-k="payMin">Salary</th>
+      <th data-k="company">Company</th>
+      <th data-k="title">Role</th>
+      <th data-k="board">Board</th>
+      <th data-k="status">Status</th>
     </tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </div>
 
+<div class="out" id="run-out" hidden></div>
 <footer id="foot"></footer>
 
 <script id="data" type="application/json">{{ rows|tojson }}</script>
 <script>
-const ROWS = JSON.parse(document.getElementById('data').textContent);
-const state = {q:'', remote:false, strong:false, paid:false, fresh:false};
+const RAW = JSON.parse(document.getElementById('data').textContent);
 const $ = id => document.getElementById(id);
+
+// The table shows labels ("3 mo", "$160K–$210K"); sorting needs the numbers
+// behind them, so derive those once rather than parsing on every click.
+const UNIT = {min:1/1440, hr:1/24, day:1, days:1, wk:7, wks:7, mo:30.44, yr:365.25};
+const ageDays = label => {
+  const m = String(label||'').match(/([\d.]+)\s*(min|hr|days?|wks?|mo|yr)/);
+  if (!m) return null;
+  return parseFloat(m[1]) * (UNIT[m[2]] || 1);
+};
+const firstNum = t => {
+  const m = String(t||'').match(/([\d.,]+)\s*K?/);
+  if (!m) return null;
+  const v = parseFloat(m[1].replace(/,/g,''));
+  return /K/i.test(t) ? v*1000 : v;
+};
+const ROWS = RAW.map(r => ({...r,
+  ageDays: ageDays(r.age), expMin: firstNum(r.experience), payMin: firstNum(r.salary)}));
+
+const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
+               recent:false, board:''};
+let sortKey = 'score', sortDir = -1;
 
 function visible() {
   const q = state.q.trim().toLowerCase();
@@ -69,7 +106,16 @@ function visible() {
     if (state.strong && r.score < 70) return false;
     if (state.paid && !r.salary) return false;
     if (state.fresh && r.status !== 'Not Applied') return false;
+    if (state.recent && (r.ageDays === null || r.ageDays > 92)) return false;
+    if (state.board && r.board !== state.board) return false;
     return true;
+  }).sort((a, b) => {
+    const A = a[sortKey], B = b[sortKey];
+    // Unknowns sink either way: a role with no published salary is not the
+    // cheapest one, and should not lead an ascending sort.
+    if (A === null || A === undefined || A === '') return 1;
+    if (B === null || B === undefined || B === '') return -1;
+    return typeof A === 'string' ? sortDir * A.localeCompare(B) : sortDir * (A - B);
   });
 }
 
@@ -104,12 +150,45 @@ function render() {
 }
 
 $('q').addEventListener('input', e => { state.q = e.target.value; render(); });
-[['f-remote','remote'],['f-strong','strong'],['f-paid','paid'],['f-new','fresh']]
+[['f-remote','remote'],['f-strong','strong'],['f-paid','paid'],
+ ['f-new','fresh'],['f-fresh','recent']]
   .forEach(([id,k]) => $(id).addEventListener('click', e => {
     state[k] = !state[k];
     e.currentTarget.setAttribute('aria-pressed', String(state[k]));
     render();
   }));
+
+$('board').addEventListener('change', e => { state.board = e.target.value; render(); });
+
+$('f-clear').addEventListener('click', () => {
+  Object.assign(state, {q:'', remote:false, strong:false, paid:false,
+                        fresh:false, recent:false, board:''});
+  $('q').value = ''; $('board').value = '';
+  document.querySelectorAll('.chip[aria-pressed]').forEach(c =>
+    c.setAttribute('aria-pressed','false'));
+  render();
+});
+
+document.querySelectorAll('thead th[data-k]').forEach(th => {
+  th.tabIndex = 0;
+  th.style.cursor = 'pointer';
+  const go = () => {
+    const k = th.dataset.k;
+    if (k === sortKey) sortDir = -sortDir;
+    else { sortKey = k; sortDir = ['company','title','board','workplace','status'].includes(k) ? 1 : -1; }
+    document.querySelectorAll('thead th[data-k]').forEach(o => {
+      o.removeAttribute('aria-sort');
+      const ar = o.querySelector('.ar'); if (ar) ar.remove();
+    });
+    th.setAttribute('aria-sort', sortDir < 0 ? 'descending' : 'ascending');
+    th.insertAdjacentHTML('beforeend', ` <span class="ar">${sortDir < 0 ? '▼' : '▲'}</span>`);
+    render();
+  };
+  th.addEventListener('click', go);
+  th.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+  });
+});
 
 $('upload').addEventListener('submit', async e => {
   e.preventDefault();
@@ -126,15 +205,47 @@ $('upload').addEventListener('submit', async e => {
   if (d.ok) setTimeout(() => location.reload(), 2500);
 });
 
+// A scrape takes about half an hour. Start it, then watch — the button stays
+// honest about what is happening instead of appearing to hang.
+const LABEL = {scrape: 'Get latest postings', score: 'Re-score'};
+async function watch(task, button) {
+  const out = $('run-out');
+  out.hidden = false; out.className = 'out';
+  const poll = async () => {
+    const d = await (await fetch(`/run/${task}/status`)).json();
+    out.textContent = (d.progress ? `${d.progress}\n\n` : '') + (d.tail || 'starting…');
+    if (d.running) { setTimeout(poll, 3000); return; }
+    button.disabled = false; button.textContent = LABEL[task];
+    out.className = 'out ' + (d.exit === 0 ? 'good' : 'bad');
+    if (d.exit === 0) {
+      out.textContent += '\n\nDone. Reloading with the new postings…';
+      setTimeout(() => location.reload(), 2500);
+    }
+  };
+  poll();
+}
 ['scrape','score'].forEach(task => $('run-'+task).addEventListener('click', async e => {
-  const b = e.currentTarget, label = b.textContent;
-  b.disabled = true; b.textContent = 'Running…';
-  const r = await fetch('/run/'+task, {method:'POST'});
-  const d = await r.json();
-  b.disabled = false; b.textContent = label;
-  $('foot').textContent = (d.output || '').split('\n').slice(-3).join(' · ');
-  if (d.ok) location.reload();
+  const b = e.currentTarget;
+  b.disabled = true;
+  b.textContent = task === 'scrape' ? 'Fetching… (about 30 min)' : 'Scoring…';
+  const d = await (await fetch('/run/'+task, {method:'POST'})).json();
+  if (!d.ok) { b.disabled = false; b.textContent = LABEL[task];
+    $('run-out').hidden = false; $('run-out').className='out bad';
+    $('run-out').textContent = d.error; return; }
+  watch(task, b);
 }));
+
+// If a run is already going when the page opens, pick it up rather than
+// pretending nothing is happening.
+['scrape','score'].forEach(async task => {
+  const d = await (await fetch(`/run/${task}/status`)).json();
+  if (d.running) {
+    const b = $('run-'+task);
+    b.disabled = true;
+    b.textContent = task === 'scrape' ? 'Fetching… (about 30 min)' : 'Scoring…';
+    watch(task, b);
+  }
+});
 
 render();
 </script>
