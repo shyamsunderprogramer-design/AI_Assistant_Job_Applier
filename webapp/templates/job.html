@@ -22,80 +22,95 @@
 </div>
 
 <section class="card">
-  <h2>Prepare the application</h2>
-  <div class="steps">
+  <div class="card-head">
+    <h2>Prepare the application</h2>
+    <span class="progress-note" id="done-count"></span>
+  </div>
 
-    <div class="step">
-      <span class="n">1</span>
-      <div>
-        <b>Gather the packet</b>
-        <div class="sub">A folder named for this company, holding the job, your tailored
-          resume and the letter. Worth having later: when they ring about this role in
-          three weeks, it is the only record of what you actually sent.</div>
-        <div class="row" style="margin-top:7px">
-          <button class="btn" data-act="packet">Build packet</button>
+  <ol class="steps">
+
+    <li class="step {% if packet.exists %}done{% endif %}" id="step-packet">
+      <span class="tick" aria-hidden="true"></span>
+      <div class="step-body">
+        <div class="step-head">
+          <b>Packet folder</b>
+          <span class="hint">so you can find what you sent, when they call</span>
+        </div>
+        <div class="row">
+          <button class="btn" data-act="packet">{{ 'Rebuild' if packet.exists else 'Create folder' }}</button>
+          <button class="btn" id="reveal" {% if not packet.exists %}disabled{% endif %}>Open in Finder</button>
         </div>
         <div class="out" id="out-packet" hidden></div>
       </div>
-    </div>
+    </li>
 
-    <div class="step">
-      <span class="n">2</span>
-      <div>
-        <b>Tailor the resume</b>
-        <div class="sub">Copy the prompt, paste it into any chat, paste the reply back.
-          Free, no API key. A reply that invents a skill, number or date is rejected, not used.</div>
-        <div class="row" style="margin-top:7px">
-          <button class="btn" data-brief="resume">Get the prompt</button>
-          <button class="btn" data-copy="resume" hidden>Copy to clipboard</button>
+    <li class="step {% if packet.has_resume %}done{% endif %}" id="step-resume">
+      <span class="tick" aria-hidden="true"></span>
+      <div class="step-body">
+        <div class="step-head">
+          <b>Tailored resume</b>
+          <span class="hint">rewritten for this role &middot; invented claims are rejected, not saved</span>
         </div>
-        <textarea id="prompt-resume" hidden readonly aria-label="Prompt to paste"></textarea>
-        <textarea id="reply-resume" hidden placeholder="Paste the model's JSON reply here" aria-label="Model reply"></textarea>
-        <div class="row" style="margin-top:7px">
-          <button class="btn primary" data-accept="resume" hidden>Check it and save the resume</button>
+        <div class="row">
+          <button class="btn" data-brief="resume">
+            {% if packet.has_resume %}Redo{% else %}Copy prompt{% endif %}
+          </button>
+          <span class="hint" id="hint-resume" hidden>Copied. Paste it into any chat, then paste the reply below.</span>
         </div>
+        <details class="fold" id="fold-resume" {% if packet.has_resume %}{% else %}{% endif %}>
+          <summary>Prompt &amp; reply</summary>
+          <textarea id="prompt-resume" readonly aria-label="Prompt"></textarea>
+          <textarea id="reply-resume" placeholder="Paste the model's JSON reply here" aria-label="Reply"></textarea>
+          <div class="row"><button class="btn primary" data-accept="resume">Check and save</button></div>
+        </details>
         <div class="out" id="out-resume" hidden></div>
       </div>
-    </div>
+    </li>
 
-    <div class="step">
-      <span class="n">3</span>
-      <div>
-        <b>Write the cover letter</b>
-        <div class="sub">Same loop. It may name this company and their products, but still
-          cannot claim a skill your resume lacks — even one this posting asks for.</div>
-        <div class="row" style="margin-top:7px">
-          <button class="btn" data-brief="letter">Get the prompt</button>
-          <button class="btn" data-copy="letter" hidden>Copy to clipboard</button>
+    <li class="step {% if packet.has_letter %}done{% endif %}" id="step-letter">
+      <span class="tick" aria-hidden="true"></span>
+      <div class="step-body">
+        <div class="step-head">
+          <b>Cover letter</b>
+          <span class="hint">may name {{ job.company }}, may not claim a skill you lack</span>
         </div>
-        <textarea id="prompt-letter" hidden readonly aria-label="Prompt to paste"></textarea>
-        <textarea id="reply-letter" hidden placeholder="Paste the model's JSON reply here" aria-label="Model reply"></textarea>
-        <div class="row" style="margin-top:7px">
-          <button class="btn primary" data-accept="letter" hidden>Check it and save the letter</button>
+        <div class="row">
+          <button class="btn" data-brief="letter">
+            {% if packet.has_letter %}Redo{% else %}Copy prompt{% endif %}
+          </button>
+          <span class="hint" id="hint-letter" hidden>Copied. Paste it into any chat, then paste the reply below.</span>
         </div>
+        <details class="fold" id="fold-letter">
+          <summary>Prompt &amp; reply</summary>
+          <textarea id="prompt-letter" readonly aria-label="Prompt"></textarea>
+          <textarea id="reply-letter" placeholder="Paste the model's JSON reply here" aria-label="Reply"></textarea>
+          <div class="row"><button class="btn primary" data-accept="letter">Check and save</button></div>
+        </details>
         <div class="out" id="out-letter" hidden></div>
       </div>
-    </div>
+    </li>
 
-    <div class="step">
-      <span class="n">4</span>
-      <div>
-        <b>Apply, then record it</b>
-        <div class="sub">Upload the two files on their form. Then set the status here so
-          this role stops competing for your attention.</div>
-        <div class="row" style="margin-top:7px">
-          <select id="status" aria-label="Application status">
+    <li class="step {% if job.status not in ['Not Applied', 'Manual Review'] %}done{% endif %}" id="step-apply">
+      <span class="tick" aria-hidden="true"></span>
+      <div class="step-body">
+        <div class="step-head">
+          <b>Apply, then record it</b>
+          <span class="hint">upload both files on their form</span>
+        </div>
+        <div class="row">
+          <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open {{ job.board }} form</a>
+          <select id="status" aria-label="Status">
             {% for s in statuses %}
             <option value="{{ s }}" {% if s == job.status %}selected{% endif %}>{{ s }}</option>
             {% endfor %}
           </select>
-          <button class="btn" id="save-status">Save status</button>
+          <button class="btn" id="save-status">Save</button>
         </div>
         <div class="out" id="out-status" hidden></div>
       </div>
-    </div>
+    </li>
 
-  </div>
+  </ol>
 </section>
 
 {% if requirements %}
@@ -126,6 +141,11 @@ document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click',
   const d = await r.json();
   e.currentTarget.disabled = false;
   show('out-' + act, d.output || d.error, d.ok ? 'good' : 'bad');
+  if (d.ok && act === 'packet') {
+    $('step-packet').classList.add('done');
+    $('reveal').disabled = false;
+    countDone();
+  }
 }));
 
 document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click', async e => {
@@ -137,19 +157,19 @@ document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click
   e.currentTarget.disabled = false;
   if (!d.ok) { show('out-' + kind, d.error, 'bad'); return; }
   $('prompt-' + kind).value = d.text;
-  $('prompt-' + kind).hidden = false;
-  $('reply-' + kind).hidden = false;
-  document.querySelector(`[data-copy="${kind}"]`).hidden = false;
-  document.querySelector(`[data-accept="${kind}"]`).hidden = false;
-  show('out-' + kind, 'Copy the prompt, paste it into any chat, then paste the JSON reply below.');
+  $('fold-' + kind).open = true;
+  // Copy straight away: the prompt is only ever wanted on a clipboard, so
+  // making it a second click was pure ceremony.
+  try { await navigator.clipboard.writeText(d.text); } catch (err) { /* fold is open */ }
+  $('hint-' + kind).hidden = false;
+  $('out-' + kind).hidden = true;
+  $('reply-' + kind).focus();
 }));
 
-document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async e => {
-  const kind = e.currentTarget.dataset.copy;
-  await navigator.clipboard.writeText($('prompt-' + kind).value);
-  e.currentTarget.textContent = 'Copied';
-  setTimeout(() => { e.currentTarget.textContent = 'Copy to clipboard'; }, 1800);
-}));
+$('reveal')?.addEventListener('click', async () => {
+  const d = await (await fetch(`/job/${JOB}/reveal`, {method:'POST'})).json();
+  if (!d.ok) show('out-packet', d.error, 'bad');
+});
 
 document.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('click', async e => {
   const kind = e.currentTarget.dataset.accept;
@@ -162,6 +182,7 @@ document.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('clic
   const d = await r.json();
   e.currentTarget.disabled = false;
   show('out-' + kind, d.output || d.error, d.ok ? 'good' : 'bad');
+  if (d.ok) { $('step-' + kind).classList.add('done'); countDone(); }
 }));
 
 $('save-status').addEventListener('click', async () => {
@@ -169,6 +190,17 @@ $('save-status').addEventListener('click', async () => {
   const r = await fetch(`/job/${JOB}/status`, {method:'POST', body});
   const d = await r.json();
   show('out-status', d.ok ? `Marked ${d.status}.` : d.error, d.ok ? 'good' : 'bad');
+  if (d.ok) {
+    $('step-apply').classList.toggle('done',
+      !['Not Applied','Manual Review'].includes(d.status));
+    countDone();
+  }
 });
+
+function countDone() {
+  const done = document.querySelectorAll('.step.done').length;
+  $('done-count').textContent = `${done} of 4 ready`;
+}
+countDone();
 </script>
 {% endblock %}

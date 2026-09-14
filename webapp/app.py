@@ -131,15 +131,16 @@ def job_detail(job_id: int):
         requirements = job.requirements or ""
 
     folder = packet_folder(row)
+    packet = {
+        "exists": folder is not None,
+        "path": str(folder) if folder else "",
+        "has_resume": bool(folder and (folder / "resume.docx").exists()),
+        "has_letter": bool(folder and (folder / "cover-letter.md").exists()),
+    }
     return render_template(
         "job.html",
         job=row, description=description, requirements=requirements,
-        statuses=STATUS_VALUES,
-        packet=folder and {
-            "path": str(folder),
-            "has_resume": (folder / "resume.docx").exists(),
-            "has_letter": (folder / "cover-letter.md").exists(),
-        },
+        statuses=STATUS_VALUES, packet=packet,
     )
 
 
@@ -198,6 +199,21 @@ def act(job_id: int, action: str):
 
     ok, output = run_command(*commands[action], str(job_id))
     return jsonify(ok=ok, output=output)
+
+
+@app.post("/job/<int:job_id>/reveal")
+def reveal(job_id: int):
+    """Open the packet folder in Finder."""
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        row = job_row(job)
+    folder = packet_folder(row)
+    if not folder:
+        return jsonify(ok=False, error="Build the packet first."), 400
+    subprocess.run(["open", str(folder)], check=False)
+    return jsonify(ok=True, path=str(folder))
 
 
 @app.post("/job/<int:job_id>/status")
