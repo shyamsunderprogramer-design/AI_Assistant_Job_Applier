@@ -1,3 +1,5 @@
+import pytest
+
 from scraper.base import RawJob
 from scraper.filters import JobFilter
 
@@ -107,3 +109,89 @@ def test_a_real_disallow_directive_is_still_honoured():
     client = _client_seeing(200, robots)
     assert client.allowed("https://example.com/private/x") is False
     assert client.allowed("https://example.com/public/x") is True
+
+
+# -- the search must never silently become somebody else's -------------------
+
+class _Cfg:
+    """Minimal config stand-in: dotted lookups with defaults."""
+
+    def __init__(self, **values):
+        self._values = values
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+
+def _write_profile(path, titles):
+    body = "seniority: senior\nyears_experience: 9\nderived_from: none\n"
+    if titles:
+        body += "title_keywords:\n" + "".join(f'  - "{t}"\n' for t in titles)
+    else:
+        body += "title_keywords: []\n"
+    path.write_text(body, encoding="utf-8")
+
+
+def test_a_resume_that_derives_nothing_stops_the_run(tmp_path, monkeypatch):
+    """The worst bug this tool had, pinned.
+
+    An electrical engineer uploads his resume. Nothing in it is recognised, so
+    the derived profile comes back with no titles — and the search silently
+    became the software keywords sitting in config.yaml. He would have got a
+    tidy list of Python jobs with nothing anywhere to tell him the search was
+    never his. A run that stops and says why is worth far more than one that
+    succeeds at the wrong thing.
+    """
+    import config.loader as loader_mod
+    from scraper.filters import UndeterminedSearch, resolve_filter
+
+    profile_path = tmp_path / "search_profile.yaml"
+    _write_profile(profile_path, [])
+    monkeypatch.setattr(loader_mod, "PROJECT_ROOT", tmp_path)
+
+    cfg = _Cfg(**{
+        "filters.profile_path": "search_profile.yaml",
+        "filters.title_keywords": ["software engineer", "python"],
+    })
+
+    with pytest.raises(UndeterminedSearch) as raised:
+        resolve_filter(cfg)
+
+    # The message has to be actionable, not just a refusal: it names the file
+    # to edit and the command to re-run.
+    message = str(raised.value)
+    assert "search_profile.yaml" in message
+    assert "main.py profile" in message
+    # And it must never quietly hand over the config's software keywords.
+    assert "software engineer" not in message
+
+
+def test_no_resume_at_all_still_uses_the_config(tmp_path, monkeypatch):
+    """The config fallback is not removed — it is narrowed to the case it was
+    written for: nobody has uploaded a resume yet."""
+    import config.loader as loader_mod
+    from scraper.filters import resolve_filter
+
+    monkeypatch.setattr(loader_mod, "PROJECT_ROOT", tmp_path)
+    cfg = _Cfg(**{
+        "filters.profile_path": "does_not_exist.yaml",
+        "filters.title_keywords": ["software engineer"],
+    })
+
+    assert resolve_filter(cfg).title_keywords == ["software engineer"]
+
+
+def test_a_derived_search_wins_over_the_config(tmp_path, monkeypatch):
+    import config.loader as loader_mod
+    from scraper.filters import resolve_filter
+
+    profile_path = tmp_path / "search_profile.yaml"
+    _write_profile(profile_path, ["registered nurse", "staff nurse"])
+    monkeypatch.setattr(loader_mod, "PROJECT_ROOT", tmp_path)
+
+    cfg = _Cfg(**{
+        "filters.profile_path": "search_profile.yaml",
+        "filters.title_keywords": ["software engineer"],
+    })
+
+    assert resolve_filter(cfg).title_keywords == ["registered nurse", "staff nurse"]

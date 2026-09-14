@@ -115,6 +115,170 @@ ROLE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "identifies": ["ux designer", "ui designer", "product designer", "figma"],
         "searches": ["product designer", "ux designer", "ui designer"],
     },
+
+    # -- beyond software ---------------------------------------------------
+    # Everything above this line is a software family, and for a long time
+    # they were the only families there were. A resume matching none of them
+    # fell through to the config defaults and got a software search it never
+    # asked for. These are the fields a real employer hires for all at once;
+    # the university boards are where that is most visible — faculty, trades,
+    # nursing, admin and accounting on one careers page.
+    "electrical_eng": {
+        "identifies": ["electrical engineer", "power systems", "substation", "switchgear",
+                       "protection and control", "relay", "autocad electrical", "etap",
+                       "circuit design", "pcb", "high voltage", "electrical design"],
+        "searches": ["electrical engineer", "power systems engineer", "substation engineer",
+                     "protection and control engineer", "electrical design engineer",
+                     "controls engineer", "hardware engineer"],
+    },
+    "mechanical_eng": {
+        "identifies": ["mechanical engineer", "solidworks", "thermal", "hvac design",
+                       "cad", "finite element", "ansys", "tolerance", "mechanical design"],
+        "searches": ["mechanical engineer", "mechanical design engineer", "design engineer",
+                     "thermal engineer", "hvac engineer"],
+    },
+    "civil_eng": {
+        "identifies": ["civil engineer", "structural engineer", "geotechnical",
+                       "surveying", "land development", "autocad civil", "pe license"],
+        "searches": ["civil engineer", "structural engineer", "geotechnical engineer",
+                     "transportation engineer", "project engineer"],
+    },
+    "manufacturing": {
+        "identifies": ["manufacturing engineer", "process engineer", "lean", "six sigma",
+                       "plc", "scada", "production supervisor", "cnc", "quality engineer",
+                       "iso 9001"],
+        "searches": ["manufacturing engineer", "process engineer", "quality engineer",
+                     "industrial engineer", "production engineer", "controls engineer"],
+    },
+    "healthcare": {
+        "identifies": ["registered nurse", " rn ", "bsn", "patient care", "clinical",
+                       "phlebotom", "medical assistant", "cna", "licensed practical",
+                       "epic", "hipaa", "acls", "bls certified"],
+        "searches": ["registered nurse", "staff nurse", "clinical nurse", "nurse",
+                     "medical assistant", "patient care technician", "clinical coordinator"],
+    },
+    "allied_health": {
+        "identifies": ["physical therap", "occupational therap", "respiratory therap",
+                       "radiolog", "sonograph", "pharmacy technician", "dental hygien",
+                       "speech language patholog"],
+        "searches": ["physical therapist", "occupational therapist", "respiratory therapist",
+                     "radiologic technologist", "pharmacy technician", "dental hygienist"],
+    },
+    "trades": {
+        "identifies": ["electrician", "plumber", "hvac technician", "journeyman",
+                       "maintenance technician", "millwright", "welder", "carpenter",
+                       "refrigeration", "boiler", "osha"],
+        "searches": ["electrician", "maintenance technician", "hvac technician", "plumber",
+                     "facilities technician", "maintenance mechanic", "building engineer"],
+    },
+    "facilities": {
+        "identifies": ["facilities", "custodian", "groundskeeper", "janitorial",
+                       "building services", "housekeeping", "grounds"],
+        "searches": ["facilities coordinator", "facilities manager", "custodian",
+                     "groundskeeper", "building services"],
+    },
+    "accounting": {
+        "identifies": ["accountant", "accounts payable", "accounts receivable", "general ledger",
+                       "reconciliation", "cpa", "quickbooks", "payroll", "bookkeep",
+                       "financial statements", "gaap", "audit"],
+        "searches": ["accountant", "staff accountant", "senior accountant", "accounting specialist",
+                     "accounts payable specialist", "payroll specialist", "bookkeeper", "auditor"],
+    },
+    "finance": {
+        "identifies": ["financial analyst", "budget analyst", "forecasting", "fp&a",
+                       "treasury", "grant accounting", "bursar", "procurement", "purchasing"],
+        "searches": ["financial analyst", "budget analyst", "finance manager",
+                     "procurement specialist", "buyer", "grants accountant"],
+    },
+    "hr": {
+        "identifies": ["human resources", "hris", "onboarding", "employee relations",
+                       "benefits administration", "talent acquisition", "shrm", "payroll and benefits"],
+        "searches": ["human resources generalist", "hr generalist", "hr coordinator",
+                     "hr specialist", "benefits specialist", "employee relations specialist"],
+    },
+    "admin_ops": {
+        "identifies": ["administrative assistant", "executive assistant", "office manager",
+                       "program coordinator", "scheduling", "office specialist", "data entry",
+                       "front desk", "clerical"],
+        "searches": ["administrative assistant", "executive assistant", "office coordinator",
+                     "program coordinator", "office specialist", "program assistant",
+                     "administrative coordinator"],
+    },
+    "education": {
+        "identifies": ["professor", "lecturer", "instructor", "curriculum", "teaching",
+                       "adjunct", "phd", "dissertation", "syllabus", "classroom",
+                       "academic advising", "postdoctoral"],
+        "searches": ["assistant professor", "associate professor", "lecturer", "instructor",
+                     "adjunct instructor", "postdoctoral researcher", "academic advisor"],
+    },
+    "student_services": {
+        "identifies": ["student affairs", "admissions counselor", "financial aid",
+                       "registrar", "academic advisor", "residence life", "enrollment"],
+        "searches": ["admissions counselor", "academic advisor", "student services coordinator",
+                     "financial aid advisor", "enrollment specialist", "student success coach"],
+    },
+    "research_lab": {
+        "identifies": ["research assistant", "laboratory", "assay", "pcr", "chromatograph",
+                       "specimen", "protocol", "bench science", "microscopy", "titration"],
+        "searches": ["research associate", "research assistant", "laboratory technician",
+                     "lab manager", "research technician", "scientist"],
+    },
+    "library": {
+        "identifies": ["librarian", "mls", "archives", "cataloging", "special collections",
+                       "curator", "circulation desk"],
+        "searches": ["librarian", "library specialist", "archivist", "library technician",
+                     "cataloging librarian"],
+    },
+    "marketing_comms": {
+        "identifies": ["marketing", "communications", "social media", "copywriting",
+                       "public relations", "graphic design", "adobe creative", "content strategy",
+                       "brand"],
+        "searches": ["marketing coordinator", "marketing specialist", "communications specialist",
+                     "content writer", "social media coordinator", "graphic designer",
+                     "public relations specialist"],
+    },
+    "supply_chain": {
+        "identifies": ["supply chain", "logistics", "warehouse", "inventory", "shipping and receiving",
+                       "forklift", "distribution", "fulfillment", "materials management"],
+        "searches": ["supply chain analyst", "logistics coordinator", "warehouse supervisor",
+                     "inventory specialist", "materials handler", "shipping coordinator"],
+    },
+    "legal_compliance": {
+        "identifies": ["paralegal", "compliance", "contracts", "title ix", "regulatory",
+                       "legal assistant", "juris doctor", "litigation"],
+        "searches": ["paralegal", "compliance specialist", "contracts administrator",
+                     "compliance officer", "legal assistant"],
+    },
+    "public_safety": {
+        "identifies": ["police officer", "public safety", "dispatcher", "security officer",
+                       "emergency management", "firefighter", "emt", "law enforcement"],
+        "searches": ["police officer", "public safety officer", "security officer",
+                     "dispatcher", "emergency management coordinator"],
+    },
+    "food_service": {
+        "identifies": ["culinary", "food service", "chef", "line cook", "servsafe",
+                       "catering", "dining services", "barista"],
+        "searches": ["cook", "chef", "food service worker", "catering coordinator",
+                     "dining services supervisor"],
+    },
+    "athletics": {
+        "identifies": ["athletic", "coaching", "strength and conditioning", "intramural",
+                       "recreation", "fitness instructor", "lifeguard", "aquatics"],
+        "searches": ["assistant coach", "athletic trainer", "recreation coordinator",
+                     "fitness instructor", "aquatics coordinator"],
+    },
+    "social_services": {
+        "identifies": ["social work", "case management", "counselor", "lcsw", "behavioral health",
+                       "crisis intervention", "community outreach", "caseworker"],
+        "searches": ["social worker", "case manager", "counselor", "outreach coordinator",
+                     "behavioral health specialist"],
+    },
+    "skilled_technician": {
+        "identifies": ["field technician", "service technician", "calibration", "instrumentation",
+                       "troubleshoot equipment", "preventive maintenance", "repair technician"],
+        "searches": ["field service technician", "service technician", "engineering technician",
+                     "instrumentation technician", "calibration technician"],
+    },
 }
 
 # Seniority words, and the level they signal.
@@ -149,12 +313,18 @@ class SearchProfile:
     held_titles: list[str] = field(default_factory=list)
     source: str = "resume (offline)"
     resume_path: str | None = None
+    # How the search terms were arrived at: "families" (the vocabulary
+    # recognised this career), "held_titles" (it did not, so we search for the
+    # jobs this person actually held), or "none" (nothing could be derived).
+    # "none" must never be treated as a working search — see scraper/filters.py.
+    derived_from: str = "none"
 
     def describe(self) -> str:
         years = f"{self.years_experience:.0f}+ years" if self.years_experience else "unknown"
         return (
             f"{self.seniority} · {years} · "
             f"{', '.join(self.families) if self.families else 'no family matched'}"
+            f" · terms from {self.derived_from}"
         )
 
 
@@ -167,10 +337,23 @@ def extract_years_experience(resume: Resume, now: datetime | None = None) -> flo
 
     An explicit "11+ years of experience" wins: it is the person's own summary
     of their career, and it survives resume layouts this parser cannot segment.
+
+    Not everyone writes the word "experience", though. An electrical engineer
+    writes "9 years in power systems"; a nurse writes "6 years as a registered
+    nurse". The narrower pattern found neither, so those resumes got no
+    seniority band at all — and a profile with no seniority and no family is
+    exactly the one that used to fall through to a software search.
     """
     text = resume.text()
 
-    claim = re.search(r"(\d{1,2})\s*\+?\s*years?(?:\s+of)?\s+(?:of\s+)?experience", text, re.I)
+    claim = re.search(
+        r"(\d{1,2})\s*\+?\s*years?"
+        r"(?:\s+(?:of|in|as|with|within|supporting|across))?"
+        r"(?:\s+(?:of|a|an|the))?"
+        r"\s+[a-z]",
+        text,
+        re.I,
+    )
     if claim:
         return float(claim.group(1))
 
@@ -256,35 +439,66 @@ TITLE_WEIGHT = 10
 # and keep at most this many. Without a floor, one passing mention of "data
 # pipeline" adds "data engineer" to the search forever.
 FAMILY_SCORE_FLOOR = 0.20
+# Body mentions needed when no held title names the family at all.
+MIN_BODY_EVIDENCE = 3
 MAX_FAMILIES = 5
+
+
+def family_evidence(resume: Resume, held_titles: list[str]) -> list[tuple[str, int, int]]:
+    """(family, title hits, body hits) for every family with any evidence.
+
+    Title and body hits are counted separately because they mean different
+    things. A phrase in a job title someone held is a statement about their
+    career; the same phrase once in the body may be a passing mention — an
+    electrical engineer who wrote "networking of protection IEDs" has said
+    nothing about wanting a network engineering job.
+    """
+    body = resume.text().lower()
+    titles = " ".join(held_titles).lower()
+
+    evidence: list[tuple[str, int, int]] = []
+    for family, spec in ROLE_FAMILIES.items():
+        title_hits = sum(titles.count(phrase) for phrase in spec["identifies"])
+        body_hits = sum(body.count(phrase) for phrase in spec["identifies"])
+        if title_hits or body_hits:
+            evidence.append((family, title_hits, body_hits))
+    evidence.sort(key=lambda e: e[2] + TITLE_WEIGHT * e[1], reverse=True)
+    return evidence
 
 
 def score_families(resume: Resume, held_titles: list[str]) -> list[tuple[str, int]]:
     """Every family with any evidence, best first, as (family, score)."""
-    body = resume.text().lower()
-    titles = " ".join(held_titles).lower()
-
-    scored: list[tuple[str, int]] = []
-    for family, spec in ROLE_FAMILIES.items():
-        score = sum(
-            body.count(phrase) + TITLE_WEIGHT * titles.count(phrase)
-            for phrase in spec["identifies"]
-        )
-        if score:
-            scored.append((family, score))
-    scored.sort(key=lambda pair: pair[1], reverse=True)
-    return scored
+    return [
+        (family, body + TITLE_WEIGHT * title)
+        for family, title, body in family_evidence(resume, held_titles)
+    ]
 
 
 def match_families(resume: Resume, held_titles: list[str]) -> tuple[list[str], list[str]]:
     """Split families into (strong enough to search, considered but dropped)."""
-    scored = score_families(resume, held_titles)
-    if not scored:
+    evidence = family_evidence(resume, held_titles)
+    if not evidence:
         return [], []
 
-    floor = scored[0][1] * FAMILY_SCORE_FLOOR
-    strong = [family for family, score in scored if score >= floor][:MAX_FAMILIES]
-    dropped = [family for family, _ in scored if family not in strong]
+    # An ABSOLUTE bar, before the relative one. `FAMILY_SCORE_FLOOR` is a
+    # fraction of the top family's score, so when the top family scores 1 the
+    # floor is 0.2 and that single mention sails through — becoming the whole
+    # search. That is how an electrical engineer's one use of the word
+    # "networking" could make him a network engineer: not a fallback to the
+    # software defaults, but a confident, specific, wrong answer, which is
+    # worse. A family must be named in a title this person held, or be
+    # mentioned enough times in the body to be more than an aside.
+    eligible = [
+        (family, body + TITLE_WEIGHT * title)
+        for family, title, body in evidence
+        if title > 0 or body >= MIN_BODY_EVIDENCE
+    ]
+    if not eligible:
+        return [], [family for family, _, _ in evidence]
+
+    floor = eligible[0][1] * FAMILY_SCORE_FLOOR
+    strong = [family for family, score in eligible if score >= floor][:MAX_FAMILIES]
+    dropped = [family for family, _, _ in evidence if family not in strong]
     return strong, dropped
 
 
@@ -324,10 +538,12 @@ def build_title_keywords(families: list[str], held_titles: list[str]) -> list[st
     for family in families:
         terms.extend(ROLE_FAMILIES[family]["searches"])
 
-    if not terms:
-        # No family matched — search for what this person actually was. Narrow,
-        # but never wrong, and it is what makes a non-tech resume work at all.
-        terms = [t.lower() for t in held_titles]
+    # Always search for what this person actually was, family match or not.
+    # A family is a guess about the shape of a career; a held title is a fact.
+    # These used to be either/or, so a matched family DISCARDED the held
+    # titles — and a near-miss family match could drop "Electrical Engineer"
+    # from an electrical engineer's own search. Keeping both costs nothing.
+    terms.extend(t.lower() for t in held_titles)
 
     return _dedupe([t.lower() for t in terms])
 
@@ -354,6 +570,13 @@ def build_exclusions(seniority: str, held_titles: list[str]) -> list[str]:
     title_text = " ".join(held_titles).lower()
     if not any(word in title_text for word in MANAGEMENT_WORDS):
         excludes.extend(["manager", "director", "vp ", "head of"])
+
+    # An exclusion must never rule out the job this person actually does.
+    # These words were chosen as seniority markers in a software career, where
+    # "staff" and "manager" sit above the work. Elsewhere they ARE the work:
+    # Staff Nurse, Laboratory Manager, Staff Accountant, Facilities Manager.
+    # Excluding a word that appears in someone's own titles is always a bug.
+    excludes = [term for term in excludes if term.strip() not in title_text]
 
     return _dedupe(excludes)
 
@@ -419,10 +642,27 @@ def extract_locations(resume: Resume) -> tuple[list[str], list[str]]:
         )
     )
     if us_based:
-        include.extend(["united states", "usa", "us"])
+        # An EMPTY include list, deliberately — it means "anywhere not excluded",
+        # because `reject_reason` skips the include check when the list is empty.
+        #
+        # The obvious list, ["united states", "usa", "us", "remote"], silently
+        # dropped almost every onsite job in the country. "Boston, MA" contains
+        # none of those words; neither does "Ann Arbor, Michigan" or any of the
+        # 3,590 university campuses in universities/data. It went unnoticed
+        # because Greenhouse, Lever and Ashby all append ", United States" to a
+        # location — so on the boards this tool happened to start with, the
+        # include list rejected nothing at all. Measured: 0 of 405 stored jobs
+        # dropped, and 0 of 3,590 campuses kept.
+        #
+        # Listing the 50 states instead is worse, not better: word-boundary
+        # matching on the two-letter codes makes "Remote or Hybrid" match
+        # Oregon, "Built in Berlin" match Indiana, and "Head of Engineering"
+        # match Delaware. Exclusion is the reliable direction — NON_US_PLACES
+        # is 150+ entries and is the list that was actually tuned.
+        #
         # Never exclude somewhere this person actually is. Only the contact
         # line is consulted, so a degree or past role abroad does not count.
-        return _dedupe(include), [p for p in NON_US_PLACES if p not in text]
+        return [], [p for p in NON_US_PLACES if p not in text]
 
     # Somewhere else, or undeterminable. Excluding every non-US place would be
     # wrong, and inferring a country from a phone number is worse. Keep every
@@ -449,6 +689,7 @@ def derive_search_profile(resume: Resume, now: datetime | None = None) -> Search
         considered_families=considered,
         held_titles=held,
         resume_path=str(resume.source_path) if resume.source_path else None,
+        derived_from=("families" if families else "held_titles" if held else "none"),
     )
 
     # An exclusion that kills the search is a bug, not a filter: "senior" as an
@@ -513,7 +754,9 @@ def save_profile(profile: SearchProfile, path) -> None:
         "\n"
         f"seniority: {profile.seniority}\n"
         f"years_experience: {years}\n"
+        f"derived_from: {profile.derived_from}\n"
         + block("families", profile.families)
+        + block("held_titles", profile.held_titles)
         + "\n# Job titles to search for.\n"
         + block("title_keywords", profile.titles)
         + "\n# Dropped even if the title matched above.\n"
@@ -544,7 +787,15 @@ def load_profile(path) -> SearchProfile | None:
         years_experience=float(years) if isinstance(years, (int, float)) else None,
         seniority=str(data.get("seniority", "unknown")),
         families=list(data.get("families") or []),
+        held_titles=list(data.get("held_titles") or []),
         source=f"saved profile ({path.name})",
+        # A profile written before provenance was recorded still carries the
+        # answer: it has families, or it has terms, or it has neither.
+        derived_from=str(
+            data.get("derived_from")
+            or ("families" if data.get("families") else
+                "held_titles" if data.get("title_keywords") else "none")
+        ),
     )
 
 
