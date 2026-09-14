@@ -141,3 +141,26 @@ thead th .ar{font-size:9px;opacity:.75}
 @media (prefers-reduced-motion:no-preference){.sb-track i{transition:width .5s ease}}
 .sb-detail{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;
   font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* prepare-the-application: a checklist, so what is left reads at a glance */
+.card-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+.card-head h2{margin:0}
+.progress-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-left:auto}
+ol.steps{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.step{display:grid;grid-template-columns:24px 1fr;gap:12px;align-items:start;
+  padding:13px 2px;border-top:1px solid var(--hair)}
+.step:first-child{border-top:0}
+.tick{width:17px;height:17px;border-radius:50%;border:1.5px solid var(--line);
+  margin-top:2px;flex:none;position:relative}
+.step.done .tick{background:var(--good);border-color:var(--good)}
+.step.done .tick::after{content:"";position:absolute;left:5px;top:2px;width:4px;height:8px;
+  border:solid #fff;border-width:0 1.7px 1.7px 0;transform:rotate(45deg)}
+.step-body{min-width:0}
+.step-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.step-head b{font-size:14.5px}
+.hint{font-size:12px;color:var(--muted)}
+.step.done .step-head b{color:var(--muted)}
+.fold{margin-top:9px}
+.fold summary{font-size:12.5px;color:var(--signal-ink);cursor:pointer;padding:3px 0}
+.fold textarea{margin-top:7px}
+.fold #prompt-resume,.fold #prompt-letter{min-height:90px;color:var(--muted)}
