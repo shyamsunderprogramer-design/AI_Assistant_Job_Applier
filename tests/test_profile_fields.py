@@ -161,3 +161,48 @@ def test_years_are_read_without_the_word_experience():
 def test_a_stray_number_is_still_not_experience():
     resume = parse_text("ALEX\nAustin, TX, USA\nAWS EC2 2019 certification\n")
     assert extract_years_experience(resume) is None
+
+
+# -- a family must not fire on a resume from another field ------------------
+
+SOFTWARE = """ALEX K
+Austin, TX, USA | sre@example.com
+
+SUMMARY
+Site Reliability Engineer with 11 years of experience. Kubernetes, Terraform,
+AWS, CI/CD, observability, incident response. Built compliance automation for
+SOC2 and HIPAA audit evidence, onboarding for new services, and a scheduling
+layer for distributed jobs. Managed Chef cookbooks. PhD in computer science.
+Tolerance for on-call.
+
+EXPERIENCE
+Senior Site Reliability Engineer
+Acme Cloud, Austin, TX | Jan 2019 - Present
+"""
+
+
+def test_widening_the_taxonomy_did_not_make_it_promiscuous():
+    """Every phrase in this resume once pulled in a whole unrelated field.
+
+    "compliance" and "audit" (security work) dragged in paralegal and
+    accountant; "Chef" the configuration tool matched food service; "HIPAA"
+    matched nursing; "onboarding" matched HR; "PhD" matched faculty;
+    "tolerance" matched mechanical engineering; "scheduling" matched office
+    admin; "distribution" matched warehousing. Nine fields from one software
+    resume — the taxonomy has to be specific enough to be diagnostic, not just
+    large.
+    """
+    software = {"sre", "devops", "cloud", "platform", "security", "backend",
+                "fullstack", "frontend", "data_eng", "ml", "data_sci", "qa",
+                "mobile", "network", "sysadmin", "product", "design"}
+    profile = profile_of(SOFTWARE)
+
+    assert profile.families, "the resume should still match its own field"
+    assert set(profile.families) <= software, \
+        f"non-software families matched a software resume: " \
+        f"{set(profile.families) - software}"
+
+    joined = " ".join(profile.titles)
+    for stray in ("paralegal", "accountant", "nurse", "chef", "librarian",
+                  "professor", "warehouse"):
+        assert stray not in joined, f"{stray!r} should not be in a software search"

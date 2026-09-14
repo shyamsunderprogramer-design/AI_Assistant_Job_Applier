@@ -106,7 +106,10 @@ def index():
             .order_by(Job.ats_match_score.desc()).all()
         )
         rows = [job_row(j) for j in jobs]
-        boards = session.query(Job.source).distinct().count()
+        # Boards, not ATS platforms. This counted `Job.source`, of which there
+        # are only ever four, so the dashboard read "BOARDS 4" next to 413 open
+        # roles gathered from fourteen hundred of them.
+        boards = board_count()
 
     resume = current_resume()
     return render_template(
@@ -187,7 +190,42 @@ def upload():
     uploaded.save(target)
 
     ok, output = run_command("profile", "--force")
-    return jsonify(ok=ok, file=target.name, output=output)
+    return jsonify(ok=ok, file=target.name, output=output, search=derived_search())
+
+
+def derived_search() -> dict:
+    """What the uploaded resume will actually be searched for.
+
+    Shown back straight after an upload, because the alternative is finding out
+    from an empty results table a scrape later. Someone whose career this tool
+    does not recognise needs to know that at the moment they upload, while the
+    fix -- editing the profile YAML -- is still obviously the next thing to do.
+    """
+    from config.loader import PROJECT_ROOT, load_config
+    from resume.profile import PROFILE_FILENAME, load_profile
+
+    cfg = load_config()
+    profile = load_profile(
+        PROJECT_ROOT / cfg.get("filters.profile_path", PROFILE_FILENAME))
+    if profile is None:
+        return {"ok": False, "reason": "No search profile was written."}
+
+    return {
+        "ok": bool(profile.titles),
+        "titles": profile.titles[:12],
+        "title_count": len(profile.titles),
+        "families": profile.families,
+        "seniority": profile.seniority,
+        "years": profile.years_experience,
+        "derived_from": profile.derived_from,
+        "reason": (
+            "" if profile.titles else
+            "Nothing in this resume matched a known role family, and no job "
+            "titles could be read from it. Rather than search for somebody "
+            "else's job, the search is empty. Add the titles you want to "
+            "config/search_profile.yaml."
+        ),
+    }
 
 
 @app.post("/job/<int:job_id>/<action>")
@@ -284,7 +322,11 @@ def brief_text(job_id: int):
 # Running it inside the request meant the browser gave up long before the work
 # finished, so the button looked broken and the postings never arrived. Start
 # it, return at once, and let the page watch the log.
-TASKS = {"scrape": ["scrape"], "score": ["score"], "export": ["export"],
+# `score` alone only scores jobs that have never been scored. The button is
+# labelled "Re-score", and it is pressed after a resume upload or a filter
+# change — exactly when every existing score is the stale one. Without
+# --rescore it printed "Nothing to score" and changed nothing.
+TASKS = {"scrape": ["scrape"], "score": ["score", "--rescore"], "export": ["export"],
          "daily": ["daily"], "discover": ["discover", "--names",
                                           "data/mailbox_names.txt", "--max-slugs", "2"]}
 def task_log(task: str) -> Path:
@@ -406,8 +448,14 @@ def run_status(task: str):
     # Without a live pid the run is over; the log's own last word says whether
     # it got there, which survives an app restart where an exit code does not.
     finished = not running and bool(tail)
-    ok_finish = finished and any(
-        marker in tail for marker in ("Companies scraped", "Scored", "Exported", "Saved to"))
+    # Every way a run can end well, not just the ones with something to report.
+    # "Nothing to score" is a completed run, and leaving it out left the button
+    # spinning on "Re-scoring against your resume" for hours after the process
+    # had exited.
+    ok_finish = finished and any(marker in tail for marker in (
+        "Companies scraped", "Scored", "Exported", "Saved to",
+        "Nothing to score", "No new jobs", "done:", "Run finished",
+    ))
     return jsonify(
         ok=True, running=running, tail=tail, progress=progress,
         done=done, total=total, current=current, eta=eta,

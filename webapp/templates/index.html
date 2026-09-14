@@ -211,10 +211,36 @@ $('upload').addEventListener('submit', async e => {
   out.hidden = false; out.className = 'out'; out.textContent = 'Reading the resume and re-deriving your search…';
   const r = await fetch('/upload', {method:'POST', body});
   const d = await r.json();
-  out.className = 'out ' + (d.ok ? 'good' : 'bad');
-  out.textContent = d.ok ? `Saved as ${d.file}. Search re-derived:\n\n${d.output}`
-                         : (d.error || d.output);
-  if (d.ok) setTimeout(() => location.reload(), 2500);
+  const s = d.search || {};
+
+  // Show the search this resume produced, not just that a command ran. A
+  // person whose field this tool does not recognise has to learn it here,
+  // while the fix is still the obvious next thing to do -- not from an empty
+  // results table after a half-hour scrape.
+  if (d.ok && s.ok) {
+    out.className = 'out good';
+    const who = [s.seniority, s.years ? s.years + ' years' : null]
+                  .filter(Boolean).join(', ');
+    out.textContent =
+      `Saved as ${d.file}.\n\n`
+      + `Read as: ${who || 'level unknown'}`
+      + (s.families && s.families.length ? ` — ${s.families.join(', ')}` : '')
+      + `\n\nSearching for ${s.title_count} job title`
+      + (s.title_count === 1 ? '' : 's') + ':\n  '
+      + s.titles.join('\n  ')
+      + (s.title_count > s.titles.length
+          ? `\n  …and ${s.title_count - s.titles.length} more` : '')
+      + `\n\nNot right? Edit config/search_profile.yaml — it is plain YAML `
+      + `and the scraper reads it in preference to anything else.`;
+    setTimeout(() => location.reload(), 6000);
+  } else if (d.ok) {
+    out.className = 'out bad';
+    out.textContent = `Saved as ${d.file}, but no search could be derived.\n\n`
+      + (s.reason || d.output);
+  } else {
+    out.className = 'out bad';
+    out.textContent = d.error || d.output;
+  }
 });
 
 // A scrape takes about half an hour. Start it, then watch — the button stays
