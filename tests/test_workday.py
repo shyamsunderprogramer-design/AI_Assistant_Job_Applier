@@ -197,3 +197,80 @@ def test_a_bad_slug_raises_rather_than_scraping_nothing():
     with pytest.raises(FetchError):
         WorkdayScraper(FakeClient(count=1)).stub_jobs(
             CompanyRef(name="X", slug="just-a-name", source="workday"))
+
+
+# -- the filter has to run BETWEEN the two calls, which is why they are two ---
+
+class _TitledClient(FakeClient):
+    """Serves a board where only a few postings are worth a description."""
+
+    def __init__(self, count: int, wanted: int):
+        super().__init__(count)
+        self.wanted = wanted
+
+    def post(self, url, json=None, **kw):
+        offset, limit = json["offset"], json["limit"]
+        items = []
+        for i in range(offset, min(offset + limit, self.count)):
+            title = "Site Reliability Engineer" if i < self.wanted else "Catering Assistant"
+            items.append({"title": title, "locationsText": "US-CA-Santa Clara",
+                          "externalPath": f"/job/x/Role-{i}_JR{i}"})
+        self.pages_served += 1
+        return _Resp({"total": self.count if offset == 0 else 0, "jobPostings": items})
+
+
+def test_only_matching_postings_cost_a_description():
+    """The bug this split exists to prevent, and which the runner reintroduced.
+
+    Every Workday board fetched descriptions for the first sixty postings in
+    board order, then filtered those sixty. Citigroup listed 999 postings, the
+    first sixty were arbitrary, and the log read "0 match" — the matches were
+    in the other 939.
+    """
+    from scraper.filters import JobFilter
+    from scraper.runner import _fetch
+
+    client = _TitledClient(count=200, wanted=5)
+    scraper = WorkdayScraper(client)
+    job_filter = JobFilter(title_keywords=["site reliability"])
+
+    jobs, partial = _fetch(scraper, company(), job_filter)
+
+    assert len(jobs) == 5
+    assert client.details_served == 5          # not 60, and not 200
+    assert all("Reliability" in j.title for j in jobs)
+
+
+def test_a_board_read_completely_is_not_partial():
+    from scraper.filters import JobFilter
+    from scraper.runner import _fetch
+
+    scraper = WorkdayScraper(_TitledClient(count=7, wanted=7))
+    _, partial = _fetch(scraper, company(), JobFilter(title_keywords=["site reliability"]))
+
+    assert partial is False
+
+
+def test_a_board_bigger_than_we_can_read_is_partial():
+    """Nothing may be closed on the strength of a board we only half saw."""
+    from scraper.filters import JobFilter
+    from scraper.runner import _fetch
+
+    scraper = WorkdayScraper(_TitledClient(count=200, wanted=200))
+    jobs, partial = _fetch(scraper, company(), JobFilter(title_keywords=["site reliability"]))
+
+    assert len(jobs) == 60          # MAX_DETAILS
+    assert partial is True
+
+
+def test_a_scraper_without_stubs_is_untouched():
+    """Greenhouse, Lever and Ashby return everything at once; nothing changes."""
+    from scraper.filters import JobFilter
+    from scraper.runner import _fetch
+
+    class Plain:
+        def fetch_jobs(self, company):
+            return ["a", "b"]
+
+    jobs, partial = _fetch(Plain(), company(), JobFilter())
+    assert jobs == ["a", "b"] and partial is False
