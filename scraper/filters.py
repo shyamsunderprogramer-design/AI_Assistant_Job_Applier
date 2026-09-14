@@ -99,6 +99,32 @@ class JobFilter:
     def matches(self, job: RawJob) -> bool:
         return self.reject_reason(job) is None
 
+    def matches_stub(self, job: RawJob) -> bool:
+        """Title and location only — for postings whose description costs a request.
+
+        A Workday tenant can hold two thousand postings, and the listing
+        carries no descriptions. Fetching them all to filter afterwards is what
+        `stub_jobs`/`fill_details` exist to avoid: this decides, from what the
+        listing already gives, which ones are worth a second request.
+
+        `description_required_keywords` is deliberately not applied. A stub has
+        no description, so that check would reject every posting before anyone
+        looked at one.
+        """
+        title = (job.title or "").lower()
+        if self.title_keywords and not matches_any(title, self.title_keywords):
+            return False
+        if any(matches_keyword(title, kw) for kw in self.exclude_title_keywords):
+            return False
+
+        location = (job.location or "").lower()
+        if location:
+            if any(matches_keyword(location, kw) for kw in self.exclude_location_keywords):
+                return False
+            if self.location_keywords and not matches_any(location, self.location_keywords):
+                return False
+        return True
+
     def apply(self, jobs: list[RawJob]) -> list[RawJob]:
         return [job for job in jobs if self.matches(job)]
 

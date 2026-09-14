@@ -58,6 +58,7 @@ class LifecycleResult:
     closed: int = 0
     reopened: int = 0
     skipped_empty: bool = False
+    skipped_partial: bool = False    # the board was larger than we could read
 
 
 def reconcile_board(
@@ -66,16 +67,39 @@ def reconcile_board(
     live_external_ids,
     *,
     close_on_empty_board: bool = False,
+    partial: bool = False,
     now=None,
 ) -> LifecycleResult:
     """Reconcile stored jobs for one company against a successful board fetch.
 
     `live_external_ids` must be every posting the board returned — pre-filter.
     Call this ONLY after a fetch that succeeded.
+
+    `partial=True` says the caller could not see the whole board, and then
+    nothing is ever closed. Workday makes this real: a tenant can hold two
+    thousand postings, a posting's durable id only arrives with its
+    description, and only the first MAX_DETAILS descriptions are fetched. The
+    ids of everything past that point are unknown — not absent. Closing on
+    absent-looking evidence that is really missing evidence would shut a live
+    posting every run and reopen it the next, which is the exact rot the
+    close-on-empty rule below already guards against in the other direction.
     """
     now = as_utc(now) or utcnow()
     live = {str(x) for x in live_external_ids}
     result = LifecycleResult()
+
+    if partial:
+        # Refresh what we did see; close nothing, because "not in this page"
+        # does not mean "not on this board".
+        with get_session() as session:
+            rows = session.query(Job).filter_by(
+                source=source, company_slug=company_slug).all()
+            for job in rows:
+                if job.external_id in live:
+                    job.last_seen_at = now
+                    result.seen += 1
+        result.skipped_partial = True
+        return result
 
     if not live and not close_on_empty_board:
         # Rule 2. Cheap to be wrong in this direction; expensive in the other.

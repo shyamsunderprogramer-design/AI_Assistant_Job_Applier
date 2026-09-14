@@ -112,8 +112,9 @@ def run_scrape(cfg) -> RunSummary:
 
         summary.companies_attempted += 1
         started = time.monotonic()
+        partial = False
         try:
-            raw_jobs = scraper.fetch_jobs(company)
+            raw_jobs, partial = _fetch(scraper, company, job_filter)
         except RobotsDisallowed as exc:
             _log_failure(summary, company, "RobotsDisallowed", str(exc), started, deactivate_after)
             continue
@@ -134,6 +135,7 @@ def run_scrape(cfg) -> RunSummary:
             company.slug,
             [raw.external_id for raw in raw_jobs],
             close_on_empty_board=close_on_empty,
+            partial=partial,
         )
 
         summary.jobs_seen += len(raw_jobs)
@@ -227,6 +229,42 @@ def _log_success(
         if row is not None:
             row.last_scraped_at = utcnow()
             row.consecutive_failures = 0
+
+
+def _fetch(scraper, company, job_filter) -> tuple[list[RawJob], bool]:
+    """Every posting worth keeping from one board, and whether we saw it all.
+
+    Most boards hand over titles, locations and descriptions together, so there
+    is nothing to decide: fetch, then filter.
+
+    Workday does not. Its listing carries no descriptions, each one costs a
+    separate request, and a tenant can hold two thousand postings — so the
+    scraper splits the work into `stub_jobs` and `fill_details` precisely so a
+    filter can run in between. Nothing ran in between. Every Workday board
+    fetched descriptions for the first sixty postings in board order and then
+    filtered those, which is why the log reads "Citigroup: 999 postings
+    matched, fetching the first 60 ... 0 match": the sixty were arbitrary, and
+    any posting worth having was somewhere in the other 939.
+
+    Filtering on title and location first turns those sixty requests into sixty
+    *relevant* requests.
+
+    The second return value is whether the board was read completely. It was
+    not, whenever filtering left more candidates than `fill_details` will
+    fetch — and a board we could not read completely must not close anything.
+    """
+    stubs = getattr(scraper, "stub_jobs", None)
+    if stubs is None:
+        return scraper.fetch_jobs(company), False
+
+    listed = stubs(company)
+    candidates = [job for job in listed if job_filter.matches_stub(job)]
+    filled = scraper.fill_details(company, candidates)
+
+    if len(listed) > len(candidates):
+        log.info("%s: %d of %d postings worth a description", company.name,
+                 len(candidates), len(listed))
+    return filled, len(filled) < len(listed)
 
 
 def _log_failure(
