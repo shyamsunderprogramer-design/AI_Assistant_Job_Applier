@@ -970,7 +970,17 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config) if args.config else load_config()
     setup_logging(cfg)
-    return COMMANDS[args.command](cfg, args)
+
+    from scraper.filters import UndeterminedSearch
+
+    try:
+        return COMMANDS[args.command](cfg, args)
+    except UndeterminedSearch as exc:
+        # Guidance, not a traceback. This is the one error a person who has
+        # just uploaded their resume is most likely to hit, and the fix is
+        # something they can do themselves.
+        print(f"\nCannot run {args.command}: {exc}\n", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
