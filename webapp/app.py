@@ -14,6 +14,7 @@ their own copy rather than sharing yours.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -269,11 +270,30 @@ def brief_text(job_id: int):
 TASKS = {"scrape": ["scrape"], "score": ["score"], "export": ["export"],
          "daily": ["daily"], "discover": ["discover", "--names",
                                           "data/mailbox_names.txt", "--max-slugs", "2"]}
-_running: dict[str, subprocess.Popen] = {}
-
-
 def task_log(task: str) -> Path:
     return PROJECT_ROOT / "data" / f"webapp_{task}.log"
+
+
+def task_pid_file(task: str) -> Path:
+    return PROJECT_ROOT / "data" / f"webapp_{task}.pid"
+
+
+def task_pid(task: str) -> int | None:
+    """The pid of a run in flight, or None.
+
+    Read from disk rather than memory so restarting the app does not lose
+    track of work that is still going.
+    """
+    path = task_pid_file(task)
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)          # signal 0 just asks "are you there?"
+    except OSError:
+        return None
+    return pid
 
 
 @app.post("/run/<task>")
@@ -282,17 +302,20 @@ def run_task(task: str):
     if task not in TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
 
-    live = _running.get(task)
-    if live and live.poll() is None:
+    if task_pid(task):
         return jsonify(ok=True, started=False, note="already running")
 
     log_path = task_log(task)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     handle = log_path.open("w")          # each run starts a fresh log
-    _running[task] = subprocess.Popen(
+    process = subprocess.Popen(
         [sys.executable, "-u", "main.py", *TASKS[task]],
         cwd=PROJECT_ROOT, stdout=handle, stderr=subprocess.STDOUT,
+        # Its own session, so restarting this app does not kill half an hour
+        # of scraping along with it.
+        start_new_session=True,
     )
+    task_pid_file(task).write_text(str(process.pid))
     return jsonify(ok=True, started=True)
 
 
@@ -302,8 +325,7 @@ def run_status(task: str):
     if task not in TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
 
-    process = _running.get(task)
-    running = process is not None and process.poll() is None
+    running = task_pid(task) is not None
     path = task_log(task)
     tail, progress = "", None
     if path.exists():
@@ -314,8 +336,13 @@ def run_status(task: str):
             if "seen" in line and "match" in line:
                 progress = " ".join(line.split()[-9:])
                 break
+    # Without a live pid the run is over; the log's own last word says whether
+    # it got there, which survives an app restart where an exit code does not.
+    finished = not running and bool(tail)
+    ok_finish = finished and any(
+        marker in tail for marker in ("Companies scraped", "Scored", "Exported", "Saved to"))
     return jsonify(ok=True, running=running, tail=tail, progress=progress,
-                   exit=None if running or process is None else process.returncode)
+                   exit=None if running else (0 if ok_finish else 1))
 
 
 def main() -> int:
