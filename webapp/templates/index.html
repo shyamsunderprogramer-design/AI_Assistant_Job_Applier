@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Job Search Console</h1>
+    <div class="sub">{{ rows|length }} open roles from company boards, ranked against your resume.</div>
+  </div>
+  <div class="row">
+    <button class="btn" id="run-scrape">Fetch new postings</button>
+    <button class="btn" id="run-score">Re-score</button>
+  </div>
+</header>
+
+<section class="resume {% if not resume %}none{% endif %}">
+  <span class="lbl">Resume</span>
+  {% if resume %}
+    <span class="name">{{ resume }}</span>
+    <span class="sub">Everything is written from this, and checked against it.</span>
+  {% else %}
+    <span class="name">No resume found</span>
+    <span class="sub">Upload one — the whole search is derived from it.</span>
+  {% endif %}
+  <form id="upload" class="row" style="margin-left:auto" enctype="multipart/form-data">
+    <input type="file" id="file" name="resume" accept=".docx,.pdf,.txt,.md" aria-label="Resume file">
+    <button class="btn primary" type="submit">{{ 'Replace' if resume else 'Upload' }}</button>
+  </form>
+</section>
+<div id="upload-out" hidden></div>
+
+<section class="stats">
+  <div class="stat"><span class="k">Open roles</span><span class="v">{{ rows|length }}</span></div>
+  <div class="stat lead"><span class="k">Strong fit</span><span class="v">{{ strong }}</span></div>
+  <div class="stat"><span class="k">Boards</span><span class="v">{{ boards }}</span></div>
+  <div class="stat"><span class="k">Applied</span><span class="v" id="n-applied">0</span></div>
+</section>
+
+<div class="bar">
+  <input type="search" id="q" placeholder="Search company or title" aria-label="Search">
+  <button class="chip" id="f-remote" aria-pressed="false">Remote</button>
+  <button class="chip" id="f-strong" aria-pressed="false">70%+</button>
+  <button class="chip" id="f-paid" aria-pressed="false">Salary published</button>
+  <button class="chip" id="f-new" aria-pressed="false">Not yet applied</button>
+  <span class="count" id="count"></span>
+</div>
+
+<div class="tw">
+  <table>
+    <thead><tr>
+      <th>Fit</th><th>Age</th><th>Where</th><th>Exp</th><th>Salary</th>
+      <th>Company</th><th>Role</th><th>Board</th><th>Status</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<footer id="foot"></footer>
+
+<script id="data" type="application/json">{{ rows|tojson }}</script>
+<script>
+const ROWS = JSON.parse(document.getElementById('data').textContent);
+const state = {q:'', remote:false, strong:false, paid:false, fresh:false};
+const $ = id => document.getElementById(id);
+
+function visible() {
+  const q = state.q.trim().toLowerCase();
+  return ROWS.filter(r => {
+    if (q && !((r.company+' '+r.title).toLowerCase().includes(q))) return false;
+    if (state.remote && !['remote','hybrid'].includes(r.workplace)) return false;
+    if (state.strong && r.score < 70) return false;
+    if (state.paid && !r.salary) return false;
+    if (state.fresh && r.status !== 'Not Applied') return false;
+    return true;
+  });
+}
+
+function render() {
+  const rows = visible();
+  $('count').textContent = `${rows.length} of ${ROWS.length} shown`;
+  $('n-applied').textContent = ROWS.filter(r => r.status === 'Applied').length;
+  const band = s => s >= 70 ? 'hot' : s >= 60 ? 'warm' : 'cool';
+  const cls = s => s === 'Applied' ? 'applied' : s === 'Manual Review' ? 'review' : '';
+  $('rows').replaceChildren(...rows.map(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="num"><span class="sc sc-${band(r.score)}">${r.score}</span></td>
+      <td class="num age"></td><td class="num dim w"></td><td class="num dim e"></td>
+      <td class="num y"></td><td class="co"></td>
+      <td class="ti"><a></a></td>
+      <td><span class="b b-${r.board}"></span></td>
+      <td><span class="pill ${cls(r.status)}"></span></td>`;
+    const age = tr.querySelector('.age');
+    age.textContent = r.age;
+    if (/\byr\b/.test(r.age)) age.classList.add('stale');
+    tr.querySelector('.w').textContent = r.workplace;
+    tr.querySelector('.e').textContent = r.experience;
+    tr.querySelector('.y').textContent = r.salary;
+    tr.querySelector('.co').textContent = r.company;
+    const a = tr.querySelector('.ti a');
+    a.textContent = r.title; a.href = '/job/' + r.id;
+    tr.querySelector('.b').textContent = r.board;
+    tr.querySelector('.pill').textContent = r.status;
+    return tr;
+  }));
+}
+
+$('q').addEventListener('input', e => { state.q = e.target.value; render(); });
+[['f-remote','remote'],['f-strong','strong'],['f-paid','paid'],['f-new','fresh']]
+  .forEach(([id,k]) => $(id).addEventListener('click', e => {
+    state[k] = !state[k];
+    e.currentTarget.setAttribute('aria-pressed', String(state[k]));
+    render();
+  }));
+
+$('upload').addEventListener('submit', async e => {
+  e.preventDefault();
+  const out = $('upload-out');
+  if (!$('file').files.length) { out.hidden = false; out.className='out bad';
+    out.textContent = 'Choose a file first.'; return; }
+  const body = new FormData(); body.append('resume', $('file').files[0]);
+  out.hidden = false; out.className = 'out'; out.textContent = 'Reading the resume and re-deriving your search…';
+  const r = await fetch('/upload', {method:'POST', body});
+  const d = await r.json();
+  out.className = 'out ' + (d.ok ? 'good' : 'bad');
+  out.textContent = d.ok ? `Saved as ${d.file}. Search re-derived:\n\n${d.output}`
+                         : (d.error || d.output);
+  if (d.ok) setTimeout(() => location.reload(), 2500);
+});
+
+['scrape','score'].forEach(task => $('run-'+task).addEventListener('click', async e => {
+  const b = e.currentTarget, label = b.textContent;
+  b.disabled = true; b.textContent = 'Running…';
+  const r = await fetch('/run/'+task, {method:'POST'});
+  const d = await r.json();
+  b.disabled = false; b.textContent = label;
+  $('foot').textContent = (d.output || '').split('\n').slice(-3).join(' · ');
+  if (d.ok) location.reload();
+}));
+
+render();
+</script>
+{% endblock %}
