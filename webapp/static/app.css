@@ -116,8 +116,16 @@ thead th[aria-sort]{color:var(--signal-ink)}
 thead th .ar{font-size:9px;opacity:.75}
 
 /* status box — says what is happening, or plainly that nothing is */
-.statusbox{margin-top:14px;background:var(--surface);border:1px solid var(--line);
-  border-radius:7px;padding:13px 16px}
+/* Pinned bottom-right: a 409-row table means anything in the flow is unseen. */
+.statusbox{position:fixed;right:16px;bottom:16px;z-index:20;width:280px;
+  background:var(--surface);border:1px solid var(--line);border-radius:9px;
+  padding:11px 13px;box-shadow:0 6px 24px rgba(0,0,0,.14)}
+.statusbox.idle{opacity:.82}
+.statusbox.idle:hover{opacity:1}
+@media(max-width:520px){.statusbox{left:16px;right:16px;width:auto}}
+.sb-x{margin-left:auto;background:none;border:0;color:var(--faint);cursor:pointer;
+  font-size:16px;line-height:1;padding:0 2px}
+.sb-x:hover{color:var(--ink)}
 .sb-head{display:flex;align-items:center;gap:9px}
 .sb-dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
 .sb-dot.on{background:var(--signal)}
@@ -127,11 +135,11 @@ thead th .ar{font-size:9px;opacity:.75}
   .sb-dot.on{animation:sbpulse 1.8s ease-in-out infinite}
   @keyframes sbpulse{0%,100%{opacity:1}50%{opacity:.35}}
 }
-.sb-title{font-weight:600}
-.sb-eta{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted);
-  font-variant-numeric:tabular-nums}
+.sb-title{font-weight:600;font-size:13.5px}
+.sb-eta{font-family:var(--mono);font-size:11.5px;color:var(--signal-ink);
+  font-variant-numeric:tabular-nums;margin-top:3px}
 .sb-track{height:6px;background:var(--hair);border-radius:3px;overflow:hidden;margin-top:9px}
 .sb-track i{display:block;height:100%;background:var(--signal);border-radius:3px;width:0}
 @media (prefers-reduced-motion:no-preference){.sb-track i{transition:width .5s ease}}
-.sb-detail{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:7px;
+.sb-detail{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:6px;
   font-variant-numeric:tabular-nums}
