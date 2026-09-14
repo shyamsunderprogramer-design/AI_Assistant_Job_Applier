@@ -107,12 +107,31 @@ def _lower(values) -> list[str]:
     return [str(v).lower().strip() for v in (values or []) if str(v).strip()]
 
 
+class UndeterminedSearch(Exception):
+    """A resume was read, but no search could be derived from it.
+
+    Raised instead of quietly running somebody else's search. See
+    `resolve_filter` for why this is an error and not a fallback.
+    """
+
+
 def resolve_filter(cfg) -> JobFilter:
     """The search to run: derived-from-resume if present, else config.yaml.
 
     A hand-written keyword list is the thing most likely to be stale — it is
     written once, before the user knows what they want, and never revisited.
     The derived profile is regenerated from the resume, so it wins by default.
+
+    The config fallback is for the case it was written for: **no resume yet**.
+    It is NOT a fallback for a resume that derived nothing. That distinction
+    used to be missing, and it was the worst bug in this tool: an electrical
+    engineer uploaded his resume, the vocabulary recognised none of it, the
+    profile came back with no titles, and the search silently became the
+    software keywords sitting in config.yaml. He would have got a tidy list of
+    Python jobs with nothing to tell him the search was never his.
+
+    A search that runs and returns the wrong field is far worse than one that
+    stops and says why — the first looks like an answer.
     """
     if not cfg.get("filters.use_derived_profile", True):
         return JobFilter.from_config(cfg)
@@ -121,14 +140,30 @@ def resolve_filter(cfg) -> JobFilter:
     from resume.profile import PROFILE_FILENAME, load_profile
 
     profile = load_profile(PROJECT_ROOT / cfg.get("filters.profile_path", PROFILE_FILENAME))
-    if profile is None or not profile.titles:
-        return JobFilter.from_config(cfg)
+    if profile is None:
+        return JobFilter.from_config(cfg)        # no resume yet — as designed
+
+    if not profile.titles:
+        raise UndeterminedSearch(
+            f"No search could be derived from {profile.resume_path or 'your resume'}.\n"
+            "  Nothing in it matched a known role family, and no job titles "
+            "could be read out of it either.\n"
+            "  Rather than search for somebody else's job, this run stopped.\n"
+            "\n"
+            "  Fix it either way:\n"
+            "    - edit the derived profile directly and add the titles you "
+            "want (it is plain YAML):\n"
+            f"        {cfg.get('filters.profile_path', 'config/search_profile.yaml')}\n"
+            "    - or re-run with a resume that names your job titles in its "
+            "experience section:\n"
+            "        python main.py profile --force"
+        )
 
     import logging
 
     logging.getLogger(__name__).info(
-        "Filters from %s — %s, %d title keywords",
-        profile.source, profile.seniority, len(profile.titles),
+        "Filters from %s — %s, %d title keywords (terms from %s)",
+        profile.source, profile.seniority, len(profile.titles), profile.derived_from,
     )
     return JobFilter(
         title_keywords=_lower(profile.titles),

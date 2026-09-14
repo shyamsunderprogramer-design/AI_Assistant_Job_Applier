@@ -184,9 +184,17 @@ def test_non_technical_resume_falls_back_to_its_own_titles():
 
 # -- locations -------------------------------------------------------------
 
-def test_us_resume_searches_us_and_remote():
-    locations = profile_of(SRE_RESUME).locations
-    assert "remote" in locations and "united states" in locations
+def test_a_us_resume_accepts_any_us_location():
+    """An empty include list means "anywhere not excluded", and that is correct.
+
+    This test used to assert the opposite — that a US resume produced
+    ["remote", "united states", "usa", "us"] — and that assertion was pinning
+    a bug. The filter drops any posting whose non-empty location matches no
+    include term, and "Boston, MA" matches none of those four. It never showed
+    up because Greenhouse, Lever and Ashby all write ", United States" into a
+    location, so on those boards the include list rejected nothing.
+    """
+    assert profile_of(SRE_RESUME).locations == []
 
 
 def test_home_country_is_not_excluded():
@@ -244,6 +252,31 @@ def test_a_non_us_resume_excludes_nothing():
     assert profile_of(resume).exclude_locations == []
 
 
-def test_us_resume_still_includes_remote_and_us():
-    locations = [x.lower() for x in profile_of(SRE_RESUME).locations]
-    assert "remote" in locations and "usa" in locations
+def test_a_bare_city_and_state_is_not_dropped():
+    """The bug this fixed, stated as the behaviour that matters.
+
+    Every one of the 3,590 university campuses in universities/data writes its
+    location this way, as does most of the country. All of them were dropped.
+    """
+    from scraper.base import RawJob
+    from scraper.filters import JobFilter
+
+    profile = profile_of(SRE_RESUME)
+    job_filter = JobFilter(
+        title_keywords=[],
+        location_keywords=[x.lower() for x in profile.locations],
+        exclude_location_keywords=[x.lower() for x in profile.exclude_locations],
+    )
+
+    def at(place: str) -> str | None:
+        return job_filter.reject_reason(RawJob(
+            source="x", company="c", company_slug="s", external_id="1",
+            title="Engineer", location=place, description="d", application_url="u"))
+
+    for place in ("Boston, MA", "Ann Arbor, Michigan", "Fayetteville, AR",
+                  "Ithaca, NY", "Remote", "Long Beach, California, United States"):
+        assert at(place) is None, f"{place} was dropped"
+
+    # Exclusion still does the real work — that list is the one that was tuned.
+    assert at("Bengaluru, India") is not None
+    assert at("Remote - India") is not None
