@@ -69,17 +69,19 @@
   </table>
 </div>
 
-<section class="statusbox" id="statusbox">
+<div class="out" id="run-out" hidden></div>
+<footer id="foot"></footer>
+
+<aside class="statusbox idle" id="statusbox" aria-live="polite">
   <div class="sb-head">
     <span class="sb-dot" id="sb-dot"></span>
     <span class="sb-title" id="sb-title">All jobs idle</span>
-    <span class="sb-eta" id="sb-eta"></span>
+    <button class="sb-x" id="sb-x" title="Hide" aria-label="Hide status">×</button>
   </div>
   <div class="sb-track" id="sb-track" hidden><i id="sb-fill"></i></div>
-  <div class="sb-detail" id="sb-detail">Nothing running. Press <b>Get latest postings</b> to check every board for new roles.</div>
-</section>
-<div class="out" id="run-out" hidden></div>
-<footer id="foot"></footer>
+  <div class="sb-detail" id="sb-detail">Nothing running</div>
+  <div class="sb-eta" id="sb-eta"></div>
+</aside>
 
 <script id="data" type="application/json">{{ rows|tojson }}</script>
 <script>
@@ -178,6 +180,8 @@ $('f-clear').addEventListener('click', () => {
   render();
 });
 
+$('sb-x').addEventListener('click', () => { $('statusbox').hidden = true; });
+
 document.querySelectorAll('thead th[data-k]').forEach(th => {
   th.tabIndex = 0;
   th.style.cursor = 'pointer';
@@ -227,14 +231,16 @@ function mins(seconds) {
 }
 
 function setIdle() {
+  $('statusbox').className = 'statusbox idle';
   $('sb-dot').className = 'sb-dot';
   $('sb-title').textContent = 'All jobs idle';
   $('sb-eta').textContent = '';
   $('sb-track').hidden = true;
-  $('sb-detail').innerHTML = 'Nothing running. Press <b>Get latest postings</b> to check every board for new roles.';
+  $('sb-detail').textContent = 'Nothing running';
 }
 
 function setRunning(task, d) {
+  $('statusbox').className = 'statusbox';
   $('sb-dot').className = 'sb-dot on';
   $('sb-title').textContent = NAME[task] || task;
   $('sb-eta').textContent = mins(d.eta);
@@ -242,8 +248,8 @@ function setRunning(task, d) {
     $('sb-track').hidden = false;
     $('sb-fill').style.width = (d.percent || 0) + '%';
     $('sb-detail').textContent =
-      `${d.percent}% · ${d.done.toLocaleString()} of ${d.total.toLocaleString()} boards`
-      + (d.current ? ` · now reading ${d.current}` : '');
+      `${d.percent}% · ${d.done.toLocaleString()}/${d.total.toLocaleString()} boards`
+      + (d.current ? ` · ${d.current}` : '');
   } else {
     $('sb-track').hidden = true;
     $('sb-detail').textContent = d.progress || 'starting…';
