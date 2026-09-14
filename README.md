@@ -232,6 +232,31 @@ SuccessFactors, BambooHR, and custom in-house sites.
 **Rule:** one scraper module per **ATS type**, never per company. A company is a
 tenant of an ATS, not a portal. Adding a company is a config/DB row, never code.
 
+Workday later moved **into** scope (`scraper/workday.py`): its public career-site
+API turned out to be reachable without JS, and it is where the large employers
+are. The rest of the "out of scope" list stayed out, and the reason is no longer
+only effort — it is `robots.txt`. Checked 2026-09-14 against the campus ATS
+directory in `universities/data`:
+
+| ATS | schools | what `robots.txt` says to `User-agent: *` |
+|---|---|---|
+| NEOGOV (`schooljobs.com`, `governmentjobs.com`) | 94 | `Disallow: /` — search engines whitelisted, nobody else |
+| PeopleAdmin (`*.peopleadmin.com`) | 50 | `Disallow: /`, with `/postings` opened to Twitterbot only |
+| Paycom | 32 | `Disallow: /` but **allows** `/api/ats/job-postings/` — and then serves a block page to any client that asks |
+| UKG / UltiPro | 15 | `Allow: */JobBoard/`, **`Disallow: */JobBoardView`** — the HTML page is open, the JSON listing behind it is not |
+| ADP | 31 | `robots.txt` redirects to a login; no answer to read |
+
+The JSON is real — UltiPro returns clean titles and city/state locations — and
+it is a line this tool does not cross. `http.respect_robots` stays `true`
+(§C5), which means these four platforms are unreachable to us regardless of how
+much work we put in, and no amount of scraper code changes that. The honest
+consequence is worth stating plainly: **~220 campus boards, the majority of the
+higher-ed inventory, cannot be scraped by this tool.**
+
+What is left for universities is what already works: **Workday and Greenhouse**,
+which together carry 46 distinct campus boards and need no new code at all
+(`universities/import_boards.py`).
+
 ### §C3 — Scope: the company list
 Goal is the widest net, not a hand-curated shortlist.
 
