@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}{{ job.company }} — {{ job.title }}{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>{{ job.title }}</h1>
+    <div class="sub">{{ job.company }} · <a href="/">back to all roles</a></div>
+  </div>
+  <div class="row">
+    <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open the application form</a>
+  </div>
+</header>
+
+<div class="meta">
+  <span>Fit <b>{{ job.score }}%</b></span>
+  <span>Posted <b>{{ job.age }}</b></span>
+  {% if job.workplace %}<span>Workplace <b>{{ job.workplace }}</b></span>{% endif %}
+  {% if job.experience %}<span>Wants <b>{{ job.experience }}</b></span>{% endif %}
+  {% if job.salary %}<span>Pays <b>{{ job.salary }}</b></span>{% endif %}
+  <span>Board <b>{{ job.board }}</b></span>
+  {% if job.location %}<span>{{ job.location }}</span>{% endif %}
+</div>
+
+<section class="card">
+  <h2>Prepare the application</h2>
+  <div class="steps">
+
+    <div class="step">
+      <span class="n">1</span>
+      <div>
+        <b>Gather the packet</b>
+        <div class="sub">A folder named for this company, holding the job, your tailored
+          resume and the letter. Worth having later: when they ring about this role in
+          three weeks, it is the only record of what you actually sent.</div>
+        <div class="row" style="margin-top:7px">
+          <button class="btn" data-act="packet">Build packet</button>
+        </div>
+        <div class="out" id="out-packet" hidden></div>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="n">2</span>
+      <div>
+        <b>Tailor the resume</b>
+        <div class="sub">Copy the prompt, paste it into any chat, paste the reply back.
+          Free, no API key. A reply that invents a skill, number or date is rejected, not used.</div>
+        <div class="row" style="margin-top:7px">
+          <button class="btn" data-brief="resume">Get the prompt</button>
+          <button class="btn" data-copy="resume" hidden>Copy to clipboard</button>
+        </div>
+        <textarea id="prompt-resume" hidden readonly aria-label="Prompt to paste"></textarea>
+        <textarea id="reply-resume" hidden placeholder="Paste the model's JSON reply here" aria-label="Model reply"></textarea>
+        <div class="row" style="margin-top:7px">
+          <button class="btn primary" data-accept="resume" hidden>Check it and save the resume</button>
+        </div>
+        <div class="out" id="out-resume" hidden></div>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="n">3</span>
+      <div>
+        <b>Write the cover letter</b>
+        <div class="sub">Same loop. It may name this company and their products, but still
+          cannot claim a skill your resume lacks — even one this posting asks for.</div>
+        <div class="row" style="margin-top:7px">
+          <button class="btn" data-brief="letter">Get the prompt</button>
+          <button class="btn" data-copy="letter" hidden>Copy to clipboard</button>
+        </div>
+        <textarea id="prompt-letter" hidden readonly aria-label="Prompt to paste"></textarea>
+        <textarea id="reply-letter" hidden placeholder="Paste the model's JSON reply here" aria-label="Model reply"></textarea>
+        <div class="row" style="margin-top:7px">
+          <button class="btn primary" data-accept="letter" hidden>Check it and save the letter</button>
+        </div>
+        <div class="out" id="out-letter" hidden></div>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="n">4</span>
+      <div>
+        <b>Apply, then record it</b>
+        <div class="sub">Upload the two files on their form. Then set the status here so
+          this role stops competing for your attention.</div>
+        <div class="row" style="margin-top:7px">
+          <select id="status" aria-label="Application status">
+            {% for s in statuses %}
+            <option value="{{ s }}" {% if s == job.status %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn" id="save-status">Save status</button>
+        </div>
+        <div class="out" id="out-status" hidden></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+{% if requirements %}
+<section class="card">
+  <h2>What they ask for</h2>
+  <div class="jd">{{ requirements }}</div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Full posting</h2>
+  <div class="jd">{{ description }}</div>
+</section>
+
+<script>
+const JOB = {{ job.id }};
+const $ = id => document.getElementById(id);
+const show = (id, text, kind) => {
+  const el = $(id); el.hidden = false;
+  el.className = 'out' + (kind ? ' ' + kind : ''); el.textContent = text;
+};
+
+document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', async e => {
+  const act = e.currentTarget.dataset.act;
+  e.currentTarget.disabled = true;
+  show('out-' + act, 'Working…');
+  const r = await fetch(`/job/${JOB}/${act}`, {method:'POST'});
+  const d = await r.json();
+  e.currentTarget.disabled = false;
+  show('out-' + act, d.output || d.error, d.ok ? 'good' : 'bad');
+}));
+
+document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click', async e => {
+  const kind = e.currentTarget.dataset.brief;
+  e.currentTarget.disabled = true;
+  show('out-' + kind, 'Building the prompt…');
+  const r = await fetch(`/job/${JOB}/brief-text?kind=${kind}`);
+  const d = await r.json();
+  e.currentTarget.disabled = false;
+  if (!d.ok) { show('out-' + kind, d.error, 'bad'); return; }
+  $('prompt-' + kind).value = d.text;
+  $('prompt-' + kind).hidden = false;
+  $('reply-' + kind).hidden = false;
+  document.querySelector(`[data-copy="${kind}"]`).hidden = false;
+  document.querySelector(`[data-accept="${kind}"]`).hidden = false;
+  show('out-' + kind, 'Copy the prompt, paste it into any chat, then paste the JSON reply below.');
+}));
+
+document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async e => {
+  const kind = e.currentTarget.dataset.copy;
+  await navigator.clipboard.writeText($('prompt-' + kind).value);
+  e.currentTarget.textContent = 'Copied';
+  setTimeout(() => { e.currentTarget.textContent = 'Copy to clipboard'; }, 1800);
+}));
+
+document.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('click', async e => {
+  const kind = e.currentTarget.dataset.accept;
+  const reply = $('reply-' + kind).value.trim();
+  if (!reply) { show('out-' + kind, 'Paste the reply first.', 'bad'); return; }
+  e.currentTarget.disabled = true;
+  show('out-' + kind, 'Checking it for invented claims…');
+  const body = new FormData(); body.append('reply', reply); body.append('kind', kind);
+  const r = await fetch(`/job/${JOB}/accept`, {method:'POST', body});
+  const d = await r.json();
+  e.currentTarget.disabled = false;
+  show('out-' + kind, d.output || d.error, d.ok ? 'good' : 'bad');
+}));
+
+$('save-status').addEventListener('click', async () => {
+  const body = new FormData(); body.append('status', $('status').value);
+  const r = await fetch(`/job/${JOB}/status`, {method:'POST', body});
+  const d = await r.json();
+  show('out-status', d.ok ? `Marked ${d.status}.` : d.error, d.ok ? 'good' : 'bad');
+});
+</script>
+{% endblock %}
