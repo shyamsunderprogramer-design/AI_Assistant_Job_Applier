@@ -8,6 +8,17 @@
   <div class="row">
     <button class="btn primary" id="run-scrape">Get latest postings</button>
     <button class="btn" id="run-score">Re-score</button>
+    <div class="statusbox idle" id="statusbox" aria-live="polite">
+      <span class="sb-dot" id="sb-dot"></span>
+      <div class="sb-body">
+        <div class="sb-line">
+          <span class="sb-title" id="sb-title">All jobs idle</span>
+          <span class="sb-eta" id="sb-eta"></span>
+        </div>
+        <div class="sb-track" id="sb-track" hidden><i id="sb-fill"></i></div>
+        <div class="sb-detail" id="sb-detail">Nothing running</div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -72,16 +83,6 @@
 <div class="out" id="run-out" hidden></div>
 <footer id="foot"></footer>
 
-<aside class="statusbox idle" id="statusbox" aria-live="polite">
-  <div class="sb-head">
-    <span class="sb-dot" id="sb-dot"></span>
-    <span class="sb-title" id="sb-title">All jobs idle</span>
-    <button class="sb-x" id="sb-x" title="Hide" aria-label="Hide status">×</button>
-  </div>
-  <div class="sb-track" id="sb-track" hidden><i id="sb-fill"></i></div>
-  <div class="sb-detail" id="sb-detail">Nothing running</div>
-  <div class="sb-eta" id="sb-eta"></div>
-</aside>
 
 <script id="data" type="application/json">{{ rows|tojson }}</script>
 <script>
@@ -179,8 +180,6 @@ $('f-clear').addEventListener('click', () => {
     c.setAttribute('aria-pressed','false'));
   render();
 });
-
-$('sb-x').addEventListener('click', () => { $('statusbox').hidden = true; });
 
 document.querySelectorAll('thead th[data-k]').forEach(th => {
   th.tabIndex = 0;
