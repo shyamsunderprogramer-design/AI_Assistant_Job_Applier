@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
@@ -278,6 +279,13 @@ def task_pid_file(task: str) -> Path:
     return PROJECT_ROOT / "data" / f"webapp_{task}.pid"
 
 
+def task_started_at(task: str) -> float | None:
+    try:
+        return float(task_pid_file(task).read_text().splitlines()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def task_pid(task: str) -> int | None:
     """The pid of a run in flight, or None.
 
@@ -286,8 +294,8 @@ def task_pid(task: str) -> int | None:
     """
     path = task_pid_file(task)
     try:
-        pid = int(path.read_text().strip())
-    except (OSError, ValueError):
+        pid = int(path.read_text().splitlines()[0].strip())
+    except (OSError, ValueError, IndexError):
         return None
     try:
         os.kill(pid, 0)          # signal 0 just asks "are you there?"
@@ -315,34 +323,81 @@ def run_task(task: str):
         # of scraping along with it.
         start_new_session=True,
     )
-    task_pid_file(task).write_text(str(process.pid))
+    task_pid_file(task).write_text(f"{process.pid}\n{time.time()}")
     return jsonify(ok=True, started=True)
+
+
+def _first_log_time(lines: list[str]) -> float | None:
+    """When this run actually began, from its own first timestamp."""
+    from datetime import datetime
+
+    for line in lines:
+        stamp = line.split(" ", 1)[0]
+        try:
+            clock = datetime.strptime(stamp, "%H:%M:%S").time()
+        except ValueError:
+            continue
+        today = datetime.now()
+        started = today.replace(hour=clock.hour, minute=clock.minute,
+                                second=clock.second, microsecond=0)
+        if started > today:          # ran before midnight
+            started = started.replace(day=today.day - 1) if today.day > 1 else started
+        return started.timestamp()
+    return None
+
+
+def board_count() -> int:
+    """How many boards a scrape will walk — the denominator for progress."""
+    from db.models import Company
+    with get_session() as session:
+        return session.query(Company).filter(Company.active.is_(True)).count()
 
 
 @app.get("/run/<task>/status")
 def run_status(task: str):
-    """Whether it is still going, and the last thing it said."""
+    """How far along, how much longer, and the last thing it said."""
     if task not in TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
 
     running = task_pid(task) is not None
     path = task_log(task)
-    tail, progress = "", None
+    tail, progress, done, total, eta, current = "", None, 0, 0, None, None
     if path.exists():
         lines = [ln for ln in path.read_text(errors="replace").splitlines() if ln.strip()]
         tail = "\n".join(lines[-12:])
-        # Surface the runner's own progress line rather than inventing one.
         for line in reversed(lines):
             if "seen" in line and "match" in line:
                 progress = " ".join(line.split()[-9:])
                 break
+
+        if task in ("scrape", "daily"):
+            # One line per board finished. Counting them is honest progress;
+            # a timer would only be guessing.
+            done = sum(1 for ln in lines if "scraper.runner" in ln and " seen " in ln)
+            total = board_count()
+            parts = [ln for ln in lines if "scraper.runner" in ln and " seen " in ln]
+            if parts:
+                fields = parts[-1].split()
+                current = fields[4] if len(fields) > 4 else None
+            # A run started before the pid file carried a timestamp still has
+            # one: its first log line. The file's mtime is useless here — it is
+            # rewritten every second, so it always reads as "just now" and the
+            # rate comes out absurd.
+            started = task_started_at(task) or _first_log_time(lines)
+            if running and started and done > 2:
+                rate = done / max(time.time() - started, 1)
+                eta = int((total - done) / rate) if rate > 0 else None
     # Without a live pid the run is over; the log's own last word says whether
     # it got there, which survives an app restart where an exit code does not.
     finished = not running and bool(tail)
     ok_finish = finished and any(
         marker in tail for marker in ("Companies scraped", "Scored", "Exported", "Saved to"))
-    return jsonify(ok=True, running=running, tail=tail, progress=progress,
-                   exit=None if running else (0 if ok_finish else 1))
+    return jsonify(
+        ok=True, running=running, tail=tail, progress=progress,
+        done=done, total=total, current=current, eta=eta,
+        percent=round(done / total * 100, 1) if total else None,
+        exit=None if running else (0 if ok_finish else 1),
+    )
 
 
 def main() -> int:

@@ -114,3 +114,24 @@ footer{margin-top:26px;padding-top:14px;border-top:1px solid var(--line);
 thead th[data-k]{user-select:none}
 thead th[aria-sort]{color:var(--signal-ink)}
 thead th .ar{font-size:9px;opacity:.75}
+
+/* status box — says what is happening, or plainly that nothing is */
+.statusbox{margin-top:14px;background:var(--surface);border:1px solid var(--line);
+  border-radius:7px;padding:13px 16px}
+.sb-head{display:flex;align-items:center;gap:9px}
+.sb-dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+.sb-dot.on{background:var(--signal)}
+.sb-dot.done{background:var(--good)}
+.sb-dot.bad{background:var(--crit)}
+@media (prefers-reduced-motion:no-preference){
+  .sb-dot.on{animation:sbpulse 1.8s ease-in-out infinite}
+  @keyframes sbpulse{0%,100%{opacity:1}50%{opacity:.35}}
+}
+.sb-title{font-weight:600}
+.sb-eta{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted);
+  font-variant-numeric:tabular-nums}
+.sb-track{height:6px;background:var(--hair);border-radius:3px;overflow:hidden;margin-top:9px}
+.sb-track i{display:block;height:100%;background:var(--signal);border-radius:3px;width:0}
+@media (prefers-reduced-motion:no-preference){.sb-track i{transition:width .5s ease}}
+.sb-detail{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:7px;
+  font-variant-numeric:tabular-nums}

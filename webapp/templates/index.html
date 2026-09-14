@@ -69,6 +69,15 @@
   </table>
 </div>
 
+<section class="statusbox" id="statusbox">
+  <div class="sb-head">
+    <span class="sb-dot" id="sb-dot"></span>
+    <span class="sb-title" id="sb-title">All jobs idle</span>
+    <span class="sb-eta" id="sb-eta"></span>
+  </div>
+  <div class="sb-track" id="sb-track" hidden><i id="sb-fill"></i></div>
+  <div class="sb-detail" id="sb-detail">Nothing running. Press <b>Get latest postings</b> to check every board for new roles.</div>
+</section>
 <div class="out" id="run-out" hidden></div>
 <footer id="foot"></footer>
 
@@ -208,18 +217,59 @@ $('upload').addEventListener('submit', async e => {
 // A scrape takes about half an hour. Start it, then watch — the button stays
 // honest about what is happening instead of appearing to hang.
 const LABEL = {scrape: 'Get latest postings', score: 'Re-score'};
+const NAME = {scrape: 'Fetching new postings', score: 'Re-scoring against your resume'};
+
+function mins(seconds) {
+  if (seconds === null || seconds === undefined) return '';
+  if (seconds < 90) return 'under a minute left';
+  const m = Math.round(seconds / 60);
+  return m < 60 ? `about ${m} min left` : `about ${(m/60).toFixed(1)} hr left`;
+}
+
+function setIdle() {
+  $('sb-dot').className = 'sb-dot';
+  $('sb-title').textContent = 'All jobs idle';
+  $('sb-eta').textContent = '';
+  $('sb-track').hidden = true;
+  $('sb-detail').innerHTML = 'Nothing running. Press <b>Get latest postings</b> to check every board for new roles.';
+}
+
+function setRunning(task, d) {
+  $('sb-dot').className = 'sb-dot on';
+  $('sb-title').textContent = NAME[task] || task;
+  $('sb-eta').textContent = mins(d.eta);
+  if (d.total) {
+    $('sb-track').hidden = false;
+    $('sb-fill').style.width = (d.percent || 0) + '%';
+    $('sb-detail').textContent =
+      `${d.percent}% · ${d.done.toLocaleString()} of ${d.total.toLocaleString()} boards`
+      + (d.current ? ` · now reading ${d.current}` : '');
+  } else {
+    $('sb-track').hidden = true;
+    $('sb-detail').textContent = d.progress || 'starting…';
+  }
+}
+
 async function watch(task, button) {
   const out = $('run-out');
   out.hidden = false; out.className = 'out';
   const poll = async () => {
     const d = await (await fetch(`/run/${task}/status`)).json();
-    out.textContent = (d.progress ? `${d.progress}\n\n` : '') + (d.tail || 'starting…');
-    if (d.running) { setTimeout(poll, 3000); return; }
+    out.textContent = d.tail || 'starting…';
+    if (d.running) { setRunning(task, d); setTimeout(poll, 3000); return; }
     button.disabled = false; button.textContent = LABEL[task];
     out.className = 'out ' + (d.exit === 0 ? 'good' : 'bad');
     if (d.exit === 0) {
-      out.textContent += '\n\nDone. Reloading with the new postings…';
+      $('sb-dot').className = 'sb-dot done';
+      $('sb-title').textContent = 'Finished';
+      $('sb-eta').textContent = '';
+      $('sb-track').hidden = true;
+      $('sb-detail').textContent = 'Reloading with the new postings…';
       setTimeout(() => location.reload(), 2500);
+    } else {
+      setIdle();
+      $('sb-title').textContent = 'Stopped before finishing';
+      $('sb-dot').className = 'sb-dot bad';
     }
   };
   poll();
