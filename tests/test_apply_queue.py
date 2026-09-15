@@ -184,13 +184,40 @@ def test_company_names_match_regardless_of_case_or_spacing():
     assert len(build_queue(jobs, limit=10, now=NOW)) == 1
 
 
-def test_a_company_applied_to_earlier_is_skipped_entirely():
-    """Carries across runs: a company applied to yesterday gets nothing today."""
+def test_a_company_applied_to_an_hour_ago_waits():
+    """Not "never again" — just not yet. Half a day between applications to the
+    same employer, so a company with several good roles hears from you this
+    afternoon and again tomorrow, rather than five times in a minute."""
     jobs = [FakeJob(id=1, company="Acme"), FakeJob(id=2, company="Globex")]
 
-    queue = build_queue(jobs, limit=10, already_applied_to=["acme"], now=NOW)
+    queue = build_queue(jobs, limit=10, last_applied={"acme": ago(hours=1)}, now=NOW)
 
     assert [c.company for c in queue] == ["Globex"]
+
+
+def test_the_same_company_comes_round_again_after_the_cooldown():
+    """The point of spacing rather than excluding: a company with three good
+    roles eventually receives three applications, one at a time."""
+    jobs = [FakeJob(id=1, company="Acme"), FakeJob(id=2, company="Globex")]
+
+    queue = build_queue(jobs, limit=10, last_applied={"acme": ago(hours=13)}, now=NOW)
+
+    assert {c.company for c in queue} == {"Acme", "Globex"}
+
+
+def test_the_cooldown_length_is_tunable():
+    jobs = [FakeJob(id=1, company="Acme")]
+
+    assert build_queue(jobs, limit=10, last_applied={"acme": ago(hours=20)},
+                       cooldown_hours=24, now=NOW) == []
+    assert len(build_queue(jobs, limit=10, last_applied={"acme": ago(hours=20)},
+                           cooldown_hours=12, now=NOW)) == 1
+
+
+def test_a_company_never_applied_to_is_free():
+    jobs = [FakeJob(id=1, company="Acme")]
+    assert len(build_queue(jobs, limit=10, last_applied={"acme": None}, now=NOW)) == 1
+    assert len(build_queue(jobs, limit=10, last_applied={}, now=NOW)) == 1
 
 
 def test_the_per_company_limit_can_be_raised_deliberately():

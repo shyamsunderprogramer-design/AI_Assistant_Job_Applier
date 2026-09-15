@@ -110,6 +110,12 @@ class Job(Base):
     is_open: Mapped[bool] = mapped_column(default=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # When an application actually went out. `status = "Applied"` says that it
+    # did; this says when, which is what lets applications to one employer be
+    # spaced rather than merely capped. Null on every row that predates the
+    # apply step, and null is read as "long ago" so old rows never block.
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Facts the posting states about itself, parsed from its own text by
     # jobfields.py. NULL means the posting did not say — never "unknown" as a
     # word, or every filter would have to parse English back out. These are
