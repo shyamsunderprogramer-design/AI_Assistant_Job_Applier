@@ -40,7 +40,43 @@ resume:
   overwrite: false
 
   # ---------------------------------------------------------------------
-  # Cost control. Tailoring is the only part of this tool that spends money.
+  # Which model writes the tailored resume.
+  #
+  # Tailoring and cover letters are the ONLY parts of this tool that need a
+  # model at all. Scraping, scoring, export and the whole daily run are
+  # offline arithmetic and string matching, and will keep working with no
+  # model, no key and no network.
+  #
+  #   ollama     a model on this machine. Free, private, no key, works
+  #              offline. Slower, and smaller than a frontier model.
+  #   anthropic  the API. Costs money (see the cap below), needs
+  #              ANTHROPIC_API_KEY in .env.
+  #
+  # The safety rule does not change with the choice: whatever writes the text,
+  # resume/guard.py re-checks every skill, metric, year and entity against
+  # your base resume, and a tailoring that invents anything is rejected.
+  # ---------------------------------------------------------------------
+  provider: ollama
+
+  ollama:
+    host: "http://localhost:11434"
+    # `ollama list` shows what is installed. Bigger follows instructions
+    # better; smaller answers faster.
+    model: "qwen3.5:9b"
+    # A resume plus a job description plus the reply runs well past Ollama's
+    # 4k default, and an overlong prompt is truncated from the START — which
+    # is where the resume is. Too small does not fail loudly; it quietly
+    # tailors against half a resume.
+    num_ctx: 16384
+    # First call after a reboot spends minutes loading weights from disk.
+    timeout_seconds: 900
+
+  anthropic:
+    model: "claude-opus-5"
+
+  # ---------------------------------------------------------------------
+  # Cost control. Applies to the `anthropic` provider only — a local model
+  # has nothing to meter.
   #
   # Hard ceiling for ONE `tailor` run, in USD. The projected cost of each
   # call is checked BEFORE it is sent, and the run stops cleanly when the

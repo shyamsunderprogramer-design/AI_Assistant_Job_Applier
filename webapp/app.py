@@ -456,6 +456,21 @@ def run_task(task: str):
     if task_pid(task):
         return jsonify(ok=True, started=False, note="already running")
 
+    # The 6am run does the same work from launchd, and it takes hours. Without
+    # this check, pressing the button during it started a SECOND full scrape:
+    # every board fetched twice, and two processes writing one SQLite file
+    # that is not in WAL mode. The scheduled run already holds a lock dir; the
+    # button has to respect it rather than race it.
+    blocking = _scheduled_run_holding(task)
+    if blocking:
+        return jsonify(
+            ok=False,
+            error=(f"The scheduled {blocking} run is going right now — it does "
+                   f"the same work, and started at {_lock_started(blocking)}.\n"
+                   f"Starting another would fetch every board twice. Watch this "
+                   f"one instead, or wait for it to finish."),
+        ), 409
+
     log_path = task_log(task)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     handle = log_path.open("w")          # each run starts a fresh log
@@ -468,6 +483,33 @@ def run_task(task: str):
     )
     task_pid_file(task).write_text(f"{process.pid}\n{time.time()}")
     return jsonify(ok=True, started=True)
+
+
+def _scheduled_run_holding(task: str) -> str | None:
+    """The launchd task whose work overlaps this one, if it is running now.
+
+    tools/daily_pipeline.sh takes a lock directory per task, and `daily` chains
+    scrape -> score -> export -> digest. So a manual scrape or score during a
+    daily run is duplicated work, not parallel work.
+    """
+    if task not in ("scrape", "score", "daily"):
+        return None
+    for held in ("daily", task):
+        lock = PROJECT_ROOT / "data" / f"{held}.lock"
+        if lock.is_dir():
+            return held
+    return None
+
+
+def _lock_started(task: str) -> str:
+    """When the holding run began, read off the lock directory itself."""
+    from datetime import datetime
+
+    lock = PROJECT_ROOT / "data" / f"{task}.lock"
+    try:
+        return datetime.fromtimestamp(lock.stat().st_mtime).strftime("%H:%M")
+    except OSError:
+        return "unknown"
 
 
 def _first_log_time(lines: list[str]) -> float | None:

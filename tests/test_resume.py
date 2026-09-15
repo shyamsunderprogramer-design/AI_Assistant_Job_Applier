@@ -6,7 +6,8 @@ from docx import Document
 from resume.guard import check_no_fabrication
 from resume.parser import find_base_resume, is_bullet, looks_like_heading, parse_resume, strip_bullet
 from resume.scorer import content_terms, jd_keyword_weights, score_resume
-from resume.tailor import TailorResult, _extract_json
+from resume.llm import extract_json as _extract_json
+from resume.tailor import TailorResult
 from resume.writer import output_filename, write_review_note, write_tailored_resume
 
 BASE_RESUME = """JANE DOE
