@@ -61,8 +61,10 @@ def test_fresh_beats_a_better_score():
     """The rule that is easy to get backwards: a 95% match posted a month ago
     is worth less than an 80% match posted this morning, because four hundred
     CVs are already in front of it."""
-    stale_great = FakeJob(id=1, ats_match_score=0.95, posted_at=ago(days=30))
-    fresh_good = FakeJob(id=2, ats_match_score=0.80, posted_at=ago(hours=2))
+    stale_great = FakeJob(id=1, company="Globex", ats_match_score=0.95,
+                          posted_at=ago(days=30))
+    fresh_good = FakeJob(id=2, company="Initech", ats_match_score=0.80,
+                         posted_at=ago(hours=2))
 
     queue = build_queue([stale_great, fresh_good], limit=10, now=NOW)
 
@@ -70,8 +72,10 @@ def test_fresh_beats_a_better_score():
 
 
 def test_score_still_decides_within_one_band():
-    weaker = FakeJob(id=1, ats_match_score=0.70, posted_at=ago(hours=5))
-    better = FakeJob(id=2, ats_match_score=0.92, posted_at=ago(hours=6))
+    weaker = FakeJob(id=1, company="Globex", ats_match_score=0.70,
+                     posted_at=ago(hours=5))
+    better = FakeJob(id=2, company="Initech", ats_match_score=0.92,
+                     posted_at=ago(hours=6))
 
     queue = build_queue([weaker, better], limit=10, now=NOW)
 
@@ -79,8 +83,10 @@ def test_score_still_decides_within_one_band():
 
 
 def test_an_unscored_posting_sorts_last_within_its_band():
-    scored = FakeJob(id=1, ats_match_score=0.60, posted_at=ago(hours=1))
-    unscored = FakeJob(id=2, ats_match_score=None, posted_at=ago(hours=1))
+    scored = FakeJob(id=1, company="Globex", ats_match_score=0.60,
+                     posted_at=ago(hours=1))
+    unscored = FakeJob(id=2, company="Initech", ats_match_score=None,
+                       posted_at=ago(hours=1))
 
     assert [c.job_id for c in build_queue([unscored, scored], limit=10, now=NOW)] == [1, 2]
 
@@ -112,16 +118,17 @@ def test_a_weak_match_can_be_excluded():
 
 
 def test_the_daily_cap_is_the_last_word():
-    jobs = [FakeJob(id=i, posted_at=ago(hours=i)) for i in range(1, 60)]
+    jobs = [FakeJob(id=i, company=f"Company{i}", posted_at=ago(hours=i))
+            for i in range(1, 60)]
     assert len(build_queue(jobs, limit=30, now=NOW)) == 30
 
 
 # -- saying what is about to happen ----------------------------------------
 
 def test_a_run_can_describe_itself_before_it_starts():
-    jobs = [FakeJob(id=1, posted_at=ago(hours=2)),
-            FakeJob(id=2, posted_at=ago(hours=5)),
-            FakeJob(id=3, posted_at=ago(days=2))]
+    jobs = [FakeJob(id=1, company="Globex", posted_at=ago(hours=2)),
+            FakeJob(id=2, company="Initech", posted_at=ago(hours=5)),
+            FakeJob(id=3, company="Umbrella", posted_at=ago(days=2))]
 
     text = summarise(build_queue(jobs, limit=10, now=NOW))
 
@@ -134,3 +141,73 @@ def test_an_empty_queue_says_so_plainly():
 
 def test_every_band_has_a_name():
     assert set(BAND_NAMES) == {0, 1, 2, 3, 4, 5}
+
+
+# -- one application per employer ------------------------------------------
+
+def test_only_the_best_role_at_a_company_is_queued():
+    """The one pattern an employer can reliably see is several applications
+    arriving at THEIR board together. SpaceX alone has 74 open matches; without
+    this, the queue would send seventy-four."""
+    jobs = [
+        FakeJob(id=1, company="SpaceX", ats_match_score=0.70, posted_at=ago(hours=2)),
+        FakeJob(id=2, company="SpaceX", ats_match_score=0.93, posted_at=ago(hours=2)),
+        FakeJob(id=3, company="SpaceX", ats_match_score=0.85, posted_at=ago(hours=2)),
+    ]
+
+    queue = build_queue(jobs, limit=10, now=NOW)
+
+    assert len(queue) == 1
+    assert queue[0].job_id == 2            # the best one, not the first seen
+
+
+def test_freshness_still_decides_which_role_represents_a_company():
+    """Within a company, the same rule applies: a fresher posting wins even
+    with a lower score."""
+    jobs = [
+        FakeJob(id=1, company="Acme", ats_match_score=0.95, posted_at=ago(days=30)),
+        FakeJob(id=2, company="Acme", ats_match_score=0.72, posted_at=ago(hours=3)),
+    ]
+
+    assert [c.job_id for c in build_queue(jobs, limit=10, now=NOW)] == [2]
+
+
+def test_different_companies_are_all_kept():
+    jobs = [FakeJob(id=1, company="Acme"), FakeJob(id=2, company="Globex"),
+            FakeJob(id=3, company="Initech")]
+    assert len(build_queue(jobs, limit=10, now=NOW)) == 3
+
+
+def test_company_names_match_regardless_of_case_or_spacing():
+    jobs = [FakeJob(id=1, company="cloudflare", posted_at=ago(hours=1)),
+            FakeJob(id=2, company="  Cloudflare ", posted_at=ago(hours=1))]
+    assert len(build_queue(jobs, limit=10, now=NOW)) == 1
+
+
+def test_a_company_applied_to_earlier_is_skipped_entirely():
+    """Carries across runs: a company applied to yesterday gets nothing today."""
+    jobs = [FakeJob(id=1, company="Acme"), FakeJob(id=2, company="Globex")]
+
+    queue = build_queue(jobs, limit=10, already_applied_to=["acme"], now=NOW)
+
+    assert [c.company for c in queue] == ["Globex"]
+
+
+def test_the_per_company_limit_can_be_raised_deliberately():
+    jobs = [FakeJob(id=i, company="Acme", ats_match_score=0.9 - i / 100)
+            for i in range(1, 6)]
+    assert len(build_queue(jobs, limit=10, max_per_company=2, now=NOW)) == 2
+
+
+def test_the_daily_cap_counts_companies_not_postings():
+    """With one per company, a cap of 30 means thirty employers."""
+    jobs = []
+    for c in range(40):
+        for r in range(3):
+            jobs.append(FakeJob(id=c * 10 + r, company=f"Company{c}",
+                                posted_at=ago(hours=r + 1)))
+
+    queue = build_queue(jobs, limit=30, now=NOW)
+
+    assert len(queue) == 30
+    assert len({c.company for c in queue}) == 30
