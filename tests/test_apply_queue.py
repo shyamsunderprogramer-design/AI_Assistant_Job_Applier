@@ -1,0 +1,136 @@
+"""Ordering applications by freshness — offline, no network, no browser.
+
+A posting's age is the strongest thing we know about its odds: a recruiter
+reads the first applications to arrive and skims the rest. So these tests pin
+that freshness beats score, which is the one ordering rule that is easy to get
+backwards and expensive to get wrong.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+from apply.queue import BAND_NAMES, build_queue, freshness_band, summarise
+
+NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+
+
+@dataclass
+class FakeJob:
+    id: int = 1
+    company: str = "Acme"
+    title: str = "DevOps Engineer"
+    application_url: str = "https://job-boards.greenhouse.io/acme/jobs/1"
+    source: str = "greenhouse"
+    status: str = "Not Applied"
+    is_open: bool = True
+    ats_match_score: float | None = 0.80
+    posted_at: datetime | None = None
+    found_at: datetime | None = None
+
+
+def ago(**kw) -> datetime:
+    return NOW - timedelta(**kw)
+
+
+# -- the bands --------------------------------------------------------------
+
+def test_a_posting_from_this_morning_is_the_freshest_band():
+    assert freshness_band(ago(hours=3), None, NOW) == 0
+
+
+def test_the_bands_step_down_with_age():
+    assert freshness_band(ago(days=2), None, NOW) == 1
+    assert freshness_band(ago(days=5), None, NOW) == 2
+    assert freshness_band(ago(days=40), None, NOW) == 3
+
+
+def test_a_posting_with_no_date_but_seen_today_sits_below_dated_recent_ones():
+    """Some boards never say when a posting went up. "It appeared in today's
+    scrape" is real evidence, just weaker than a stated date."""
+    assert freshness_band(None, ago(hours=2), NOW) == 4
+    assert freshness_band(None, ago(days=9), NOW) == 5
+
+
+def test_a_naive_timestamp_is_treated_as_utc_not_rejected():
+    assert freshness_band(datetime(2026, 9, 15, 9, 0), None, NOW) == 0
+
+
+# -- the ordering rule ------------------------------------------------------
+
+def test_fresh_beats_a_better_score():
+    """The rule that is easy to get backwards: a 95% match posted a month ago
+    is worth less than an 80% match posted this morning, because four hundred
+    CVs are already in front of it."""
+    stale_great = FakeJob(id=1, ats_match_score=0.95, posted_at=ago(days=30))
+    fresh_good = FakeJob(id=2, ats_match_score=0.80, posted_at=ago(hours=2))
+
+    queue = build_queue([stale_great, fresh_good], limit=10, now=NOW)
+
+    assert [c.job_id for c in queue] == [2, 1]
+
+
+def test_score_still_decides_within_one_band():
+    weaker = FakeJob(id=1, ats_match_score=0.70, posted_at=ago(hours=5))
+    better = FakeJob(id=2, ats_match_score=0.92, posted_at=ago(hours=6))
+
+    queue = build_queue([weaker, better], limit=10, now=NOW)
+
+    assert [c.job_id for c in queue] == [2, 1]
+
+
+def test_an_unscored_posting_sorts_last_within_its_band():
+    scored = FakeJob(id=1, ats_match_score=0.60, posted_at=ago(hours=1))
+    unscored = FakeJob(id=2, ats_match_score=None, posted_at=ago(hours=1))
+
+    assert [c.job_id for c in build_queue([unscored, scored], limit=10, now=NOW)] == [1, 2]
+
+
+# -- what never reaches the queue ------------------------------------------
+
+def test_an_applied_job_is_never_queued_again():
+    assert build_queue([FakeJob(status="Applied")], limit=10, now=NOW) == []
+
+
+def test_a_closed_posting_is_not_queued():
+    assert build_queue([FakeJob(is_open=False)], limit=10, now=NOW) == []
+
+
+def test_a_board_with_no_filler_is_not_queued():
+    """Queuing a Workday job while only Greenhouse can be filled would promise
+    an application that cannot be made."""
+    assert build_queue([FakeJob(source="workday")], limit=10, now=NOW) == []
+
+
+def test_a_posting_with_nowhere_to_apply_is_not_queued():
+    assert build_queue([FakeJob(application_url="")], limit=10, now=NOW) == []
+
+
+def test_a_weak_match_can_be_excluded():
+    jobs = [FakeJob(id=1, ats_match_score=0.40), FakeJob(id=2, ats_match_score=0.85)]
+    queue = build_queue(jobs, limit=10, min_score=0.60, now=NOW)
+    assert [c.job_id for c in queue] == [2]
+
+
+def test_the_daily_cap_is_the_last_word():
+    jobs = [FakeJob(id=i, posted_at=ago(hours=i)) for i in range(1, 60)]
+    assert len(build_queue(jobs, limit=30, now=NOW)) == 30
+
+
+# -- saying what is about to happen ----------------------------------------
+
+def test_a_run_can_describe_itself_before_it_starts():
+    jobs = [FakeJob(id=1, posted_at=ago(hours=2)),
+            FakeJob(id=2, posted_at=ago(hours=5)),
+            FakeJob(id=3, posted_at=ago(days=2))]
+
+    text = summarise(build_queue(jobs, limit=10, now=NOW))
+
+    assert "2 under a day" in text and "1 1-3 days" in text
+
+
+def test_an_empty_queue_says_so_plainly():
+    assert summarise([]) == "nothing to apply to"
+
+
+def test_every_band_has_a_name():
+    assert set(BAND_NAMES) == {0, 1, 2, 3, 4, 5}
