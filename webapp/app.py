@@ -85,7 +85,12 @@ def job_row(job: Job) -> dict:
         "location": job.location or "",
         "url": job.application_url,
         "board": job.source,
-        "score": round((job.ats_match_score or 0) * 100),
+        # None means "not scored yet", which is not the same as scoring zero.
+        # `or 0` collapsed the two, so 995 postings that arrived in tonight's
+        # scrape and had simply never been through the scorer all displayed
+        # "Fit 0%" — which reads as "this job is a terrible match for you".
+        "score": (None if job.ats_match_score is None
+                  else round(job.ats_match_score * 100)),
         "age": age_label(job),
         "workplace": stated(workplace_label(job.workplace)),
         "experience": stated(experience_label(job.experience_min_years,
@@ -114,7 +119,8 @@ def index():
         statuses=STATUS_VALUES,
         resume=resume.name if resume else None,
         resume_dir=str(resume_dir()),
-        strong=sum(1 for r in rows if r["score"] >= 70),
+        strong=sum(1 for r in rows if r["score"] is not None and r["score"] >= 70),
+        unscored=sum(1 for r in rows if r["score"] is None),
         **last_run_stats(),
     )
 
