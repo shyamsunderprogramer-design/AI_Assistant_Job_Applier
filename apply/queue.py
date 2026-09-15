@@ -98,9 +98,17 @@ def _company_key(name: str) -> str:
     return " ".join((name or "").split()).lower()
 
 
+# How long to leave between two applications to the same employer. Half a day,
+# so a company with several good roles hears from you this afternoon and again
+# tomorrow morning, rather than five times in one minute.
+DEFAULT_COOLDOWN_HOURS = 12
+
+
 def build_queue(jobs, *, limit: int, min_score: float | None = None,
                 sources=FILLABLE, max_per_company: int = 1,
-                already_applied_to=(), now: datetime | None = None) -> list[Candidate]:
+                last_applied: dict | None = None,
+                cooldown_hours: int = DEFAULT_COOLDOWN_HOURS,
+                now: datetime | None = None) -> list[Candidate]:
     """Order postings for applying, freshest band first, best match within it.
 
     `max_per_company` is the one limit that matters for how this looks from the
@@ -116,8 +124,12 @@ def build_queue(jobs, *, limit: int, min_score: float | None = None,
     afternoon. One per company, the best one, is both better manners and a
     better application.
 
-    `already_applied_to` carries that across runs — a company applied to
-    yesterday should not receive another today.
+    So applications to one employer are SPACED rather than capped: their best
+    role goes now, their next-best after `cooldown_hours`, and so on. Over a
+    week a company with several good roles receives several applications, one
+    at a time, which is what a person doing this by hand would produce anyway.
+    `last_applied` maps a company to when it last heard from you; a company
+    absent from it, or with None, has never been applied to and is free.
 
     `jobs` is any iterable of rows with the attributes used below, so this can
     be tested without a database.
@@ -150,15 +162,24 @@ def build_queue(jobs, *, limit: int, min_score: float | None = None,
     # want, the first time a company appears IS its best posting — freshest
     # band, best score within it — so keeping the first is keeping the right
     # one, with no second pass to decide.
+    now = now or datetime.now(timezone.utc)
+    cooldown = timedelta(hours=max(0, cooldown_hours))
+    recent = {_company_key(name): _as_utc(when)
+              for name, when in (last_applied or {}).items()}
+
     seen: dict[str, int] = {}
-    applied = {_company_key(name) for name in already_applied_to}
     chosen: list[Candidate] = []
     for candidate in candidates:
         key = _company_key(candidate.company)
-        if key in applied:
-            continue                       # already have an application there
+
+        # Still cooling down from the last application to this employer. Not
+        # "never again" — just not yet.
+        last = recent.get(key)
+        if last is not None and (now - last) < cooldown:
+            continue
         if seen.get(key, 0) >= max_per_company:
             continue
+
         seen[key] = seen.get(key, 0) + 1
         chosen.append(candidate)
         if len(chosen) >= limit:
