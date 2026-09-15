@@ -1,0 +1,111 @@
+# The answers every application form asks for.
+#
+#   cp config/applicant.yaml.example config/applicant.yaml
+#   then edit config/applicant.yaml — it is gitignored, this example is not.
+#
+# WHY THIS FILE EXISTS AT ALL
+# Greenhouse, Lever, Ashby and Workday ask the same fifteen questions every
+# time. Typing them into a hundred forms is the single largest cost of a job
+# search, and it is the part a machine should do. Everything here is a fact
+# about you that you would type yourself — nothing is inferred, generated, or
+# guessed, and a field left blank is left blank on the form rather than
+# invented.
+#
+# WHAT IS DELIBERATELY NOT HERE
+# Open-ended questions ("why do you want to work here?") are not in this file
+# and never will be. They are answered per posting, by you, or drafted for you
+# to approve — never auto-filled from a template, because a templated answer
+# is worse than none and employers can tell.
+
+personal:
+  first_name: ""
+  last_name: ""
+  # The name as it appears on your right-to-work documents, if different.
+  legal_name: ""
+  email: ""
+  phone: ""                      # digits and +, e.g. "+1 479 555 0100"
+
+location:
+  city: ""
+  state: ""                      # two-letter for US, e.g. "AR"
+  postal_code: ""
+  country: "United States"
+  # Some forms want one line rather than parts.
+  street: ""
+
+links:
+  linkedin: ""
+  github: ""
+  portfolio: ""
+  other: ""
+
+# ---------------------------------------------------------------------------
+# WORK AUTHORISATION — the answers that must never be guessed.
+#
+# These are legal declarations on a real application. A wrong answer here is a
+# misrepresentation, not a typo, so the apply step will STOP rather than pick a
+# default for you. Fill both, and check them.
+# ---------------------------------------------------------------------------
+authorisation:
+  # Are you legally authorised to work in the country you are applying in?
+  authorised_to_work: null       # true / false
+  # Will you now or in the future require visa sponsorship?
+  requires_sponsorship: null     # true / false
+  # Free text, only if a form insists on detail. Leave blank otherwise.
+  visa_status: ""
+
+  # US federal contractors ask this. Leave null to decline to answer, which is
+  # always a permitted response.
+  security_clearance: null       # e.g. "None", "Active Secret", or null
+
+employment:
+  # Used where a form asks; leave blank to skip the question rather than
+  # answer it approximately.
+  current_employer: ""
+  current_title: ""
+  years_experience: null         # integer, or null to let the resume speak
+  notice_period: ""              # e.g. "2 weeks"
+  desired_salary: ""             # leave blank unless you want to name a number
+  willing_to_relocate: null      # true / false / null
+  earliest_start_date: ""        # "YYYY-MM-DD" or free text
+
+preferences:
+  # Where you will actually work. The scraper already filters on this; here it
+  # answers the form's own question.
+  work_types: ["remote", "hybrid", "onsite"]
+  # How you heard about the role. Honest default; edit if you prefer.
+  referral_source: "Company website"
+
+# ---------------------------------------------------------------------------
+# DEMOGRAPHIC QUESTIONS (EEO, veteran status, disability).
+#
+# Every one of these is voluntary by law in the US, and "decline to
+# self-identify" is a complete and normal answer. The default here is to
+# decline — not because declining is better, but because it is the only
+# default that cannot answer on your behalf. Change any of them to your real
+# answer if you would rather they were stated.
+# ---------------------------------------------------------------------------
+demographics:
+  gender: "decline"
+  race_ethnicity: "decline"
+  veteran_status: "decline"
+  disability_status: "decline"
+  hispanic_latino: "decline"
+
+# ---------------------------------------------------------------------------
+# HOW FAR THE APPLY STEP MAY GO.
+#
+# `stop_before_submit: true` fills the whole form, uploads the documents,
+# screenshots it, and leaves the Submit button for you. That is the default,
+# and README §C9 explains why: an unread application is the one failure this
+# tool cannot take back — a tailoring the guard rejected, or a screening
+# question answered wrong, is already sent.
+# ---------------------------------------------------------------------------
+apply:
+  stop_before_submit: true
+  # A ceiling on a bad day, whatever the setting above.
+  max_per_day: 10
+  # Never apply twice to the same posting, even across runs.
+  skip_already_applied: true
+  # Keep a screenshot and the exact resume file used, per application.
+  keep_evidence: true

@@ -55,8 +55,18 @@ resume:
   # The safety rule does not change with the choice: whatever writes the text,
   # resume/guard.py re-checks every skill, metric, year and entity against
   # your base resume, and a tailoring that invents anything is rejected.
+  #
+  # SET TO anthropic DELIBERATELY, 2026-09-15, after measuring the difference.
+  # qwen3.5:9b tailored a real DevSecOps posting and the guard rejected it for
+  # ten invented claims — STIG, SRG, ACAS, RMF, CUI, DAST — every one of them
+  # present in the JOB DESCRIPTION and absent from the resume. The model lifted
+  # defence-compliance vocabulary out of the posting and wrote it in as lived
+  # experience. The guard caught it, which is the system working; but a model
+  # that has to be caught on the first attempt is not the one to write the
+  # document you send to employers. Local stays available and free for anyone
+  # who prefers it (set provider: ollama) — it is not the default.
   # ---------------------------------------------------------------------
-  provider: ollama
+  provider: anthropic
 
   ollama:
     host: "http://localhost:11434"
