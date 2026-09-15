@@ -1,27 +1,31 @@
-"""Resume tailoring via the Claude API.
+"""Resume tailoring, by whichever model `resume/llm.py` is pointed at.
 
-Hard rule (README.md §C8): Claude may only rephrase, reorder, and
+Hard rule (README.md §C8): the model may only rephrase, reorder, and
 re-emphasise content already present in the base resume. Every output is run
 through `resume.guard` before it is written to disk; a tailoring that invents
 anything is rejected, not silently used.
+
+That rule is why the backend is swappable at all. The guard does not trust the
+model — it re-checks every skill, metric, year and entity against the base
+resume regardless of what produced the text. So a 27B model running on this
+laptop is held to exactly the same standard as a frontier model behind an API,
+and the only thing that changes when you switch is the bill.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
 from dataclasses import dataclass, field
-
-import anthropic
 
 from resume.cost import CallCost, Ledger, record_usage
 from resume.guard import GuardResult, check_no_fabrication
+from resume.llm import ProviderUnavailable, complete, extract_json, model_name
 from resume.parser import Resume
 
 log = logging.getLogger(__name__)
 
+# Kept for callers and tests that still name it; the model actually used comes
+# from config via `resume.llm.model_name`.
 MODEL = "claude-opus-5"
 
 SYSTEM_PROMPT = """You tailor an existing resume to a specific job description.
@@ -82,26 +86,6 @@ class TailorResult:
         return "\n".join(p for p in parts if p)
 
 
-def _client() -> anthropic.Anthropic:
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Add it to .env before running `tailor`."
-        )
-    return anthropic.Anthropic()
-
-
-def _extract_json(text: str) -> dict:
-    """Parse the model's JSON, tolerating a stray code fence."""
-    cleaned = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)\s*```", cleaned, re.S)
-    if fence:
-        cleaned = fence.group(1)
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("No JSON object found in the model response")
-    return json.loads(cleaned[start : end + 1])
-
-
 def build_prompt(resume: Resume, job_title: str, company: str, jd_text: str) -> str:
     """The user prompt for one tailoring call.
 
@@ -120,36 +104,30 @@ def tailor_resume(
     job_title: str,
     company: str,
     jd_text: str,
-    client: anthropic.Anthropic | None = None,
+    client=None,
     ledger: Ledger | None = None,
     cfg=None,
 ) -> TailorResult:
-    """Ask Claude to tailor the resume, then verify it invented nothing."""
-    client = client or _client()
+    """Tailor the resume with the configured model, then verify it invented nothing.
 
+    `client` is accepted and ignored except in tests that inject a fake; which
+    backend runs is a config decision (`resume.provider`), not a call-site one,
+    so that a daily run and a manual run can never disagree about it.
+    """
     user_prompt = build_prompt(resume, job_title, company, jd_text)
-
-    # Streaming: JD + resume + reasoning can be long, and streaming avoids
-    # HTTP timeouts on a big max_tokens.
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=16000,
-        system=SYSTEM_PROMPT,
-        thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": user_prompt}],
-    ) as stream:
-        response = stream.get_final_message()
+    answer = complete(SYSTEM_PROMPT, user_prompt, cfg, max_tokens=16000)
 
     cost = None
-    if ledger is not None and getattr(response, "usage", None) is not None:
-        cost = record_usage(ledger, MODEL, response.usage, cfg)
+    if ledger is not None and answer.usage is not None:
+        cost = record_usage(ledger, answer.model, answer.usage, cfg)
         log.info("Tailoring cost for %s at %s: %s", job_title, company, cost)
+    elif answer.free:
+        # Nothing to meter, and saying so beats a blank where a price was.
+        log.info("Tailored %s at %s with %s locally — no cost",
+                 job_title, company, answer.model)
 
-    if response.stop_reason == "refusal":
-        raise RuntimeError(f"Model declined the request: {response.stop_details}")
-
-    text = "".join(block.text for block in response.content if block.type == "text")
-    payload = _extract_json(text)
+    text = answer.text
+    payload = extract_json(text)
 
     result = TailorResult(
         summary=payload.get("summary"),
