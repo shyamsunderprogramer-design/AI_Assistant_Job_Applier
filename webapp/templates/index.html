@@ -131,7 +131,9 @@ function visible() {
   return ROWS.filter(r => {
     if (q && !((r.company+' '+r.title).toLowerCase().includes(q))) return false;
     if (state.remote && !['remote','hybrid'].includes(r.workplace)) return false;
-    if (state.strong && r.score < 70) return false;
+    // An unscored role is unknown, not weak — but it cannot claim to be a
+    // strong fit either, so the 70%+ filter still excludes it.
+    if (state.strong && (r.score === null || r.score < 70)) return false;
     if (state.paid && !r.salary) return false;
     if (state.fresh && r.status !== 'Not Applied') return false;
     if (state.recent && (r.ageDays === null || r.ageDays > 92)) return false;
@@ -156,7 +158,9 @@ function render() {
   $('rows').replaceChildren(...rows.map(r => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="num"><span class="sc sc-${band(r.score)}">${r.score}</span></td>
+      <td class="num">${r.score === null
+        ? '<span class="sc sc-none" title="Not scored yet — press Re-score">–</span>'
+        : `<span class="sc sc-${band(r.score)}">${r.score}</span>`}</td>
       <td class="num age"></td><td class="num dim w"></td><td class="num dim e"></td>
       <td class="num y"></td><td class="co"></td>
       <td class="ti"><a></a></td>
@@ -218,6 +222,27 @@ document.querySelectorAll('thead th[data-k]').forEach(th => {
   });
 });
 
+// Every fetch here goes through this, because none of them handled failure.
+// A dropped connection -- the app restarting under an open tab is the usual
+// way -- made `await fetch` throw, which killed the handler silently. For the
+// status poller that is worse than a stuck button: the loop dies, so the box
+// keeps saying "Fetching…" forever about a run that finished, or crashed, or
+// was never running at all.
+async function ask(url, options, ms = 120000) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), ms);
+  try {
+    const r = await fetch(url, {...(options || {}), signal: stop.signal});
+    const body = await r.text();
+    try { return JSON.parse(body); }
+    catch (err) { return {ok: false, error: `The server replied with ${r.status}, not JSON.`}; }
+  } catch (err) {
+    return {ok: false, error: err.name === 'AbortError'
+      ? 'The app stopped responding. Reload to see where things got to.'
+      : 'Lost contact with the app. If you restarted it, reload this page.'};
+  } finally { clearTimeout(timer); }
+}
+
 $('upload').addEventListener('submit', async e => {
   e.preventDefault();
   const out = $('upload-out');
@@ -225,8 +250,7 @@ $('upload').addEventListener('submit', async e => {
     out.textContent = 'Choose a file first.'; return; }
   const body = new FormData(); body.append('resume', $('file').files[0]);
   out.hidden = false; out.className = 'out'; out.textContent = 'Reading the resume and re-deriving your search…';
-  const r = await fetch('/upload', {method:'POST', body});
-  const d = await r.json();
+  const d = await ask('/upload', {method:'POST', body}, 180000);
   const s = d.search || {};
 
   // Show the search this resume produced, not just that a command ran. A
@@ -301,7 +325,15 @@ async function watch(task, button) {
   const out = $('run-out');
   out.hidden = false; out.className = 'out';
   const poll = async () => {
-    const d = await (await fetch(`/run/${task}/status`)).json();
+    const d = await ask(`/run/${task}/status`);
+    // A poll that cannot reach the app must stop claiming the run is going.
+    if (d.ok === false && d.error) {
+      button.disabled = false; button.textContent = LABEL[task];
+      out.className = 'out bad'; out.textContent = d.error;
+      setIdle(); $('sb-title').textContent = 'Lost contact'; 
+      $('sb-dot').className = 'sb-dot bad';
+      return;
+    }
     out.textContent = d.tail || 'starting…';
     if (d.running) { setRunning(task, d); setTimeout(poll, 3000); return; }
     button.disabled = false; button.textContent = LABEL[task];
@@ -325,7 +357,7 @@ async function watch(task, button) {
   const b = e.currentTarget;
   b.disabled = true;
   b.textContent = task === 'scrape' ? 'Fetching… (about 30 min)' : 'Scoring…';
-  const d = await (await fetch('/run/'+task, {method:'POST'})).json();
+  const d = await ask('/run/'+task, {method:'POST'});
   if (!d.ok) { b.disabled = false; b.textContent = LABEL[task];
     $('run-out').hidden = false; $('run-out').className='out bad';
     $('run-out').textContent = d.error; return; }
@@ -335,7 +367,7 @@ async function watch(task, button) {
 // If a run is already going when the page opens, pick it up rather than
 // pretending nothing is happening.
 ['scrape','score'].forEach(async task => {
-  const d = await (await fetch(`/run/${task}/status`)).json();
+  const d = await ask(`/run/${task}/status`);
   if (d.running) {
     const b = $('run-'+task);
     b.disabled = true;

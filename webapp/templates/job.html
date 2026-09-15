@@ -12,7 +12,7 @@
 </header>
 
 <div class="meta">
-  <span>Fit <b>{{ job.score }}%</b></span>
+  <span>{% if job.score is none %}<b>Not scored yet</b>{% else %}Fit <b>{{ job.score }}%</b>{% endif %}</span>
   <span>Posted <b>{{ job.age }}</b></span>
   {% if job.workplace %}<span>Workplace <b>{{ job.workplace }}</b></span>{% endif %}
   {% if job.experience %}<span>Wants <b>{{ job.experience }}</b></span>{% endif %}
@@ -133,12 +133,40 @@ const show = (id, text, kind) => {
   el.className = 'out' + (kind ? ' ' + kind : ''); el.textContent = text;
 };
 
+// Every fetch on this page goes through here, because none of them used to
+// handle failure. A dropped connection -- the app restarting underneath an
+// open tab is the usual way -- made `await fetch` throw, which aborted the
+// click handler before it could report anything. The button stayed disabled
+// and the box stayed on "Working…" until someone reloaded. One tab sat like
+// that for an hour while the server was answering the same request in two
+// seconds.
+async function ask(url, options, ms = 300000) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), ms);
+  try {
+    const r = await fetch(url, {...(options || {}), signal: stop.signal});
+    const body = await r.text();
+    try {
+      return JSON.parse(body);
+    } catch (err) {
+      // A proxy error page, or a crash that returned HTML. Say so, rather
+      // than throwing where nothing is listening.
+      return {ok: false, error: `The server replied with ${r.status}, not JSON.`};
+    }
+  } catch (err) {
+    return {ok: false, error: err.name === 'AbortError'
+      ? 'Gave up waiting after 5 minutes. The run may still be going — reload to see.'
+      : 'Lost contact with the app. If you restarted it, reload this page.'};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', async e => {
   const act = e.currentTarget.dataset.act;
   e.currentTarget.disabled = true;
   show('out-' + act, 'Working…');
-  const r = await fetch(`/job/${JOB}/${act}`, {method:'POST'});
-  const d = await r.json();
+  const d = await ask(`/job/${JOB}/${act}`, {method:'POST'});
   e.currentTarget.disabled = false;
   show('out-' + act, d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok && act === 'packet') {
@@ -152,8 +180,7 @@ document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click
   const kind = e.currentTarget.dataset.brief;
   e.currentTarget.disabled = true;
   show('out-' + kind, 'Building the prompt…');
-  const r = await fetch(`/job/${JOB}/brief-text?kind=${kind}`);
-  const d = await r.json();
+  const d = await ask(`/job/${JOB}/brief-text?kind=${kind}`);
   e.currentTarget.disabled = false;
   if (!d.ok) { show('out-' + kind, d.error, 'bad'); return; }
   $('prompt-' + kind).value = d.text;
@@ -167,7 +194,7 @@ document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click
 }));
 
 $('reveal')?.addEventListener('click', async () => {
-  const d = await (await fetch(`/job/${JOB}/reveal`, {method:'POST'})).json();
+  const d = await ask(`/job/${JOB}/reveal`, {method:'POST'});
   if (!d.ok) show('out-packet', d.error, 'bad');
 });
 
@@ -178,8 +205,7 @@ document.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('clic
   e.currentTarget.disabled = true;
   show('out-' + kind, 'Checking it for invented claims…');
   const body = new FormData(); body.append('reply', reply); body.append('kind', kind);
-  const r = await fetch(`/job/${JOB}/accept`, {method:'POST', body});
-  const d = await r.json();
+  const d = await ask(`/job/${JOB}/accept`, {method:'POST', body});
   e.currentTarget.disabled = false;
   show('out-' + kind, d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok) { $('step-' + kind).classList.add('done'); countDone(); }
@@ -187,8 +213,7 @@ document.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('clic
 
 $('save-status').addEventListener('click', async () => {
   const body = new FormData(); body.append('status', $('status').value);
-  const r = await fetch(`/job/${JOB}/status`, {method:'POST', body});
-  const d = await r.json();
+  const d = await ask(`/job/${JOB}/status`, {method:'POST', body});
   show('out-status', d.ok ? `Marked ${d.status}.` : d.error, d.ok ? 'good' : 'bad');
   if (d.ok) {
     $('step-apply').classList.toggle('done',
