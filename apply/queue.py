@@ -94,9 +94,30 @@ class Candidate:
         return None if self.score is None else round(self.score * 100)
 
 
+def _company_key(name: str) -> str:
+    return " ".join((name or "").split()).lower()
+
+
 def build_queue(jobs, *, limit: int, min_score: float | None = None,
-                sources=FILLABLE, now: datetime | None = None) -> list[Candidate]:
+                sources=FILLABLE, max_per_company: int = 1,
+                already_applied_to=(), now: datetime | None = None) -> list[Candidate]:
     """Order postings for applying, freshest band first, best match within it.
+
+    `max_per_company` is the one limit that matters for how this looks from the
+    other side. An employer cannot see that you applied to anyone else — their
+    dashboard holds their own board and nothing more — but they see every
+    application to *them*, with timestamps. Several arriving together is the
+    one pattern that is reliably visible, and it reads as spraying rather than
+    interest.
+
+    It is not a hypothetical: of the open matches right now, SpaceX has 74,
+    Accenture Federal 66, GRVTY 31, and 121 companies have more than one. Left
+    alone, the queue would send seventy-four applications to one employer in an
+    afternoon. One per company, the best one, is both better manners and a
+    better application.
+
+    `already_applied_to` carries that across runs — a company applied to
+    yesterday should not receive another today.
 
     `jobs` is any iterable of rows with the attributes used below, so this can
     be tested without a database.
@@ -124,7 +145,25 @@ def build_queue(jobs, *, limit: int, min_score: float | None = None,
     # Band first, then the best match inside the band. An unscored posting
     # sorts last within its band rather than first.
     candidates.sort(key=lambda c: (c.band, -(c.score if c.score is not None else -1)))
-    return candidates[:limit]
+
+    # Now thin to one per company. Because the list is already in the order we
+    # want, the first time a company appears IS its best posting — freshest
+    # band, best score within it — so keeping the first is keeping the right
+    # one, with no second pass to decide.
+    seen: dict[str, int] = {}
+    applied = {_company_key(name) for name in already_applied_to}
+    chosen: list[Candidate] = []
+    for candidate in candidates:
+        key = _company_key(candidate.company)
+        if key in applied:
+            continue                       # already have an application there
+        if seen.get(key, 0) >= max_per_company:
+            continue
+        seen[key] = seen.get(key, 0) + 1
+        chosen.append(candidate)
+        if len(chosen) >= limit:
+            break
+    return chosen
 
 
 def summarise(queue: list[Candidate]) -> str:
