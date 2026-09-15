@@ -1,0 +1,134 @@
+# The daily scrape, run by GitHub rather than by a laptop.
+#
+# WHY THIS EXISTS
+# The 6am launchd job only fires if the Mac is awake, and a closed lid puts a
+# MacBook to sleep regardless of any power assertion. This runs whether the
+# machine is open, shut, or in a bag.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+# No tailoring, no cover letters, no applying. Those need the resume and the
+# applicant's own details, and neither belongs on someone else's computer.
+# This job only ever handles PUBLIC job postings, plus one secret describing
+# which job titles to look for.
+#
+# WHERE THE DATA LIVES, AND WHY NOT THE OBVIOUS PLACES
+# This repository is public, so:
+#   - committing data/jobs.db would publish every posting tracked and every
+#     application status;
+#   - uploading it as an artifact is no better, because artifacts on a public
+#     repository can be downloaded by anyone.
+# The Actions cache is the one store only this repository's own workflow runs
+# can read, so that is where the database lives between runs.
+
+name: Daily scrape
+
+on:
+  schedule:
+    # 11:00 UTC = 06:00 America/Chicago (CDT). GitHub runs cron in UTC only and
+    # does not follow daylight saving, so this drifts to 05:00 local in winter.
+    # Minute 17 on purpose: every scheduled job in the world asks for :00, the
+    # queue is deepest there, and a job that has to wait is a job that runs late.
+    - cron: "17 11 * * *"
+  workflow_dispatch:          # and whenever you press the button
+
+concurrency:
+  # Never let two scrapes touch the same cached database.
+  group: daily-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    # A full run is one to three and a half hours. The ceiling is six.
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore the job database
+        uses: actions/cache@v4
+        with:
+          path: data/jobs.db
+          # A new key every day so each run saves a fresh copy; restore-keys
+          # falls back to the most recent previous one. Without the date the
+          # cache would be written once and never updated again.
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
+
+      - name: Write the search profile
+        # Derived from the resume, so it names the person's job titles and
+        # seniority: a secret, not a file in a public repo. Without it the
+        # scraper refuses to run rather than falling back to someone else's
+        # search, which is the behaviour we want here too.
+        env:
+          SEARCH_PROFILE: ${{ secrets.SEARCH_PROFILE_YAML }}
+        run: |
+          if [ -z "$SEARCH_PROFILE" ]; then
+            echo "::error::SEARCH_PROFILE_YAML secret is not set."
+            echo "Add it with:  gh secret set SEARCH_PROFILE_YAML < config/search_profile.yaml"
+            exit 1
+          fi
+          mkdir -p config
+          printf '%s' "$SEARCH_PROFILE" > config/search_profile.yaml
+          echo "Search profile written ($(wc -l < config/search_profile.yaml) lines)."
+
+      - name: Scrape
+        env:
+          SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
+        run: python -u main.py scrape
+
+      - name: Score
+        run: python -u main.py score
+
+      - name: Encrypt the database for collection
+        # The cache cannot be downloaded to a laptop, and an artifact on a
+        # public repository can be downloaded by anyone -- so the artifact is
+        # encrypted before it leaves the runner. Without RESULTS_PASSPHRASE it
+        # is a 25MB blob of noise to everyone including GitHub; with it, one
+        # command on the Mac turns it back into the job database.
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          if [ -z "$PASSPHRASE" ]; then
+            echo "::warning::RESULTS_PASSPHRASE is not set — skipping upload."
+            echo "The scrape still ran and the cache is updated; only collection is off."
+            exit 0
+          fi
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -in data/jobs.db -out jobs.db.enc -pass env:PASSPHRASE
+          ls -lh jobs.db.enc
+
+      - name: Upload it
+        if: hashFiles('jobs.db.enc') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-db-encrypted
+          path: jobs.db.enc
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        # Counts only. This summary is public on a public repository, so it
+        # says how many, never which.
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import sqlite3
+          db = sqlite3.connect("data/jobs.db")
+          q = lambda s: db.execute(s).fetchone()[0]
+          print("## Daily scrape\n")
+          print("| | |")
+          print("|---|---:|")
+          print(f"| Boards watched | {q('SELECT COUNT(*) FROM companies WHERE active=1'):,} |")
+          print(f"| Open matches | {q('SELECT COUNT(*) FROM jobs WHERE is_open=1'):,} |")
+          print(f"| Strong fit (70%+) | {q('SELECT COUNT(*) FROM jobs WHERE is_open=1 AND ats_match_score>=0.7'):,} |")
+          print(f"| Found today | {q(\"SELECT COUNT(*) FROM jobs WHERE date(found_at)=date('now')\"):,} |")
+          PY
