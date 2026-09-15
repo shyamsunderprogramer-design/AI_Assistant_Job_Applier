@@ -15,6 +15,25 @@ set -uo pipefail
 
 PROJECT="/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier"
 PY="$PROJECT/.venv/bin/python"
+
+# Hold the Mac awake for the length of the run.
+#
+# Without this the 6am run freezes about sixty seconds in: pmset wakes the
+# machine, launchd starts the scrape, macOS then sees no user activity, applies
+# `sleep 1`, and suspends it mid-board. The job does not fail -- it stops until
+# something wakes the Mac again, which is worse, because the log then looks
+# like a hang rather than a sleep. A full run takes one to three and a half
+# hours, so this is not a corner case; it is every single morning.
+#
+#   -i  no idle sleep    -m  no disk sleep    -s  no system sleep while on AC
+#
+# The assertion lives exactly as long as the command it wraps, so the Mac is
+# free to sleep again the moment the run ends.
+CAFFEINATE=""
+if command -v caffeinate >/dev/null 2>&1; then
+  CAFFEINATE="caffeinate -ims"
+fi
+
 TASK="${1:-daily}"
 LOG="$PROJECT/data/daily_run.log"
 LOCK="$PROJECT/data/${TASK}.lock"
@@ -44,11 +63,11 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 log "=== $TASK starting ==="
 case "$TASK" in
   daily)
-    "$PY" -u main.py daily >> "$LOG" 2>&1
+    $CAFFEINATE "$PY" -u main.py daily >> "$LOG" 2>&1
     ;;
   discover)
     # Weekly, not daily: a full sweep is hours of polite probing.
-    "$PY" -u main.py discover --names data/mailbox_names.txt --max-slugs 2 >> "$LOG" 2>&1
+    $CAFFEINATE "$PY" -u main.py discover --names data/mailbox_names.txt --max-slugs 2 >> "$LOG" 2>&1
     ;;
   enrich)
     bash data/companies_build/enrich_loop.sh >> "$LOG" 2>&1
