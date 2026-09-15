@@ -25,3 +25,15 @@ __pycache__/
 venv/
 .pytest_cache/
 .DS_Store
+
+# The application form data: legal name, address, phone, work authorisation,
+# demographic answers. This repository is PUBLIC, and unlike a resume — which
+# a person chooses to send — these are answers to questions employers ask
+# once. Ignored BEFORE the file exists, so it can never be added by a
+# `git add -A` on the day it is created.
+config/applicant.yaml
+config/applicant.local.yaml
+
+# Screenshots and logs from the apply runs: they show filled forms, so they
+# carry the same details.
+apply/runs/
