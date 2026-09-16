@@ -37,3 +37,9 @@ config/applicant.local.yaml
 # Screenshots and logs from the apply runs: they show filled forms, so they
 # carry the same details.
 apply/runs/
+
+# The 7.2M-company dataset: 1GB, far past GitHub every limit.
+companies/companies_sorted.csv
+companies/*.csv
+companies/raw_sources/
+companies/*.tsv
