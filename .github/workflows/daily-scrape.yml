@@ -81,13 +81,26 @@ jobs:
           printf '%s' "$SEARCH_PROFILE" > config/search_profile.yaml
           echo "Search profile written ($(wc -l < config/search_profile.yaml) lines)."
 
+      - name: Seed the board list
+        # The boards live in data/jobs.db, which is gitignored, so a runner
+        # with a cold cache starts with nothing to scrape -- the first cloud
+        # run walked 8 boards instead of 1,501 for exactly this reason.
+        # config/boards.csv carries the list separately: employer names and
+        # public board addresses, safe for a public repository, and nothing
+        # about the person searching. The import is keyed on (source, slug),
+        # so running it against a warm cache adds nothing.
+        run: python -m tools.boards import
+
       - name: Scrape
         env:
           SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
         run: python -u main.py scrape
 
-      - name: Score
-        run: python -u main.py score
+      # NO SCORING HERE. Scoring compares a posting against the resume text,
+      # and the resume is not on this machine -- by design, since it is the
+      # one thing that should never leave the laptop. The first run failed on
+      # exactly this: "No base resume found". Scoring happens locally, after
+      # tools/fetch_cloud_results.sh brings the postings down.
 
       - name: Encrypt the database for collection
         # The cache cannot be downloaded to a laptop, and an artifact on a
@@ -120,15 +133,4 @@ jobs:
         # Counts only. This summary is public on a public repository, so it
         # says how many, never which.
         run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import sqlite3
-          db = sqlite3.connect("data/jobs.db")
-          q = lambda s: db.execute(s).fetchone()[0]
-          print("## Daily scrape\n")
-          print("| | |")
-          print("|---|---:|")
-          print(f"| Boards watched | {q('SELECT COUNT(*) FROM companies WHERE active=1'):,} |")
-          print(f"| Open matches | {q('SELECT COUNT(*) FROM jobs WHERE is_open=1'):,} |")
-          print(f"| Strong fit (70%+) | {q('SELECT COUNT(*) FROM jobs WHERE is_open=1 AND ats_match_score>=0.7'):,} |")
-          print(f"| Found today | {q(\"SELECT COUNT(*) FROM jobs WHERE date(found_at)=date('now')\"):,} |")
-          PY
+          python tools/actions_summary.py >> "$GITHUB_STEP_SUMMARY"
