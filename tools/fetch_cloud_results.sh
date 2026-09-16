@@ -43,9 +43,23 @@ fi
 
 if ! gh run download "$RUN" --name jobs-db-encrypted --dir "$TMP" 2>/dev/null; then
   echo "Run $RUN has no artifact."
-  echo "  RESULTS_PASSPHRASE is probably not set as a GitHub secret, so the"
-  echo "  upload step was skipped. Set it with:"
-  echo "    gh secret set RESULTS_PASSPHRASE"
+  # A run only uploads if RESULTS_PASSPHRASE existed WHEN IT STARTED. Saying
+  # "the secret is not set" is wrong and confusing once it is -- the first
+  # time this happened the secret had been added 54 minutes after the run
+  # began, so the advice sent someone to re-set a secret that was already
+  # correct. Check, and say which of the two it actually is.
+  if gh secret list 2>/dev/null | grep -q RESULTS_PASSPHRASE; then
+    SET_AT=$(gh secret list 2>/dev/null | awk '/RESULTS_PASSPHRASE/{print $2}')
+    RUN_AT=$(gh run view "$RUN" --json createdAt --jq .createdAt 2>/dev/null)
+    echo "  RESULTS_PASSPHRASE IS set (at $SET_AT), but this run started at"
+    echo "  $RUN_AT. A run only uploads if the secret existed when it began."
+    echo "  Start a fresh one:  gh workflow run 'Daily scrape'"
+  else
+    echo "  RESULTS_PASSPHRASE is not set as a GitHub secret, so the upload"
+    echo "  step was skipped. Set it, then run the workflow again:"
+    echo "    gh secret set RESULTS_PASSPHRASE"
+    echo "    gh workflow run 'Daily scrape'"
+  fi
   exit 1
 fi
 
