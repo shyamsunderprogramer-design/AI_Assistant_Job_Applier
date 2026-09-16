@@ -171,3 +171,23 @@ ol.steps{list-style:none;margin:0;padding:0;display:grid;gap:2px}
 
 /* Not scored yet — visibly different from a genuinely low score. */
 .sc-none{color:var(--faint)}
+
+/* The board-search bar. A separate, quieter thing from the scrape status box:
+   it runs for weeks in the background and should read as ambient progress,
+   not as something demanding attention. */
+.probe{border:1px solid var(--line);border-radius:7px;background:var(--surface);
+  padding:11px 14px;margin-top:12px}
+.probe-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.probe-head strong{font-size:13px}
+.probe-dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.probe-dot.live{background:var(--signal);animation:probe-pulse 1.8s ease-in-out infinite}
+@keyframes probe-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.probe-dot.live{animation:none}}
+.probe-sub{font-family:var(--mono);font-size:11px;color:var(--faint);
+  font-variant-numeric:tabular-nums}
+.probe .btn.small{margin-left:auto;padding:3px 11px;font-size:11px}
+.probe-track{height:4px;border-radius:2px;background:var(--line);overflow:hidden;
+  margin-top:9px}
+.probe-track i{display:block;height:100%;background:var(--signal);
+  transition:width .6s ease}
+.probe-foot{margin-top:7px;font-size:11px;color:var(--faint)}
