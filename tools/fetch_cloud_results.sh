@@ -5,13 +5,16 @@
 #
 # The runner encrypts data/jobs.db before uploading, because an artifact on a
 # public repository can be downloaded by anyone. This decrypts it with the same
-# passphrase and puts it in place — keeping a copy of whatever was there first,
-# because the local database may hold application statuses the runner never saw.
+# passphrase and MERGES it into the local database — never replaces it. The
+# cloud knows about postings; this machine knows about job-alert postings,
+# boards the probe found, your application statuses, and the probe's memory of
+# what it has already asked. Replacing throws all of that away.
 
 set -uo pipefail
 
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT" || exit 1
+export PYTHONPATH="$PROJECT"
 
 command -v gh >/dev/null 2>&1 || { echo "gh is not installed:  brew install gh"; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo "openssl is missing"; exit 1; }
@@ -78,12 +81,25 @@ if [ -z "$ROWS" ]; then
   exit 1
 fi
 
-if [ -f data/jobs.db ]; then
-  BACKUP="data/jobs.db.local-$(date +%Y%m%d-%H%M%S)"
-  cp data/jobs.db "$BACKUP"
-  echo "Your existing database kept at $BACKUP"
-  echo "  (it may hold application statuses the runner never saw)"
+# MERGE, never replace. Replacing looked reasonable and was badly wrong the
+# first time it ran for real: the cloud knows about postings, the laptop knows
+# about everything else, and overwriting cost 35 job-alert postings, 375
+# boards, 32 application statuses and 138,438 probe records -- to gain nine
+# postings, because the two databases overlap almost entirely. Losing
+# probe_log alone would have re-sent a hundred and thirty-eight thousand
+# requests to other people's servers to relearn what was already known.
+if [ ! -f data/jobs.db ]; then
+  mv "$TMP/jobs.db" data/jobs.db
+  echo "Done: $ROWS postings from run $RUN (no local database existed)."
+  exit 0
 fi
 
-mv "$TMP/jobs.db" data/jobs.db
-echo "Done: $ROWS postings, from run $RUN."
+BACKUP="data/jobs.db.local-$(date +%Y%m%d-%H%M%S)"
+cp data/jobs.db "$BACKUP"
+echo "Local database backed up to $BACKUP"
+
+if ! "$PROJECT/.venv/bin/python" -m tools.merge_cloud "$TMP/jobs.db"; then
+  echo "Merge failed — your database is untouched (backup at $BACKUP)."
+  exit 1
+fi
+echo "Done: merged run $RUN ($ROWS postings scanned)."
