@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -483,6 +484,75 @@ def run_task(task: str):
     )
     task_pid_file(task).write_text(f"{process.pid}\n{time.time()}")
     return jsonify(ok=True, started=True)
+
+
+@app.get("/run/probe/status")
+def probe_status():
+    """How the company-name probe is doing, for the status box.
+
+    Read from tools/probe_runner's own state file rather than tracked here:
+    the run outlives this app by days, survives restarts of both, and may have
+    been started from a terminal. A file both sides agree on is the only thing
+    that stays true across all of that.
+    """
+    import json
+
+    state_path = PROJECT_ROOT / "data" / "probe_state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return jsonify(ok=True, running=False, ever_run=False)
+
+    pid = state.get("pid")
+    alive = False
+    if pid:
+        try:
+            os.kill(int(pid), 0)
+            alive = not _is_zombie(int(pid))
+        except (OSError, TypeError, ValueError):
+            alive = False
+
+    done, total = state.get("done") or 0, state.get("total") or 0
+    return jsonify(
+        ok=True, ever_run=True, running=alive,
+        done=done, total=total,
+        percent=round(done / total * 100, 2) if total else None,
+        found=state.get("found_total") or 0,
+        rate=state.get("names_per_hour"),
+        eta_hours=state.get("eta_hours"),
+        state=state.get("status"),
+        updated=state.get("updated_at"),
+    )
+
+
+@app.post("/run/probe/<action>")
+def probe_control(action: str):
+    """Start or stop the probe run from the page."""
+    if action not in ("start", "stop"):
+        return jsonify(ok=False, error=f"Unknown action {action!r}"), 400
+
+    if action == "stop":
+        (PROJECT_ROOT / "data" / "probe_runner.stop").write_text("stop")
+        try:
+            pid = int((PROJECT_ROOT / "data" / "probe_runner.pid").read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        return jsonify(ok=True, note="stopping after the current batch")
+
+    names = PROJECT_ROOT / "data" / "refined_names_all.txt"
+    if not names.exists():
+        return jsonify(ok=False, error=f"No name list at {names.name}. Build one "
+                                       f"with: python -m companies.refine"), 400
+    # Its own session, because this run is measured in days and must not die
+    # with the app, the terminal, or this request.
+    subprocess.Popen(
+        [sys.executable, "-m", "tools.probe_runner", "--names", str(names)],
+        cwd=PROJECT_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, start_new_session=True,
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+    )
+    return jsonify(ok=True, note="started")
 
 
 def _scheduled_run_holding(task: str) -> str | None:

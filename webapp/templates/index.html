@@ -38,6 +38,20 @@
 </section>
 <div id="upload-out" hidden></div>
 
+<!-- The company-name probe. Runs for weeks, independently of everything else,
+     so it gets its own bar rather than sharing the one scrape and score take
+     turns in. Hidden until there is something to say. -->
+<section class="probe" id="probe" hidden>
+  <div class="probe-head">
+    <span class="probe-dot" id="probe-dot"></span>
+    <strong id="probe-title">Finding new job boards</strong>
+    <span class="probe-sub" id="probe-sub"></span>
+    <button class="btn small" id="probe-btn">Stop</button>
+  </div>
+  <div class="probe-track"><i id="probe-fill"></i></div>
+  <div class="probe-foot" id="probe-foot"></div>
+</section>
+
 <section class="stats">
   <div class="stat">
     <span class="k">Boards watched</span><span class="v">{{ "{:,}".format(boards) }}</span>
@@ -74,6 +88,7 @@
     <option value="lever">Lever</option>
     <option value="ashby">Ashby</option>
     <option value="workday">Workday</option>
+    <option value="indeed-email">From job alerts</option>
   </select>
   <button class="chip" id="f-clear">Clear</button>
   <span class="count" id="count"></span>
@@ -363,6 +378,54 @@ async function watch(task, button) {
     $('run-out').textContent = d.error; return; }
   watch(task, b);
 }));
+
+// The probe bar. Polls on its own clock: this run is measured in days, so it
+// is almost always mid-flight when the page opens, and it has nothing to do
+// with whether a scrape is running.
+async function pollProbe() {
+  const d = await ask('/run/probe/status');
+  const box = $('probe');
+  if (!d.ok || !d.ever_run) { box.hidden = true; return; }
+  box.hidden = false;
+
+  const pct = d.percent ?? 0;
+  $('probe-fill').style.width = Math.max(pct, 0.3) + '%';
+  $('probe-dot').className = 'probe-dot' + (d.running ? ' live' : '');
+  $('probe-btn').textContent = d.running ? 'Stop' : 'Start';
+
+  const done = (d.done ?? 0).toLocaleString();
+  const total = (d.total ?? 0).toLocaleString();
+  $('probe-sub').textContent = `${done} of ${total} companies · ${pct}%`;
+
+  // Boards found is the number that matters — the rest is bookkeeping.
+  const found = `${(d.found ?? 0).toLocaleString()} new boards found`;
+  if (d.running) {
+    const rate = d.rate ? ` · ${d.rate.toLocaleString()}/hr` : '';
+    const eta = d.eta_hours
+      ? ` · about ${d.eta_hours > 48 ? Math.round(d.eta_hours / 24) + ' days' : Math.round(d.eta_hours) + ' hours'} left`
+      : '';
+    $('probe-title').textContent = 'Finding new job boards';
+    $('probe-foot').textContent = found + rate + eta;
+  } else {
+    $('probe-title').textContent = 'Board search paused';
+    $('probe-foot').textContent = found +
+      ' · stopping loses nothing, it resumes from where it stopped';
+  }
+  setTimeout(pollProbe, d.running ? 10000 : 30000);
+}
+
+$('probe-btn').addEventListener('click', async e => {
+  const b = e.currentTarget;
+  const starting = b.textContent === 'Start';
+  b.disabled = true;
+  b.textContent = starting ? 'Starting…' : 'Stopping…';
+  const d = await ask('/run/probe/' + (starting ? 'start' : 'stop'), {method: 'POST'});
+  if (!d.ok) { $('probe-foot').textContent = d.error || 'Could not do that.'; }
+  b.disabled = false;
+  setTimeout(pollProbe, 1500);
+});
+
+pollProbe();
 
 // If a run is already going when the page opens, pick it up rather than
 // pretending nothing is happening.
