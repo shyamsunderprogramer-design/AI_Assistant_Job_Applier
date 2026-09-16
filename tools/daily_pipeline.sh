@@ -64,6 +64,15 @@ log "=== $TASK starting ==="
 case "$TASK" in
   daily)
     $CAFFEINATE "$PY" -u main.py daily >> "$LOG" 2>&1
+    # Capture the run's own exit code HERE. `STATUS=$?` below sits after the
+    # case block, so anything added under it silently becomes what gets
+    # reported -- the export succeeding would have masked a failed scrape.
+    TASK_STATUS=$?
+    # The probe finds new boards continuously, and the cloud run seeds from
+    # config/boards.csv -- so without this the two drift apart silently and
+    # the cloud keeps scraping a months-old list. Exporting costs a second,
+    # and its own success is not the pipeline's success.
+    "$PY" -m tools.boards export >> "$LOG" 2>&1 || log "board export failed (not fatal)"
     ;;
   discover)
     # Weekly, not daily: a full sweep is hours of polite probing.
@@ -77,7 +86,7 @@ case "$TASK" in
     exit 1
     ;;
 esac
-STATUS=$?
+STATUS="${TASK_STATUS:-$?}"
 log "=== $TASK finished, exit $STATUS ==="
 
 # Rebuild the standalone console so the file on disk is never stale. It owes
