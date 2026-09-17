@@ -36,6 +36,15 @@ def init_engine(database_url: str) -> Engine:
     Base.metadata.create_all(_engine)
     # create_all won't add a column to a table that already exists, so an
     # existing DB needs the additive pass too.
+    # WAL, so a reader is never blocked by a writer and never sees a
+    # half-written page. This database is read by the web app while the
+    # scraper and the probe write to it; in the default `delete` mode a page
+    # load during a write can fail outright, and a file swapped under an open
+    # connection reports "database disk image is malformed" even though the
+    # file on disk is intact.
+    with _engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+
     ensure_schema(_engine)
     return _engine
 
