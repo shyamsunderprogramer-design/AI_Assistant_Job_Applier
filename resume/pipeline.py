@@ -16,7 +16,7 @@ from db.models import Job, utcnow
 from db.session import get_session
 from jobage import age_days
 from resume.parser import Resume, find_base_resume, parse_resume
-from resume.scorer import score_resume
+from resume.scorer import score_basis, score_resume
 from resume.writer import output_filename, write_review_note, write_tailored_resume
 
 log = logging.getLogger(__name__)
@@ -120,6 +120,10 @@ def score_jobs(
                 company=job.company,
             )
             job.ats_match_score = result.score
+            # Record what the number was measured against, so nothing later
+            # compares a title-only score with a full one as if they meant the
+            # same thing.
+            job.score_basis = score_basis(job.description)
             job.exported_to_excel = False  # push the new score to Excel
 
             # The flag must be symmetric: a job that clears the threshold on a

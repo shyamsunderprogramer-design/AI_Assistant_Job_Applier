@@ -238,3 +238,19 @@ def test_the_daily_cap_counts_companies_not_postings():
 
     assert len(queue) == 30
     assert len({c.company for c in queue}) == 30
+
+
+# -- a score measured against a title is not the same number ----------------
+
+def test_score_basis_tells_a_posting_from_a_headline():
+    """A job-alert email carries ~217 characters; a scraped posting ~6,758.
+    Scoring the first against a resume lands in the twenties however well it
+    fits, and presenting that beside a real score buries good jobs."""
+    from resume.scorer import score_basis
+
+    assert score_basis("x" * 6000) == "full"
+    assert score_basis(
+        "DevOps Engineer at Zoom\nLocation: Remote\nSalary: $98,900 - $228,700"
+    ) == "title"
+    assert score_basis("") == "title"
+    assert score_basis(None) == "title"

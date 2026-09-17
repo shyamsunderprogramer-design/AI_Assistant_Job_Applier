@@ -12,7 +12,9 @@
 </header>
 
 <div class="meta">
-  <span>{% if job.score is none %}<b>Not scored yet</b>{% else %}Fit <b>{{ job.score }}%</b>{% endif %}</span>
+  <span>{% if job.score is none %}<b>Not scored yet</b>
+    {%- elif job.basis == 'title' %}<b title="This came from a job alert, which carries no job description. The score is measured against the title alone.">~{{ job.score }}% on title only</b>
+    {%- else %}Fit <b>{{ job.score }}%</b>{% endif %}</span>
   <span>Posted <b>{{ job.age }}</b></span>
   {% if job.workplace %}<span>Workplace <b>{{ job.workplace }}</b></span>{% endif %}
   {% if job.experience %}<span>Wants <b>{{ job.experience }}</b></span>{% endif %}

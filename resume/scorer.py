@@ -91,6 +91,23 @@ class ScoreResult:
         )
 
 
+# Below this, a "description" is a few metadata lines rather than a posting.
+# Scraped postings average 6,758 characters; a job-alert email gives 217.
+DESCRIPTION_FLOOR = 600
+
+
+def score_basis(description: str | None) -> str:
+    """"full" if there is a real description to measure against, else "title".
+
+    The distinction matters because the two produce numbers on different
+    scales. A posting scored on its title alone lands in the twenties no matter
+    how well it fits, which reads as "weak match" when it means "not
+    measurable" -- and the difference decides whether someone opens the job or
+    scrolls past it.
+    """
+    return "full" if len((description or "").strip()) >= DESCRIPTION_FLOOR else "title"
+
+
 def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall((text or "").lower())
 

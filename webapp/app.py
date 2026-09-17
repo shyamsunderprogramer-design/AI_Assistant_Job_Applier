@@ -93,6 +93,12 @@ def job_row(job: Job) -> dict:
         # "Fit 0%" — which reads as "this job is a terrible match for you".
         "score": (None if job.ats_match_score is None
                   else round(job.ats_match_score * 100)),
+        # A score measured against a title alone is not on the same scale as
+        # one measured against a full posting. Zoom scoring 23% never meant it
+        # was a weak match; it meant there were 217 characters to judge it by
+        # instead of 6,758. The page has to show the difference or the number
+        # misleads in the one direction that matters: burying a good job.
+        "basis": job.score_basis or "full",
         "age": age_label(job),
         "workplace": stated(workplace_label(job.workplace)),
         "experience": stated(experience_label(job.experience_min_years,

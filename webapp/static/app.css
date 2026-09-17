@@ -202,6 +202,10 @@ ol.steps{list-style:none;margin:0;padding:0}
 
 /* Not scored yet — visibly different from a genuinely low score. */
 .sc-none{color:var(--faint)}
+/* Scored against a title alone, from a job alert with no description. Marked
+   with ~ and held back from the colour bands, because the number is not on the
+   same scale as the rest and colouring it "cool" would say something false. */
+.sc-part{color:var(--muted)}
 
 /* The board-search bar. A separate, quieter thing from the scrape status box:
    it runs for weeks in the background and should read as ambient progress,
