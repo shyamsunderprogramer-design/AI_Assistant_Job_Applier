@@ -42,9 +42,17 @@ def merge(cloud_path: Path, local_path: Path = Path("data/jobs.db"),
     if not cloud_path.exists():
         raise FileNotFoundError(cloud_path)
 
+    # Merge INTO the live file rather than swapping files around. The first
+    # attempt at collection replaced data/jobs.db with `mv` while the web app
+    # and the probe both had it open, and SQLite does not tolerate that: their
+    # connections kept pointing at an inode that no longer had a name, and the
+    # next page load died with "database disk image is malformed". The file on
+    # disk was fine; the running processes were reading a ghost. Writing rows
+    # through a normal connection cannot cause that.
     cloud = sqlite3.connect(cloud_path)
     cloud.row_factory = sqlite3.Row
     local = sqlite3.connect(local_path)
+    local.execute("PRAGMA journal_mode=WAL")   # readers do not block on a write
 
     columns = [r[1] for r in local.execute("PRAGMA table_info(jobs)").fetchall()]
     shared = [c for c in columns
