@@ -148,7 +148,7 @@ function visible() {
     if (state.remote && !['remote','hybrid'].includes(r.workplace)) return false;
     // An unscored role is unknown, not weak — but it cannot claim to be a
     // strong fit either, so the 70%+ filter still excludes it.
-    if (state.strong && (r.score === null || r.score < 70)) return false;
+    if (state.strong && (r.score === null || r.basis === 'title' || r.score < 70)) return false;
     if (state.paid && !r.salary) return false;
     if (state.fresh && r.status !== 'Not Applied') return false;
     if (state.recent && (r.ageDays === null || r.ageDays > 92)) return false;
@@ -175,7 +175,9 @@ function render() {
     tr.innerHTML = `
       <td class="num">${r.score === null
         ? '<span class="sc sc-none" title="Not scored yet — press Re-score">–</span>'
-        : `<span class="sc sc-${band(r.score)}">${r.score}</span>`}</td>
+        : r.basis === 'title'
+          ? `<span class="sc sc-part" title="Measured against the title only — this posting came from a job alert with no description, so the number is not comparable with the others">~${r.score}</span>`
+          : `<span class="sc sc-${band(r.score)}">${r.score}</span>`}</td>
       <td class="num age"></td><td class="num dim w"></td><td class="num dim e"></td>
       <td class="num y"></td><td class="co"></td>
       <td class="ti"><a></a></td>

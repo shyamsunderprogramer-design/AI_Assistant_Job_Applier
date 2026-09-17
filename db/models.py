@@ -116,6 +116,15 @@ class Job(Base):
     # apply step, and null is read as "long ago" so old rows never block.
     applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # What the match score was actually measured against. "full" means a real
+    # job description; "title" means there was none and only the title and a
+    # few metadata lines were available. A job-alert email carries about 217
+    # characters where a scraped posting carries 6,758, so the two scores are
+    # not on the same scale and must not be displayed as though they were --
+    # Zoom scoring 23% did not mean it was a weak match, it meant nobody could
+    # tell. Defaults to "full", which is true of every row that predates this.
+    score_basis: Mapped[str] = mapped_column(String(16), default="full")
+
     # Facts the posting states about itself, parsed from its own text by
     # jobfields.py. NULL means the posting did not say — never "unknown" as a
     # word, or every filter would have to parse English back out. These are
