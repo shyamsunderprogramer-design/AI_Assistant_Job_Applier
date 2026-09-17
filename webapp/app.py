@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -389,6 +390,18 @@ def task_log(task: str) -> Path:
     return PROJECT_ROOT / "data" / f"webapp_{task}.log"
 
 
+def task_exit_file(task: str) -> Path:
+    return PROJECT_ROOT / "data" / f"webapp_{task}.exit"
+
+
+def task_exit_code(task: str) -> int | None:
+    """What the run actually returned, or None if it was never recorded."""
+    try:
+        return int(task_exit_file(task).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def task_pid_file(task: str) -> Path:
     return PROJECT_ROOT / "data" / f"webapp_{task}.pid"
 
@@ -475,8 +488,20 @@ def run_task(task: str):
     log_path = task_log(task)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     handle = log_path.open("w")          # each run starts a fresh log
+    exit_path = task_exit_file(task)
+    exit_path.unlink(missing_ok=True)    # last run's verdict is not this one's
+
+    # Wrapped in a shell purely so the exit code is written down. Guessing
+    # whether a run succeeded by grepping its log for hopeful phrases has now
+    # failed twice: "Nothing to score" was missing from the list, and then a
+    # perfectly successful score run ended with "946 below threshold" and
+    # "Run `export` ..." and matched nothing either. A process's exit code is
+    # the answer and everything else is a guess, so write it to a file that
+    # outlives the process -- this app cannot wait() on a detached child.
+    command = " ".join(shlex.quote(part) for part in
+                       [sys.executable, "-u", "main.py", *TASKS[task]])
     process = subprocess.Popen(
-        [sys.executable, "-u", "main.py", *TASKS[task]],
+        ["/bin/sh", "-c", f"{command}; echo $? > {shlex.quote(str(exit_path))}"],
         cwd=PROJECT_ROOT, stdout=handle, stderr=subprocess.STDOUT,
         # Its own session, so restarting this app does not kill half an hour
         # of scraping along with it.
@@ -645,14 +670,19 @@ def run_status(task: str):
     # Without a live pid the run is over; the log's own last word says whether
     # it got there, which survives an app restart where an exit code does not.
     finished = not running and bool(tail)
-    # Every way a run can end well, not just the ones with something to report.
-    # "Nothing to score" is a completed run, and leaving it out left the button
-    # spinning on "Re-scoring against your resume" for hours after the process
-    # had exited.
-    ok_finish = finished and any(marker in tail for marker in (
-        "Companies scraped", "Scored", "Exported", "Saved to",
-        "Nothing to score", "No new jobs", "done:", "Run finished",
-    ))
+    recorded = task_exit_code(task)
+    if recorded is not None:
+        ok_finish = finished and recorded == 0
+    else:
+        # No recorded code: a run started before this app learned to write one,
+        # or killed hard enough that the shell never got to. Fall back to the
+        # old phrase-matching, which is why it is still here -- but it is the
+        # fallback now, not the answer.
+        ok_finish = finished and any(marker in tail for marker in (
+            "Companies scraped", "Scored", "Exported", "Saved to",
+            "Nothing to score", "No new jobs", "done:", "Run finished",
+            "below threshold", "Run `export`",
+        ))
     return jsonify(
         ok=True, running=running, tail=tail, progress=progress,
         done=done, total=total, current=current, eta=eta,
