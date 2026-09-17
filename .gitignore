@@ -43,3 +43,4 @@ companies/companies_sorted.csv
 companies/*.csv
 companies/raw_sources/
 companies/*.tsv
+data/*.exit
