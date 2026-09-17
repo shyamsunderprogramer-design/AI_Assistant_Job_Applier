@@ -101,9 +101,6 @@ td.ti a:hover{border-bottom-color:var(--signal)}
 .stale{color:var(--crit)}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:7px;
   padding:16px 18px;margin-top:16px}
-.steps{display:grid;gap:10px;margin-top:4px}
-.step{display:grid;grid-template-columns:26px 1fr;gap:12px;align-items:start}
-.step .n{font-family:var(--mono);font-size:11px;color:var(--faint);padding-top:7px}
 .out{font-family:var(--mono);font-size:12px;white-space:pre-wrap;background:var(--sunk);
   border-radius:6px;padding:10px 12px;margin-top:8px;max-height:230px;overflow:auto}
 .out.bad{background:color-mix(in srgb,var(--crit) 10%,var(--sunk));color:var(--crit)}
@@ -147,25 +144,59 @@ thead th .ar{font-size:9px;opacity:.75}
   font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* prepare-the-application: a checklist, so what is left reads at a glance */
-.card-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+.card-head{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
 .card-head h2{margin:0}
-.progress-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-left:auto}
-ol.steps{list-style:none;margin:0;padding:0;display:grid;gap:2px}
-.step{display:grid;grid-template-columns:24px 1fr;gap:12px;align-items:start;
-  padding:13px 2px;border-top:1px solid var(--hair)}
+.progress-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* How far through the four steps this application is. A bar rather than only
+   a count, because the point of the card is "what is left to do". */
+.card-progress{height:3px;border-radius:2px;background:var(--line);overflow:hidden;
+  margin:0 0 6px}
+.card-progress i{display:block;height:100%;width:0;background:var(--good);
+  transition:width .35s ease}
+
+/* The steps are a real sequence, not a menu: the folder has to exist before
+   anything can be written into it, and both documents have to exist before
+   there is anything to upload. So they are numbered, and a line joins them. */
+ol.steps{list-style:none;margin:0;padding:0}
+.step{display:grid;grid-template-columns:26px 1fr;gap:13px;align-items:start;
+  padding:15px 2px 15px 0;border-top:1px solid var(--hair);position:relative}
 .step:first-child{border-top:0}
-.tick{width:17px;height:17px;border-radius:50%;border:1.5px solid var(--line);
-  margin-top:2px;flex:none;position:relative}
-.step.done .tick{background:var(--good);border-color:var(--good)}
-.step.done .tick::after{content:"";position:absolute;left:5px;top:2px;width:4px;height:8px;
-  border:solid #fff;border-width:0 1.7px 1.7px 0;transform:rotate(45deg)}
+
+/* The joining line, drawn behind the markers. Stops at the last step so the
+   path does not trail off into nothing. */
+.step::before{content:"";position:absolute;left:12px;top:0;bottom:0;width:1px;
+  background:var(--hair)}
+.step:first-child::before{top:18px}
+.step:last-child::before{bottom:auto;height:18px}
+
+.tick{width:25px;height:25px;border-radius:50%;border:1.5px solid var(--line);
+  background:var(--surface);flex:none;position:relative;z-index:1;
+  display:grid;place-items:center;font-family:var(--mono);font-size:11px;
+  color:var(--faint);font-variant-numeric:tabular-nums}
+.tick::before{content:attr(data-n)}
+.step.done .tick{background:var(--good);border-color:var(--good);color:transparent}
+.step.done .tick::before{content:""}
+.step.done .tick::after{content:"";position:absolute;left:9px;top:5.5px;
+  width:5px;height:9px;border:solid #fff;border-width:0 1.8px 1.8px 0;
+  transform:rotate(45deg)}
+/* Waiting on an earlier step. Visible, legible, plainly not yet actionable. */
+.step.blocked{opacity:.55}
+.step.blocked .tick{border-style:dashed}
+
 .step-body{min-width:0}
-.step-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px}
-.step-head b{font-size:14.5px}
-.hint{font-size:12px;color:var(--muted)}
+.step-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+.step-head b{font-size:14.5px;letter-spacing:-.01em}
+.hint{font-size:12px;color:var(--muted);line-height:1.45}
 .step.done .step-head b{color:var(--muted)}
-.fold{margin-top:9px}
+.step-tag{font-family:var(--mono);font-size:10px;letter-spacing:.07em;
+  text-transform:uppercase;padding:2px 7px;border-radius:20px;
+  background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good)}
+
+.fold{margin-top:10px;border-top:1px solid var(--hair);padding-top:9px}
 .fold summary{font-size:12.5px;color:var(--signal-ink);cursor:pointer;padding:3px 0}
+.fold summary:hover{text-decoration:underline}
 .fold textarea{margin-top:7px}
 .fold #prompt-resume,.fold #prompt-letter{min-height:90px;color:var(--muted)}
 

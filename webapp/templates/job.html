@@ -26,79 +26,92 @@
     <h2>Prepare the application</h2>
     <span class="progress-note" id="done-count"></span>
   </div>
+  <div class="card-progress"><i id="done-bar"></i></div>
 
   <ol class="steps">
 
+    {# The folder comes first because everything else is written into it. #}
     <li class="step {% if packet.exists %}done{% endif %}" id="step-packet">
-      <span class="tick" aria-hidden="true"></span>
+      <span class="tick" data-n="1" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-head">
-          <b>Packet folder</b>
-          <span class="hint">so you can find what you sent, when they call</span>
+          <b>Make a folder for this application</b>
+          {% if packet.exists %}<span class="step-tag">ready</span>{% endif %}
         </div>
-        <div class="row">
+        <div class="hint">Keeps the exact resume and letter you sent, so you can
+          read them back when they call in three weeks.</div>
+        <div class="row" style="margin-top:9px">
           <button class="btn" data-act="packet">{{ 'Rebuild' if packet.exists else 'Create folder' }}</button>
-          <button class="btn" id="reveal" {% if not packet.exists %}disabled{% endif %}>Open in Finder</button>
+          <button class="btn" id="reveal" {% if not packet.exists %}disabled{% endif %}>Show in Finder</button>
         </div>
         <div class="out" id="out-packet" hidden></div>
       </div>
     </li>
 
-    <li class="step {% if packet.has_resume %}done{% endif %}" id="step-resume">
-      <span class="tick" aria-hidden="true"></span>
+    <li class="step {% if packet.has_resume %}done{% elif not packet.exists %}blocked{% endif %}" id="step-resume">
+      <span class="tick" data-n="2" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-head">
-          <b>Tailored resume</b>
-          <span class="hint">rewritten for this role &middot; invented claims are rejected, not saved</span>
+          <b>Tailor your resume</b>
+          {% if packet.has_resume %}<span class="step-tag">ready</span>{% endif %}
         </div>
-        <div class="row">
+        <div class="hint">Rewritten for this role using only what your resume
+          already says. Anything invented is rejected, not saved.</div>
+        <div class="row" style="margin-top:9px">
           <button class="btn" data-brief="resume">
-            {% if packet.has_resume %}Redo{% else %}Copy prompt{% endif %}
+            {% if packet.has_resume %}Do it again{% else %}Copy the prompt{% endif %}
           </button>
-          <span class="hint" id="hint-resume" hidden>Copied. Paste it into any chat, then paste the reply below.</span>
+          <span class="hint" id="hint-resume" hidden>Copied — paste it into any
+            chat, then bring the reply back below.</span>
         </div>
-        <details class="fold" id="fold-resume" {% if packet.has_resume %}{% else %}{% endif %}>
-          <summary>Prompt &amp; reply</summary>
+        <details class="fold" id="fold-resume">
+          <summary>Prompt, and where the reply goes</summary>
           <textarea id="prompt-resume" readonly aria-label="Prompt"></textarea>
-          <textarea id="reply-resume" placeholder="Paste the model's JSON reply here" aria-label="Reply"></textarea>
-          <div class="row"><button class="btn primary" data-accept="resume">Check and save</button></div>
+          <textarea id="reply-resume" placeholder="Paste the reply here" aria-label="Reply"></textarea>
+          <div class="row"><button class="btn primary" data-accept="resume">Check it and save</button></div>
         </details>
         <div class="out" id="out-resume" hidden></div>
       </div>
     </li>
 
-    <li class="step {% if packet.has_letter %}done{% endif %}" id="step-letter">
-      <span class="tick" aria-hidden="true"></span>
+    <li class="step {% if packet.has_letter %}done{% elif not packet.exists %}blocked{% endif %}" id="step-letter">
+      <span class="tick" data-n="3" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-head">
-          <b>Cover letter</b>
-          <span class="hint">may name {{ job.company }}, may not claim a skill you lack</span>
+          <b>Write the cover letter</b>
+          {% if packet.has_letter %}<span class="step-tag">ready</span>{% endif %}
         </div>
-        <div class="row">
+        <div class="hint">It may name {{ job.company }} and quote the posting.
+          It may not claim a skill your resume does not show.</div>
+        <div class="row" style="margin-top:9px">
           <button class="btn" data-brief="letter">
-            {% if packet.has_letter %}Redo{% else %}Copy prompt{% endif %}
+            {% if packet.has_letter %}Do it again{% else %}Copy the prompt{% endif %}
           </button>
-          <span class="hint" id="hint-letter" hidden>Copied. Paste it into any chat, then paste the reply below.</span>
+          <span class="hint" id="hint-letter" hidden>Copied — paste it into any
+            chat, then bring the reply back below.</span>
         </div>
         <details class="fold" id="fold-letter">
-          <summary>Prompt &amp; reply</summary>
+          <summary>Prompt, and where the reply goes</summary>
           <textarea id="prompt-letter" readonly aria-label="Prompt"></textarea>
-          <textarea id="reply-letter" placeholder="Paste the model's JSON reply here" aria-label="Reply"></textarea>
-          <div class="row"><button class="btn primary" data-accept="letter">Check and save</button></div>
+          <textarea id="reply-letter" placeholder="Paste the reply here" aria-label="Reply"></textarea>
+          <div class="row"><button class="btn primary" data-accept="letter">Check it and save</button></div>
         </details>
         <div class="out" id="out-letter" hidden></div>
       </div>
     </li>
 
     <li class="step {% if job.status not in ['Not Applied', 'Manual Review'] %}done{% endif %}" id="step-apply">
-      <span class="tick" aria-hidden="true"></span>
+      <span class="tick" data-n="4" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-head">
-          <b>Apply, then record it</b>
-          <span class="hint">upload both files on their form</span>
+          <b>Send it, then say so here</b>
+          {% if job.status not in ['Not Applied', 'Manual Review'] %}
+            <span class="step-tag">{{ job.status|lower }}</span>{% endif %}
         </div>
-        <div class="row">
-          <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open {{ job.board }} form</a>
+        <div class="hint">Upload both files on {{ job.company }}&rsquo;s form.
+          Recording it here is what stops this role coming back around.</div>
+        <div class="row" style="margin-top:9px">
+          <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open the {{ job.board|replace('-', ' ')|title }} form</a>
           <select id="status" aria-label="Status">
             {% for s in statuses %}
             <option value="{{ s }}" {% if s == job.status %}selected{% endif %}>{{ s }}</option>
@@ -223,8 +236,23 @@ $('save-status').addEventListener('click', async () => {
 });
 
 function countDone() {
+  const steps = document.querySelectorAll('.step');
   const done = document.querySelectorAll('.step.done').length;
-  $('done-count').textContent = `${done} of 4 ready`;
+  $('done-count').textContent = done === steps.length
+    ? 'all four done' : `${done} of ${steps.length} done`;
+  $('done-bar').style.width = (done / steps.length * 100) + '%';
+
+  // Steps two and three write into the folder from step one, so they cannot
+  // run before it exists. Showing that is kinder than letting someone press a
+  // button and read an error about a missing directory.
+  const haveFolder = $('step-packet').classList.contains('done');
+  for (const id of ['step-resume', 'step-letter']) {
+    const step = $(id);
+    step.classList.toggle('blocked', !haveFolder && !step.classList.contains('done'));
+    step.querySelectorAll('button').forEach(b => {
+      if (!b.dataset.accept) b.disabled = !haveFolder && !step.classList.contains('done');
+    });
+  }
 }
 countDone();
 </script>
