@@ -178,11 +178,14 @@ async function ask(url, options, ms = 300000) {
 }
 
 document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', async e => {
-  const act = e.currentTarget.dataset.act;
-  e.currentTarget.disabled = true;
+  // `e.currentTarget` is null after the first await -- it only exists while
+  // the event is dispatching. Hold the button in a variable instead.
+  const button = e.currentTarget;
+  const act = button.dataset.act;
+  button.disabled = true;
   show('out-' + act, 'Working…');
   const d = await ask(`/job/${JOB}/${act}`, {method:'POST'});
-  e.currentTarget.disabled = false;
+  button.disabled = false;
   show('out-' + act, d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok && act === 'packet') {
     $('step-packet').classList.add('done');
@@ -192,11 +195,12 @@ document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click',
 }));
 
 document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click', async e => {
-  const kind = e.currentTarget.dataset.brief;
-  e.currentTarget.disabled = true;
+  const button = e.currentTarget;
+  const kind = button.dataset.brief;
+  button.disabled = true;
   show('out-' + kind, 'Building the prompt…');
   const d = await ask(`/job/${JOB}/brief-text?kind=${kind}`);
-  e.currentTarget.disabled = false;
+  button.disabled = false;
   if (!d.ok) { show('out-' + kind, d.error, 'bad'); return; }
   $('prompt-' + kind).value = d.text;
   $('fold-' + kind).open = true;
@@ -214,14 +218,15 @@ $('reveal')?.addEventListener('click', async () => {
 });
 
 document.querySelectorAll('[data-accept]').forEach(b => b.addEventListener('click', async e => {
-  const kind = e.currentTarget.dataset.accept;
+  const button = e.currentTarget;
+  const kind = button.dataset.accept;
   const reply = $('reply-' + kind).value.trim();
   if (!reply) { show('out-' + kind, 'Paste the reply first.', 'bad'); return; }
-  e.currentTarget.disabled = true;
+  button.disabled = true;
   show('out-' + kind, 'Checking it for invented claims…');
   const body = new FormData(); body.append('reply', reply); body.append('kind', kind);
   const d = await ask(`/job/${JOB}/accept`, {method:'POST', body});
-  e.currentTarget.disabled = false;
+  button.disabled = false;
   show('out-' + kind, d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok) { $('step-' + kind).classList.add('done'); countDone(); }
 }));
@@ -244,16 +249,20 @@ function countDone() {
     ? 'all four done' : `${done} of ${steps.length} done`;
   $('done-bar').style.width = (done / steps.length * 100) + '%';
 
-  // Steps two and three write into the folder from step one, so they cannot
-  // run before it exists. Showing that is kinder than letting someone press a
-  // button and read an error about a missing directory.
+  // Steps two and three are SHOWN as waiting on the folder, but not disabled.
+  //
+  // Disabling them was wrong and invented a dependency that does not exist:
+  // "Copy the prompt" runs `main.py brief`, which needs the job and the
+  // resume and nothing else. Gating it on the folder made the button dead
+  // while the box still read "Building the prompt…" from an earlier click,
+  // which looks exactly like a hang.
+  //
+  // Only "Check it and save" writes into the folder, and it creates one if it
+  // has to. So the dimming is a hint about order, not a lock.
   const haveFolder = $('step-packet').classList.contains('done');
   for (const id of ['step-resume', 'step-letter']) {
     const step = $(id);
     step.classList.toggle('blocked', !haveFolder && !step.classList.contains('done'));
-    step.querySelectorAll('button').forEach(b => {
-      if (!b.dataset.accept) b.disabled = !haveFolder && !step.classList.contains('done');
-    });
   }
 }
 countDone();
