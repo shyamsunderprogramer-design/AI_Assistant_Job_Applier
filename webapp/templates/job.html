@@ -60,22 +60,25 @@
         <div class="hint">Rewritten for this role using only what your resume
           already says. Anything invented is rejected, not saved.</div>
         <div class="row" style="margin-top:9px">
-          {% if api_ready %}
-          {# The direct path when a key is configured: one press, no copying.
-             The free route stays beside it, because it is free. #}
-          <button class="btn primary" data-tailor="1">Write it for me</button>
-          {% endif %}
-          <button class="btn" data-brief="resume">
+          {# Copy-and-paste is the DEFAULT, and deliberately the primary
+             button. It costs nothing and works with a chat subscription or a
+             local model, which is how this is actually used. The API button
+             was briefly made prominent and that was wrong: it pushes someone
+             who already pays for a subscription into paying again per letter. #}
+          <button class="btn primary" data-brief="resume">
             {% if packet.has_resume %}Copy the prompt again{% else %}Copy the prompt{% endif %}
           </button>
+          {% if api_ready %}
+          <button class="btn" data-tailor="1">Or pay the API to do it</button>
+          {% endif %}
           <span class="hint" id="hint-resume" hidden>Copied — paste it into any
             chat, then bring the reply back below.</span>
         </div>
         {% if api_ready %}
         <div class="hint" style="margin-top:6px">
-          &ldquo;Write it for me&rdquo; uses {{ api_model }} and costs a few cents.
-          &ldquo;Copy the prompt&rdquo; is free and works with any chat. Both go
-          through the same guard before anything is saved.
+          Copying is free and works with any chat or a local model. The API
+          button uses {{ api_model }} and charges per letter — only worth it if
+          you have no other way to run a model. Both go through the same guard.
         </div>
         {% endif %}
         <details class="fold" id="fold-resume">
@@ -246,7 +249,7 @@ document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
   show('out-resume', 'Writing it with the API — this takes a minute…');
   const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 300000);
   button.disabled = false;
-  button.textContent = 'Write it for me';
+  button.textContent = 'Or pay the API to do it';
   tailorConfirmed = false;
   show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok) { $('step-resume').classList.add('done'); countDone(); }

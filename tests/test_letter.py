@@ -195,3 +195,42 @@ def test_the_prompt_carries_the_resume_and_the_posting():
     assert "ClickUp" in prompt
     assert "Kubernetes" in prompt
     assert "ONLY source of truth" in prompt
+
+
+# -- the posting's own words are not claims about the candidate -------------
+
+def test_a_word_the_posting_uses_with_punctuation_is_still_its_word():
+    """A real posting writes "FedRAMP®" and "FedRAMP," and never the bare
+    word. Matching raw tokens meant a letter saying "FedRAMP" matched nothing
+    and was rejected for quoting the posting it was answering."""
+    from resume.letter import _from_posting, _vocabulary
+
+    vocabulary = _vocabulary("Exiger is FedRAMP® authorized, serving government "
+                             "and defense customers.")
+
+    assert _from_posting("FedRAMP", vocabulary)
+    assert _from_posting("Exiger", vocabulary)
+    assert _from_posting("government", vocabulary)
+
+
+def test_a_compound_built_from_the_postings_words_is_allowed():
+    """Writing about an employer produces phrases the posting implies but
+    never spells: "FedRAMP-authorized" from a posting that says "FedRAMP®"
+    and "authorized". This rejected a correct letter."""
+    from resume.letter import _from_posting, _vocabulary
+
+    vocabulary = _vocabulary("Exiger is FedRAMP® authorized, serving government.")
+
+    assert _from_posting("FedRAMP-authorized", vocabulary)
+
+
+def test_a_compound_with_an_invented_half_is_still_caught():
+    """The loosening must not let an invented word ride in attached to a real
+    one. Every part has to come from the posting."""
+    from resume.letter import _from_posting, _vocabulary
+
+    vocabulary = _vocabulary("Exiger is FedRAMP® authorized.")
+
+    assert not _from_posting("FedRAMP-certified", vocabulary)
+    assert not _from_posting("SOC2-audited", vocabulary)
+    assert not _from_posting("Palantir", vocabulary)
