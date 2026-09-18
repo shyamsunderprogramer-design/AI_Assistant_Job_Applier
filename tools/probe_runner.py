@@ -43,10 +43,10 @@ PIDFILE = Path("data/probe_runner.pid")
 LOG = Path("data/probe_runner.log")
 STOPFILE = Path("data/probe_runner.stop")
 
-# Names handed to the discovery pass at a time. Small enough that stopping is
-# quick and progress is visible; large enough that the per-batch setup cost
-# stays negligible.
-BATCH = 200
+# Names handed to the discovery pass at a time. Small enough that the progress
+# file moves often: at 200 the bar sat on one number for seven minutes and read
+# as frozen, which is how a working run gets reported as broken -- twice.
+BATCH = 40
 
 # When the network is gone there is nothing to do but wait. Back off rather
 # than hammer, and never give up -- a laptop reconnects eventually.
@@ -233,7 +233,7 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
                     names_per_hour=round(rate * 3600),
                     eta_hours=round(eta_h, 1) if eta_h else None)
 
-        if start % (batch * 5) == 0 or found:
+        if start % (batch * 25) == 0 or found:
             eta = f", ~{eta_h:,.0f}h left" if eta_h else ""
             log(f"{done:,}/{total:,} names · {found_total:,} boards found · "
                 f"{rate*3600:,.0f}/hr{eta}")

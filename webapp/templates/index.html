@@ -429,7 +429,17 @@ async function pollProbe() {
 
   const done = (d.done ?? 0).toLocaleString();
   const total = (d.total ?? 0).toLocaleString();
-  $('probe-sub').textContent = `${done} of ${total} companies · ${pct}%`;
+  // Say when it last moved. A bar that only updates once a batch is otherwise
+  // indistinguishable from a dead one, and a working run was reported as stuck
+  // twice on the strength of two readings a minute apart.
+  let moved = '';
+  if (d.updated) {
+    const secs = Math.max(0, (Date.now() - Date.parse(d.updated)) / 1000);
+    moved = secs < 120 ? ' · moving now'
+          : secs < 3600 ? ` · last moved ${Math.round(secs / 60)} min ago`
+          : ` · last moved ${Math.round(secs / 3600)} h ago`;
+  }
+  $('probe-sub').textContent = `${done} of ${total} companies · ${pct}%${moved}`;
 
   // Boards found is the number that matters — the rest is bookkeeping.
   const found = `${(d.found ?? 0).toLocaleString()} new boards found`;
