@@ -226,3 +226,23 @@ ol.steps{list-style:none;margin:0;padding:0}
 .probe-track i{display:block;height:100%;background:var(--signal);
   transition:width .6s ease}
 .probe-foot{margin-top:7px;font-size:11px;color:var(--faint)}
+
+/* The details form. Plain, close-set, and quick to fill: it is the one screen
+   standing between having the tool and being able to apply with it. */
+.fset{border:1px solid var(--line);border-radius:7px;padding:13px 15px 15px;
+  margin:0 0 14px}
+.fset legend{font-size:11px;font-family:var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--faint);padding:0 6px}
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:11px 14px}
+@media(max-width:620px){.grid2{grid-template-columns:1fr}}
+.fset label{display:grid;gap:4px;font-size:12.5px;color:var(--ink-2)}
+.fset input[type=text],.fset input[type=email],.fset input:not([type]){width:100%}
+
+/* The two questions that have no default. Marked so they read as different
+   from a phone number, because they are. */
+.declare{border-color:color-mix(in srgb,var(--warn) 42%,var(--line))}
+.ask{display:grid;gap:6px;margin-top:11px}
+.ask>span{font-size:13px}
+.radio{display:inline-flex;align-items:center;gap:6px;font-size:13px;
+  color:var(--ink);cursor:pointer}
+.radio input{margin:0}

@@ -38,6 +38,18 @@
 </section>
 <div id="upload-out" hidden></div>
 
+{% if not applicant.ready %}
+<section class="resume none" style="margin-top:12px">
+  <span class="lbl">Your details</span>
+  <span class="name">{% if applicant.exists %}Not finished{% else %}Not set up{% endif %}</span>
+  <span class="sub">Name, phone and work authorisation — asked by every
+    application form. Until they are here, applications cannot be filled in
+    for you.</span>
+  <a class="btn primary" href="{{ url_for('applicant_form') }}" style="margin-left:auto">
+    {% if applicant.exists %}Finish{% else %}Add them{% endif %}</a>
+</section>
+{% endif %}
+
 <!-- The company-name probe. Runs for weeks, independently of everything else,
      so it gets its own bar rather than sharing the one scrape and score take
      turns in. Hidden until there is something to say. -->
