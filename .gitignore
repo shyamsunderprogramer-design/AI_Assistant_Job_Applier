@@ -44,3 +44,9 @@ companies/*.csv
 companies/raw_sources/
 companies/*.tsv
 data/*.exit
+
+# Backups of .env. These carry the same keys as .env itself, and one was
+# nearly committed by a `git add -A` -- GitHub push protection caught it.
+.env.backup*
+.env.bak*
+.env.*.backup
