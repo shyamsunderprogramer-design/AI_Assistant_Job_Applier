@@ -158,12 +158,47 @@ def check_letter(resume_text: str, jd_text: str, letter_text: str) -> GuardResul
     if verdict.ok:
         return verdict
 
-    jd_vocabulary = {word.lower() for word in _words(jd_text)}
+    jd_vocabulary = _vocabulary(jd_text)
     kept: list[Violation] = [
         violation for violation in verdict.violations
-        if not (violation.kind == "entity" and violation.value.lower() in jd_vocabulary)
+        if not (violation.kind == "entity" and _from_posting(violation.value, jd_vocabulary))
     ]
     return GuardResult(ok=not kept, violations=kept)
+
+
+def _vocabulary(text: str) -> set[str]:
+    """Every word the posting uses, stripped of the punctuation stuck to it.
+
+    Raw tokens are not enough. A real posting writes "FedRAMP®" and "FedRAMP,"
+    and never the bare word, so a letter saying "FedRAMP" matched nothing and
+    was rejected for quoting the posting it was answering. Hyphenated
+    compounds are split too, and kept whole as well.
+    """
+    vocabulary: set[str] = set()
+    for word in _words(text):
+        cleaned = word.strip(".,;:!?()[]{}\"'“”‘’®™©-").lower()
+        if not cleaned:
+            continue
+        vocabulary.add(cleaned)
+        vocabulary.update(part for part in cleaned.split("-") if part)
+    return vocabulary
+
+
+def _from_posting(value: str, vocabulary: set[str]) -> bool:
+    """Is this name the posting's own word, rather than a claim about anyone?
+
+    A model writing about the employer composes phrases the posting implies
+    but never spells: "FedRAMP-authorized" out of a posting that says only
+    "FedRAMP®". Every part of the compound has to come from the posting, so
+    an invented word cannot ride in attached to a real one.
+    """
+    cleaned = (value or "").strip().lower()
+    if not cleaned:
+        return False
+    if cleaned in vocabulary:
+        return True
+    parts = [part for part in re.split(r"[-\s/]+", cleaned) if part]
+    return bool(parts) and all(part in vocabulary for part in parts)
 
 
 def _words(text: str) -> list[str]:
