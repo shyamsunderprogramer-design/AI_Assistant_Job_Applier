@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Your details</h1>
+    <div class="sub">The answers every application form asks for, entered once.
+      Stored in <code>config/applicant.yaml</code> on this machine — gitignored,
+      and never sent anywhere.</div>
+  </div>
+  <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+</header>
+
+<form id="applicant" class="card">
+
+  <fieldset class="fset">
+    <legend>Who you are</legend>
+    <div class="grid2">
+      <label>First name<input name="first_name" value="{{ a.personal.get('first_name','') }}" required></label>
+      <label>Last name<input name="last_name" value="{{ a.personal.get('last_name','') }}" required></label>
+      <label>Email<input name="email" type="email" value="{{ a.personal.get('email','') }}" required></label>
+      <label>Phone<input name="phone" value="{{ a.personal.get('phone','') }}" placeholder="+1 555 0100" required></label>
+    </div>
+  </fieldset>
+
+  <fieldset class="fset">
+    <legend>Where you are</legend>
+    <div class="grid2">
+      <label>City<input name="city" value="{{ a.location.get('city','') }}"></label>
+      <label>State<input name="state" value="{{ a.location.get('state','') }}" placeholder="MA"></label>
+      <label>ZIP<input name="postal_code" value="{{ a.location.get('postal_code','') }}"></label>
+      <label>Country<input name="country" value="{{ a.location.get('country','United States') }}"></label>
+    </div>
+  </fieldset>
+
+  <fieldset class="fset">
+    <legend>Links</legend>
+    <div class="grid2">
+      <label>LinkedIn<input name="linkedin" value="{{ a.links.get('linkedin','') }}" placeholder="https://linkedin.com/in/..."></label>
+      <label>GitHub<input name="github" value="{{ a.links.get('github','') }}" placeholder="https://github.com/..."></label>
+    </div>
+  </fieldset>
+
+  {# These two are the reason this page exists. They have no default, and the
+     apply step stops rather than choosing one, because an employer relies on
+     the answer and a wrong one is a misrepresentation rather than a typo. #}
+  <fieldset class="fset declare">
+    <legend>Work authorisation</legend>
+    <p class="hint">These are legal declarations on a real application. Nothing
+      here is guessed or filled in for you — if either is left unanswered, the
+      form filler stops and leaves it to you.</p>
+
+    <div class="ask">
+      <span>Are you legally authorised to work in the United States?</span>
+      <div class="row">
+        <label class="radio"><input type="radio" name="authorised_to_work" value="yes"
+          {% if a.authorisation.get('authorised_to_work') is true %}checked{% endif %}> Yes</label>
+        <label class="radio"><input type="radio" name="authorised_to_work" value="no"
+          {% if a.authorisation.get('authorised_to_work') is false %}checked{% endif %}> No</label>
+      </div>
+    </div>
+
+    <div class="ask">
+      <span>Will you now or in the future require visa sponsorship?</span>
+      <div class="row">
+        <label class="radio"><input type="radio" name="requires_sponsorship" value="yes"
+          {% if a.authorisation.get('requires_sponsorship') is true %}checked{% endif %}> Yes</label>
+        <label class="radio"><input type="radio" name="requires_sponsorship" value="no"
+          {% if a.authorisation.get('requires_sponsorship') is false %}checked{% endif %}> No</label>
+      </div>
+    </div>
+  </fieldset>
+
+  <div class="row" style="margin-top:4px">
+    <button class="btn primary" type="submit">Save</button>
+    <span class="hint" id="save-note"></span>
+  </div>
+  <div class="out" id="out" hidden></div>
+</form>
+
+<p class="hint" style="margin-top:14px">
+  Open-ended questions — &ldquo;why do you want to work here?&rdquo; — are not
+  here and will not be. A templated answer to those is worse than none, and
+  employers can tell.
+</p>
+
+<script>
+const $ = id => document.getElementById(id);
+
+$('applicant').addEventListener('submit', async e => {
+  e.preventDefault();
+  const out = $('out');
+  out.hidden = false; out.className = 'out'; out.textContent = 'Saving…';
+  try {
+    const r = await fetch('/applicant', {method: 'POST', body: new FormData(e.target)});
+    const d = await r.json();
+    if (d.ok) {
+      out.className = 'out good';
+      out.textContent = 'Saved. Applications can be filled in now.';
+    } else {
+      out.className = 'out bad';
+      out.textContent = 'Saved, but still needed:\n  ' + d.problems.join('\n  ');
+    }
+  } catch (err) {
+    out.className = 'out bad';
+    out.textContent = 'Could not reach the app. If you restarted it, reload this page.';
+  }
+});
+</script>
+{% endblock %}

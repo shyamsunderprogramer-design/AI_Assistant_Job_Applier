@@ -129,9 +129,98 @@ def index():
         resume_dir=str(resume_dir()),
         strong=sum(1 for r in rows if r["score"] is not None and r["score"] >= 70),
         my_years=derived_years(),
+        applicant=applicant_state(),
         unscored=sum(1 for r in rows if r["score"] is None),
         **last_run_stats(),
     )
+
+
+@app.get("/applicant")
+def applicant_form():
+    """The answers every application form asks for, as a form.
+
+    These lived only in config/applicant.yaml. Asking someone to open a text
+    editor and change `null` to `true` on the right line, in a file they have
+    never seen, is a worse experience than the thing it unlocks -- and it was
+    the only step left between having the tool and being able to apply with it.
+    """
+    from apply.profile import Applicant, ProfileIncomplete, check_ready, load
+
+    try:
+        person = load(applicant_path())
+    except ProfileIncomplete:
+        person = Applicant()
+
+    return render_template("applicant.html", a=person,
+                           problems=check_ready(person))
+
+
+@app.post("/applicant")
+def applicant_save():
+    """Write the form back, keeping everything the form does not ask about."""
+    import yaml
+
+    from apply.profile import Applicant, check_ready, load
+
+    path = applicant_path()
+    # Read what is there first: the file carries demographics, employment
+    # preferences and apply settings this form deliberately does not show, and
+    # overwriting them because they were not on screen would be theft.
+    existing = {}
+    if path.exists():
+        try:
+            existing = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            existing = {}
+
+    def field(name: str) -> str:
+        return " ".join((request.form.get(name) or "").split())
+
+    def tri(name: str):
+        """Yes, no, or still unanswered. A legal declaration has no default."""
+        raw = (request.form.get(name) or "").strip().lower()
+        return True if raw == "yes" else False if raw == "no" else None
+
+    existing.setdefault("personal", {}).update({
+        "first_name": field("first_name"), "last_name": field("last_name"),
+        "email": field("email"), "phone": field("phone"),
+    })
+    existing.setdefault("location", {}).update({
+        "city": field("city"), "state": field("state"),
+        "postal_code": field("postal_code"),
+        "country": field("country") or "United States",
+    })
+    existing.setdefault("links", {}).update({
+        "linkedin": field("linkedin"), "github": field("github"),
+    })
+    existing.setdefault("authorisation", {}).update({
+        "authorised_to_work": tri("authorised_to_work"),
+        "requires_sponsorship": tri("requires_sponsorship"),
+    })
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(existing, sort_keys=False, allow_unicode=True),
+                    encoding="utf-8")
+
+    person = load(path)
+    problems = check_ready(person)
+    return jsonify(ok=not problems, problems=problems, saved=str(path.name))
+
+
+def applicant_path() -> Path:
+    return PROJECT_ROOT / "config" / "applicant.yaml"
+
+
+def applicant_state() -> dict:
+    """Whether the apply step can run, for the banner on the main page."""
+    from apply.profile import Applicant, ProfileIncomplete, check_ready, load
+
+    try:
+        person = load(applicant_path())
+    except ProfileIncomplete:
+        return {"exists": False, "ready": False, "missing": 6}
+    problems = check_ready(person)
+    return {"exists": True, "ready": not problems, "missing": len(problems)}
 
 
 def derived_years() -> int | None:
