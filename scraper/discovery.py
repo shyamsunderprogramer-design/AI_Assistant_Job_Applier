@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,30 +163,61 @@ class CompanyDiscoverer:
         A (source, slug) already in the probe cache is never re-requested: a
         dead slug stays dead, and re-asking is both slow and impolite.
         """
-        for source, slug in self.plan(name, sources, domain=domain, max_slugs=max_slugs):
+        pairs = self.plan(name, sources, domain=domain, max_slugs=max_slugs)
+
+        # Answer from the cache first, and without sending anything. A hit here
+        # settles the name for free.
+        live: list[tuple[str, str]] = []
+        for source, slug in pairs:
             cached = self._cache.get((source, slug))
-            if cached is not None:
-                self.progress.probes_skipped += 1
-                if cached:
-                    log.info("Known board: %s on %s (slug: %s)", name, source, slug)
-                    return DiscoveryResult(name=name, slug=slug, source=source, found=True)
+            if cached is None:
+                live.append((source, slug))
                 continue
-
-            try:
-                exists = self.scrapers[source].board_exists(slug)
-            except Exception as exc:  # a probe failure is not fatal
-                log.debug("Probe error %s/%s: %s", source, slug, exc)
-                continue
-
-            self.progress.probes_sent += 1
-            # Persist immediately rather than at the end: a run interrupted
-            # after 4,000 probes must not throw away what those 4,000 cost.
-            record_probe(source, slug, exists, company_name=name if exists else None)
-            self._cache[(source, slug)] = exists
-
-            if exists:
-                log.info("Found %s on %s (slug: %s)", name, source, slug)
+            self.progress.probes_skipped += 1
+            if cached:
+                log.info("Known board: %s on %s (slug: %s)", name, source, slug)
                 return DiscoveryResult(name=name, slug=slug, source=source, found=True)
+
+        if not live:
+            return DiscoveryResult(name=name, slug=None, source=None, found=False)
+
+        # The remaining probes go to Greenhouse, Lever and Ashby -- three
+        # different hosts, which were being asked one after another. Each
+        # waited out the others' 1.5s delay for no reason, so a single name
+        # cost four and a half seconds and the run projected to 43 days.
+        #
+        # Asking them at once costs almost nothing in extra requests: the loop
+        # only ever exited early on a hit, and the hit rate is about 2%, so 98%
+        # of names were sending all three anyway. Per-host politeness is
+        # untouched -- PoliteClient still paces each host separately.
+        def ask(pair):
+            source, slug = pair
+            try:
+                return pair, self.scrapers[source].board_exists(slug)
+            except Exception as exc:          # a probe failure is not fatal
+                log.debug("Probe error %s/%s: %s", source, slug, exc)
+                return pair, None
+
+        found_pair = None
+        with ThreadPoolExecutor(max_workers=min(len(live), 4)) as pool:
+            for (source, slug), exists in pool.map(ask, live):
+                if exists is None:
+                    continue
+                self.progress.probes_sent += 1
+                # Persist immediately rather than at the end: a run interrupted
+                # after 4,000 probes must not throw away what those cost.
+                record_probe(source, slug, exists, company_name=name if exists else None)
+                self._cache[(source, slug)] = exists
+                # `plan` returns candidates best-first, and pool.map preserves
+                # that order, so the first hit here is the same one the
+                # sequential loop would have returned.
+                if exists and found_pair is None:
+                    found_pair = (source, slug)
+
+        if found_pair:
+            source, slug = found_pair
+            log.info("Found %s on %s (slug: %s)", name, source, slug)
+            return DiscoveryResult(name=name, slug=slug, source=source, found=True)
 
         log.debug("No board found for %s", name)
         return DiscoveryResult(name=name, slug=None, source=None, found=False)

@@ -42,14 +42,40 @@ the resume — not even one the job description asks for. If the candidate does
 not have something the posting wants, leave it out; do not imply it.
 
 Write plainly. No "I am writing to express my interest", no "passionate", no
-"synergy". Say what the candidate has done that bears on this role, and why
-this company specifically. Under 320 words.
+"synergy", no "I would be thrilled". Contractions are fine. Short sentences
+are better than long ones. Under 320 words in total — a letter a tired person
+reads at the end of a long day.
+
+Three paragraphs, each with a job to do:
+
+  1. WHY THIS ROLE. Name something specific from the posting — a system, a
+     problem, a scale, a constraint — and connect it to work the candidate has
+     actually done. Never "I was excited to see your posting". This paragraph
+     is the only reason anyone reads the second one.
+
+  2. THE EVIDENCE. One or two concrete things from the resume that bear
+     directly on paragraph one: what was built, at what scale, with what
+     result. Numbers if the resume has them; no numbers if it does not.
+     Specific beats comprehensive — this is not a summary of the resume,
+     which is attached anyway.
+
+  3. THE CLOSE. Short. What the candidate would work on, or what they want to
+     talk about. No restating, no "I look forward to hearing from you at your
+     earliest convenience".
+
+If the resume does not support a claim the posting asks for, leave it out of
+the letter entirely and name it in "left_out" instead. A letter that quietly
+skips a gap is honest; one that implies the gap is filled is not.
 
 Reply with JSON only:
 
 {
   "greeting": "Dear Hiring Manager,  (or a name if the posting gives one)",
-  "body": ["paragraph one", "paragraph two", "paragraph three"],
+  "body": [
+    "why this role — specific to the posting, tied to real work",
+    "the evidence — concrete, from the resume, relevant to paragraph one",
+    "the close — short, forward-looking"
+  ],
   "closing": "Sincerely,\\nName",
   "why_this_company": "one sentence on what in the posting prompted the letter",
   "left_out": ["anything the posting wants that the resume does not support"]
