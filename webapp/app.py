@@ -128,9 +128,26 @@ def index():
         resume=resume.name if resume else None,
         resume_dir=str(resume_dir()),
         strong=sum(1 for r in rows if r["score"] is not None and r["score"] >= 70),
+        my_years=derived_years(),
         unscored=sum(1 for r in rows if r["score"] is None),
         **last_run_stats(),
     )
+
+
+def derived_years() -> int | None:
+    """Years of experience the resume claims, for the "within my experience"
+    filter. None when it could not be read, and then the filter does nothing
+    rather than guessing a number and hiding jobs on the strength of it."""
+    try:
+        from config.loader import PROJECT_ROOT
+        from resume.profile import PROFILE_FILENAME, load_profile
+
+        profile = load_profile(
+            PROJECT_ROOT / cfg().get("filters.profile_path", PROFILE_FILENAME))
+        years = getattr(profile, "years_experience", None) if profile else None
+        return int(years) if years else None
+    except Exception:
+        return None
 
 
 def last_run_stats() -> dict:
