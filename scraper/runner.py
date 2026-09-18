@@ -7,7 +7,9 @@ board never aborts the batch (README.md §C6).
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 from dataclasses import dataclass, field
 
@@ -103,30 +105,121 @@ def run_scrape(cfg) -> RunSummary:
     close_on_empty = bool(cfg.get("limits.close_on_empty_board", False))
 
     companies = load_companies(cfg)
-    log.info("Run %s — scraping %d companies", summary.run_id, len(companies))
+    workers = int(cfg.get("limits.scrape_workers", 6) or 1)
+    if _is_in_memory():
+        # An in-memory SQLite database belongs to the connection that opened
+        # it, so a worker thread finds an empty one. That is a real property
+        # of the database, not a test quirk, and the honest response is to
+        # stay on one thread rather than to pretend otherwise. Read from the
+        # live engine rather than from config, because config is not always
+        # where the database came from.
+        workers = 1
+    log.info("Run %s — scraping %d companies, %d at a time",
+             summary.run_id, len(companies), workers)
 
+    # Boards are walked several at a time, but never two on the same host.
+    #
+    # The 1.5s delay has always been per-host; the loop was not. So four
+    # different hosts spent an hour and forty minutes taking turns waiting on
+    # each other, of which only forty-six were boards-api.greenhouse.io
+    # actually being paced. Workday was the worst of it: seventy boards on
+    # seventy DIFFERENT hosts, walked one at a time, thirty-five minutes.
+    #
+    # Grouping by host and running the groups concurrently changes none of the
+    # politeness -- each host still gets 1.5s between requests, enforced by
+    # its own lock in PoliteClient -- and turns the total from the SUM of the
+    # hosts into the MAX of them.
+    from collections import OrderedDict
+
+    by_host: "OrderedDict[str, list]" = OrderedDict()
     for company in companies:
         scraper = scrapers.get(company.source)
         if scraper is None:
             continue
+        by_host.setdefault(_host_of(scraper, company), []).append(company)
 
+    lock = threading.Lock()
+
+    def walk(host_companies: list) -> None:
+        for company in host_companies:
+            _scrape_one(company, scrapers, job_filter, summary, lock,
+                        deactivate_after, close_on_empty)
+
+    if workers <= 1:
+        # No pool at all, not a pool of one. A ThreadPoolExecutor with a single
+        # worker still runs on a worker THREAD, which is exactly what an
+        # in-memory database cannot tolerate -- the reason for dropping to one
+        # worker in the first place.
+        for host_companies in by_host.values():
+            walk(host_companies)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(walk, by_host.values()))
+
+    return summary
+
+
+def _is_in_memory() -> bool:
+    """Is the connected database one that cannot be shared between threads?"""
+    try:
+        from db import session as session_mod
+
+        return ":memory:" in str(getattr(session_mod, "_engine", "") or "")
+    except Exception:
+        return False
+
+
+def _host_of(scraper, company) -> str:
+    """The host this board lives on — the thing the delay actually applies to.
+
+    Greenhouse, Lever and Ashby put every board on one host each, so those
+    stay sequential and must. Every Workday tenant is its own host, so seventy
+    of them can be walked at once without any of them noticing.
+    """
+    try:
+        url = scraper.board_url(company.slug) or ""
+        if "://" in url:
+            return url.split("/")[2].lower()
+    except Exception:
+        pass
+    return company.source
+
+
+def _scrape_one(company, scrapers, job_filter, summary, lock,
+                deactivate_after, close_on_empty) -> None:
+    """One board, start to finish. Runs on a worker thread."""
+    scraper = scrapers.get(company.source)
+    if scraper is None:
+        return
+
+    with lock:
         summary.companies_attempted += 1
-        started = time.monotonic()
-        partial = False
-        try:
-            raw_jobs, partial = _fetch(scraper, company, job_filter)
-        except RobotsDisallowed as exc:
-            _log_failure(summary, company, "RobotsDisallowed", str(exc), started, deactivate_after)
-            continue
-        except Exception as exc:
-            _log_failure(summary, company, type(exc).__name__, str(exc), started, deactivate_after)
-            continue
+    started = time.monotonic()
+    partial = False
+    try:
+        raw_jobs, partial = _fetch(scraper, company, job_filter)
+    except RobotsDisallowed as exc:
+        with lock:
+            _log_failure(summary, company, "RobotsDisallowed", str(exc), started,
+                         deactivate_after)
+        return
+    except Exception as exc:
+        with lock:
+            _log_failure(summary, company, type(exc).__name__, str(exc), started,
+                         deactivate_after)
+        return
 
-        kept = job_filter.apply(raw_jobs)
+    kept = job_filter.apply(raw_jobs)
+
+    # One writer at a time past this point. SQLite takes an exclusive lock for
+    # a write, so letting six threads insert at once buys nothing and produces
+    # "database is locked" instead. The slow part — the network — already
+    # happened above, outside the lock.
+    with lock:
         new_count, updated_count = _persist(kept)
 
         # Only reachable on a SUCCESSFUL fetch — every failure path above has
-        # already `continue`d, so an outage can never close a company's jobs.
+        # already returned, so an outage can never close a company's jobs.
         # Reconciled against EVERY posting returned, not the filtered subset:
         # a stored job whose title no longer matches the filters is still on
         # the board (scraper/lifecycle.py).
@@ -146,13 +239,12 @@ def run_scrape(cfg) -> RunSummary:
         summary.jobs_reopened += lifecycle.reopened
 
         _log_success(summary, company, len(raw_jobs), len(kept), new_count, started)
-        log.info(
-            "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed",
-            company.source, company.slug, len(raw_jobs), len(kept), new_count,
-            lifecycle.closed,
-        )
 
-    return summary
+    log.info(
+        "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed",
+        company.source, company.slug, len(raw_jobs), len(kept), new_count,
+        lifecycle.closed,
+    )
 
 
 def _persist(jobs: list[RawJob]) -> tuple[int, int]:
