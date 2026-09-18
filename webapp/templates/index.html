@@ -77,9 +77,13 @@
 
 <div class="bar">
   <input type="search" id="q" placeholder="Search company or title" aria-label="Search">
+  <button class="chip" id="f-today" aria-pressed="false" title="Posted in the last 24 hours — an empty pile in front of you">Today</button>
+  <button class="chip" id="f-week" aria-pressed="false" title="Posted in the last 7 days">This week</button>
   <button class="chip" id="f-remote" aria-pressed="false">Remote</button>
   <button class="chip" id="f-strong" aria-pressed="false">70%+</button>
   <button class="chip" id="f-paid" aria-pressed="false">Salary published</button>
+  <button class="chip" id="f-90k" aria-pressed="false" title="Where a salary is published and starts at $150K or more">$150K+</button>
+  <button class="chip" id="f-reach" aria-pressed="false" title="Asks for no more years than you have, or does not say">Within my experience</button>
   <button class="chip" id="f-new" aria-pressed="false">Not yet applied</button>
   <button class="chip" id="f-fresh" aria-pressed="false">Under 3 months</button>
   <select id="board" aria-label="Board">
@@ -138,7 +142,11 @@ const ROWS = RAW.map(r => ({...r,
   ageDays: ageDays(r.age), expMin: firstNum(r.experience), payMin: firstNum(r.salary)}));
 
 const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
-               recent:false, board:''};
+               recent:false, board:'', today:false, week:false, pay150:false,
+               reach:false};
+// Years of experience the derived profile says you have. Used by the
+// "Within my experience" filter, which hides roles asking for more.
+const MY_YEARS = {{ my_years or 'null' }};
 let sortKey = 'score', sortDir = -1;
 
 function visible() {
@@ -152,6 +160,13 @@ function visible() {
     if (state.paid && !r.salary) return false;
     if (state.fresh && r.status !== 'Not Applied') return false;
     if (state.recent && (r.ageDays === null || r.ageDays > 92)) return false;
+    if (state.today && (r.ageDays === null || r.ageDays > 1)) return false;
+    if (state.week && (r.ageDays === null || r.ageDays > 7)) return false;
+    if (state.pay150 && (r.payMin === null || r.payMin < 150000)) return false;
+    // An unstated requirement is not a barrier — only a stated one that is
+    // higher than what you have.
+    if (state.reach && MY_YEARS !== null && r.expMin !== null
+        && r.expMin > MY_YEARS) return false;
     if (state.board && r.board !== state.board) return false;
     return true;
   }).sort((a, b) => {
@@ -200,7 +215,8 @@ function render() {
 
 $('q').addEventListener('input', e => { state.q = e.target.value; render(); });
 [['f-remote','remote'],['f-strong','strong'],['f-paid','paid'],
- ['f-new','fresh'],['f-fresh','recent']]
+ ['f-new','fresh'],['f-fresh','recent'],['f-today','today'],
+ ['f-week','week'],['f-90k','pay150'],['f-reach','reach']]
   .forEach(([id,k]) => $(id).addEventListener('click', e => {
     state[k] = !state[k];
     e.currentTarget.setAttribute('aria-pressed', String(state[k]));
@@ -210,8 +226,12 @@ $('q').addEventListener('input', e => { state.q = e.target.value; render(); });
 $('board').addEventListener('change', e => { state.board = e.target.value; render(); });
 
 $('f-clear').addEventListener('click', () => {
-  Object.assign(state, {q:'', remote:false, strong:false, paid:false,
-                        fresh:false, recent:false, board:''});
+  // Reset every key in `state` rather than a hand-written list. The list had
+  // already fallen behind once: four filters added above were not in it, so
+  // "Clear" left them on and the table looked broken rather than filtered.
+  for (const k of Object.keys(state)) {
+    state[k] = (typeof state[k] === 'boolean') ? false : '';
+  }
   $('q').value = ''; $('board').value = '';
   document.querySelectorAll('.chip[aria-pressed]').forEach(c =>
     c.setAttribute('aria-pressed','false'));

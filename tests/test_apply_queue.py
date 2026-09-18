@@ -254,3 +254,47 @@ def test_score_basis_tells_a_posting_from_a_headline():
     ) == "title"
     assert score_basis("") == "title"
     assert score_basis(None) == "title"
+
+
+# -- where a posting is, in three answers not two ---------------------------
+
+def test_a_us_city_and_state_is_recognised():
+    """The first bug: requiring the words "united states" threw away every
+    posting that said only "Boston, MA" — 0 of 3,590 university campuses
+    survived it."""
+    from locations import is_us
+
+    for place in ("Boston, MA", "Ann Arbor, Michigan", "Fayetteville, AR",
+                  "Austin, TX 78701", "Remote - US", "US Remote"):
+        assert is_us(place) is True, place
+
+
+def test_a_bare_us_city_is_recognised():
+    """Boards print these with no state, and there are 74 of them in one
+    snapshot. Without a city list they read as foreign."""
+    from locations import is_us
+
+    for place in ("San Francisco", "Chicago", "Austin", "Plano",
+                  "New York City | OnSite"):
+        assert is_us(place) is True, place
+
+
+def test_a_foreign_city_is_rejected_even_without_its_country():
+    """The second bug, in the opposite direction. "Kfar Saba" ranked first at
+    94% because the exclusion list was country-level and the posting never
+    said Israel."""
+    from locations import is_us
+    from resume.profile import NON_US_PLACES
+
+    assert is_us("Kfar Saba", NON_US_PLACES) is False
+    assert is_us("Getafe Area", NON_US_PLACES) is False
+    assert is_us("Rome Metropolitain Area | Remote", NON_US_PLACES) is False
+
+
+def test_an_unknowable_location_is_kept_not_guessed():
+    """"Remote" is silence, not evidence of being abroad. Dropping these was
+    the original bug and must not come back through the other door."""
+    from locations import is_us
+
+    for place in ("Remote", "Hybrid", "In-Office", "", None):
+        assert is_us(place) is None, place

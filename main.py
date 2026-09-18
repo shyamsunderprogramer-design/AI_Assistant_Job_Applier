@@ -378,7 +378,16 @@ def cmd_prune(cfg, args) -> int:
                     description=job.description, application_url=job.application_url,
                 )
             )
-            if reason:
+            # Title and location are not equally trustworthy here. The title
+            # filter is narrower than the scorer: 106 stored jobs fail it for
+            # saying "Site Reliability Engineer", a phrase the derived profile
+            # does not carry, while the scorer rates those same jobs 85-90%.
+            # Deleting on the weaker of two disagreeing signals is the wrong
+            # way round, so --location-only exists for the case where the
+            # verdict is not in doubt: a posting in Kyiv is not in the US
+            # however well it scores.
+            if reason and (not getattr(args, "location_only", False)
+                           or "not in the US" in reason):
                 stale.append((job, reason))
 
         if not stale:
@@ -870,6 +879,8 @@ def build_parser() -> argparse.ArgumentParser:
         "prune", help="Remove stored jobs that no longer match the current search"
     )
     p_prune.add_argument("--apply", action="store_true", help="Actually delete (default: preview)")
+    p_prune.add_argument("--location-only", action="store_true",
+                         help="Only remove jobs rejected for being outside the US")
 
     p_score = sub.add_parser("score", help="Score jobs against the base resume (no API cost)")
     p_score.add_argument("--limit", type=int, default=0, help="Only score N jobs")
