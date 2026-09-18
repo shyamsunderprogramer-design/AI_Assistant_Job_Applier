@@ -72,7 +72,7 @@
 
   <div class="row" style="margin-top:4px">
     <button class="btn primary" type="submit">Save</button>
-    <span class="hint" id="save-note"></span>
+    <span class="hint" id="save-note">Nothing is stored until you press this.</span>
   </div>
   <div class="out" id="out" hidden></div>
 </form>
@@ -85,6 +85,21 @@
 
 <script>
 const $ = id => document.getElementById(id);
+
+// A blocked submit is silent by default: the browser refuses, shows a small
+// tooltip on the offending field, and if that field has scrolled off screen
+// nothing appears to happen at all. Someone filled this form, pressed Save,
+// and no request ever reached the server.
+$('applicant').addEventListener('invalid', e => {
+  const out = $('out');
+  out.hidden = false; out.className = 'out bad';
+  const label = e.target.closest('label');
+  const name = label ? label.childNodes[0].textContent.trim() : e.target.name;
+  out.textContent = `${name} is needed before this can be saved — every `
+                  + `application form asks for it.`;
+  e.target.scrollIntoView({block: 'center', behavior: 'smooth'});
+  e.target.focus({preventScroll: true});
+}, true);
 
 $('applicant').addEventListener('submit', async e => {
   e.preventDefault();
