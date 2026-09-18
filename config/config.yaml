@@ -229,6 +229,19 @@ filters:
 # Pacing / limits (application caps are enforced in Phase 4)
 # ---------------------------------------------------------------------------
 limits:
+  # How many HOSTS to walk at once. Not how many requests to send a host: that
+  # is still one at a time with min_delay_seconds between them, enforced per
+  # host inside PoliteClient.
+  #
+  # The delay was always per-host and the loop never was, so four different
+  # hosts spent an hour and forty minutes taking turns waiting on each other.
+  # Workday was the worst of it -- seventy boards on seventy DIFFERENT hosts,
+  # walked one at a time for thirty-five minutes.
+  #
+  # Raising this does not make the tool ruder to anybody; it stops it being
+  # needlessly slow to itself.
+  scrape_workers: 6
+
   max_companies_per_run: 0        # 0 = no cap
   max_applications_per_day: 15    # Phase 4
   # Stop scraping a company after this many consecutive failures (dead slug,

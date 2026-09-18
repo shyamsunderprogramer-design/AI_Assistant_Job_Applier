@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 import urllib.robotparser
 from dataclasses import dataclass
@@ -61,6 +62,10 @@ class PoliteClient:
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": settings.user_agent})
         self._last_request_at: dict[str, float] = {}
+        # A lock per host, created on demand; `_locks_guard` only protects the
+        # creation, never the wait itself.
+        self._host_locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
         self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
 
     # -- robots ------------------------------------------------------------
@@ -127,13 +132,28 @@ class PoliteClient:
 
     # -- pacing ------------------------------------------------------------
     def _wait_turn(self, host: str) -> None:
-        delay = self.settings.min_delay_seconds + random.uniform(0, self.settings.jitter_seconds)
-        last = self._last_request_at.get(host)
-        if last is not None:
-            elapsed = time.monotonic() - last
-            if elapsed < delay:
-                time.sleep(delay - elapsed)
-        self._last_request_at[host] = time.monotonic()
+        """Hold back until this host's turn comes round again.
+
+        One lock per host, not one lock overall. The delay has always been
+        per-host, but the scraper walked boards one at a time, so four
+        different hosts took turns waiting on each other for no reason: an
+        hour and forty minutes of which only forty-six were greenhouse.io
+        actually being paced. Holding the lock across the sleep is what makes
+        concurrency safe -- two workers on the same host still queue, and two
+        workers on different hosts never meet.
+        """
+        with self._locks_guard:
+            lock = self._host_locks.setdefault(host, threading.Lock())
+
+        with lock:
+            delay = (self.settings.min_delay_seconds
+                     + random.uniform(0, self.settings.jitter_seconds))
+            last = self._last_request_at.get(host)
+            if last is not None:
+                elapsed = time.monotonic() - last
+                if elapsed < delay:
+                    time.sleep(delay - elapsed)
+            self._last_request_at[host] = time.monotonic()
 
     # -- requests ----------------------------------------------------------
     def get(self, url: str, **kwargs) -> requests.Response:
