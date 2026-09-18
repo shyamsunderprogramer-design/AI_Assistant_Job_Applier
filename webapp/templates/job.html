@@ -60,12 +60,24 @@
         <div class="hint">Rewritten for this role using only what your resume
           already says. Anything invented is rejected, not saved.</div>
         <div class="row" style="margin-top:9px">
+          {% if api_ready %}
+          {# The direct path when a key is configured: one press, no copying.
+             The free route stays beside it, because it is free. #}
+          <button class="btn primary" data-tailor="1">Write it for me</button>
+          {% endif %}
           <button class="btn" data-brief="resume">
-            {% if packet.has_resume %}Do it again{% else %}Copy the prompt{% endif %}
+            {% if packet.has_resume %}Copy the prompt again{% else %}Copy the prompt{% endif %}
           </button>
           <span class="hint" id="hint-resume" hidden>Copied — paste it into any
             chat, then bring the reply back below.</span>
         </div>
+        {% if api_ready %}
+        <div class="hint" style="margin-top:6px">
+          &ldquo;Write it for me&rdquo; uses {{ api_model }} and costs a few cents.
+          &ldquo;Copy the prompt&rdquo; is free and works with any chat. Both go
+          through the same guard before anything is saved.
+        </div>
+        {% endif %}
         <details class="fold" id="fold-resume">
           <summary>Prompt, and where the reply goes</summary>
           <textarea id="prompt-resume" readonly aria-label="Prompt"></textarea>
@@ -211,6 +223,34 @@ document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click
   $('out-' + kind).hidden = true;
   $('reply-' + kind).focus();
 }));
+
+// "Write it for me" — the API route. It costs money, so the first press asks
+// what it would cost and the second one spends it. Pressing a button on a page
+// should never quietly charge someone.
+let tailorConfirmed = false;
+document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
+  const button = e.currentTarget;
+  button.disabled = true;
+
+  if (!tailorConfirmed) {
+    show('out-resume', 'Checking what this would cost…');
+    const est = await ask(`/job/${JOB}/tailor?estimate=1`, {method: 'POST'});
+    button.disabled = false;
+    show('out-resume', (est.output || est.error || '')
+         + '\n\nPress again to go ahead.', 'good');
+    button.textContent = 'Yes, write it';
+    tailorConfirmed = true;
+    return;
+  }
+
+  show('out-resume', 'Writing it with the API — this takes a minute…');
+  const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 300000);
+  button.disabled = false;
+  button.textContent = 'Write it for me';
+  tailorConfirmed = false;
+  show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
+  if (d.ok) { $('step-resume').classList.add('done'); countDone(); }
+});
 
 $('reveal')?.addEventListener('click', async () => {
   const d = await ask(`/job/${JOB}/reveal`, {method:'POST'});

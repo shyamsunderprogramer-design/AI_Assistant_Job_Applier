@@ -302,6 +302,14 @@ def job_detail(job_id: int):
         description = job.description or ""
         requirements = job.requirements or ""
 
+    import os
+
+    from resume.llm import model_name, provider_name
+
+    # Only offer the paid button where it could actually work.
+    api_ready = (provider_name(cfg()) == "anthropic"
+                 and bool(os.getenv("ANTHROPIC_API_KEY")))
+
     folder = packet_folder(row)
     packet = {
         "exists": folder is not None,
@@ -313,6 +321,7 @@ def job_detail(job_id: int):
         "job.html",
         job=row, description=description, requirements=requirements,
         statuses=STATUS_VALUES, packet=packet,
+        api_ready=api_ready, api_model=model_name(cfg()),
     )
 
 
@@ -399,12 +408,26 @@ def derived_search() -> dict:
 
 @app.post("/job/<int:job_id>/<action>")
 def act(job_id: int, action: str):
-    """packet / brief / letter — each one a command, each one reporting back."""
-    commands = {"packet": ["packet"], "brief": ["brief"], "letter": ["letter"]}
+    """packet / brief / letter / tailor — each one a command, reporting back.
+
+    `tailor` is the only one that spends money, and it takes its job id as a
+    flag rather than positionally, which is why the table holds argument lists
+    rather than command names. `?estimate=1` prices the call without making it.
+    """
+    commands = {
+        "packet": ["packet"],
+        "brief": ["brief"],
+        "letter": ["letter"],
+        "tailor": ["tailor", "--job-id"],
+    }
     if action not in commands:
         return jsonify(ok=False, error=f"Unknown action {action!r}"), 400
 
-    ok, output = run_command(*commands[action], str(job_id))
+    args = list(commands[action])
+    if action == "tailor" and request.args.get("estimate"):
+        args.insert(1, "--estimate")
+
+    ok, output = run_command(*args, str(job_id))
     return jsonify(ok=ok, output=output)
 
 
