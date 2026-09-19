@@ -67,7 +67,11 @@ PROVIDERS = {
     "omniroute": {
         "label": "OmniRoute (self-hosted gateway)",
         "free": True,           # keyless by default and runs on this machine
-        "env_key": None,        # a self-hosted gateway needs no Authorization
+        # A self-hosted gateway starts keyless, but it can be configured to
+        # require one -- so the key is accepted and sent when present, and
+        # never demanded.
+        "env_key": "OMNIROUTE_API_KEY",
+        "key_optional": True,
         "base_url": "http://localhost:20128/v1",
         # "auto" is the gateway's own routing combo: it picks a provider,
         # falls back when one fails, and the keyless free providers are wired
@@ -301,7 +305,7 @@ def _openai_compatible(provider: str, system: str, user: str, cfg=None, *,
     # A self-hosted gateway authenticates by being on localhost. Demanding a
     # key there would make a working setup look broken.
     api_key = os.getenv(env_key, "").strip() if env_key else ""
-    if env_key and not api_key:
+    if env_key and not api_key and not spec.get("key_optional"):
         raise ProviderUnavailable(
             f"{env_key} is not set, and the writing model is {provider!r}.\n"
             f"  Add it on the Settings page, or switch the model to 'ollama' "

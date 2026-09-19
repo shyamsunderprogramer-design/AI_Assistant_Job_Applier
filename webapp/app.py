@@ -378,7 +378,8 @@ def writer_state() -> dict:
     env_key = spec.get("env_key")
     # A provider needing a key it has not got cannot run; one that needs no
     # key -- a local model, a self-hosted gateway -- always can.
-    ready = bool(spec) and (not env_key or bool(os.getenv(env_key)))
+    ready = bool(spec) and (not env_key or spec.get("key_optional")
+                            or bool(os.getenv(env_key)))
     free = bool(spec.get("free"))
 
     # A service on this machine also has to be running, not merely chosen.
@@ -581,6 +582,19 @@ ENV_FIELDS = [
         "link_label": "Create an OpenAI key",
     },
     {
+        "key": "OMNIROUTE_API_KEY", "secret": True,
+        "label": "OmniRoute gateway key",
+        "needed_for": "Reaching your own OmniRoute gateway, if you gave it a key",
+        "help": "Optional. A gateway on this machine usually needs none — "
+                "paste one only if you generated a server key in the "
+                "OmniRoute dashboard. This is NOT a provider key: the keys "
+                "OmniRoute uses to reach OpenAI, Anthropic and the rest are "
+                "added inside its own dashboard, not here.",
+        "placeholder": "leave blank unless you made one",
+        "link": "http://localhost:20128",
+        "link_label": "Open the OmniRoute dashboard",
+    },
+    {
         "key": "OPENROUTER_API_KEY", "secret": True,
         "label": "OpenRouter key",
         "needed_for": "Reaching ~450 models from most vendors with one key",
@@ -720,7 +734,8 @@ def writing_model_state() -> dict:
         # answer is a different question, and the one worth showing.
         url = spec.get("base_url") or (DEFAULT_OLLAMA_HOST if name == "ollama" else "")
         local = bool(url) and "localhost" in url
-        has_key = True if key is None else bool((stored.get(key) or "").strip())
+        has_key = (True if key is None or spec.get("key_optional")
+                   else bool((stored.get(key) or "").strip()))
         options.append({
             "name": name,
             "label": spec["label"],

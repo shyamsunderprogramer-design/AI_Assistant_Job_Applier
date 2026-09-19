@@ -175,3 +175,22 @@ def test_a_keyed_provider_still_sends_the_header(monkeypatch):
         _Response(payload={"choices": [{"message": {"content": "ok"}}]}))[1])
     complete("s", "u", None)
     assert seen["headers"]["Authorization"] == "Bearer sk-or-test"
+
+
+def test_the_gateway_key_is_optional_not_required(monkeypatch):
+    """OmniRoute starts keyless but can be configured to want one. Demanding
+    it would break a working keyless setup; ignoring it would break a keyed
+    one. It is sent when present and never demanded."""
+    monkeypatch.setenv("RESUME_PROVIDER", "omniroute")
+    monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
+    seen = {}
+    monkeypatch.setattr(requests, "post", lambda url, **kw: (
+        seen.update(headers=kw["headers"]),
+        _Response(payload={"choices": [{"message": {"content": "ok"}}]}))[1])
+
+    assert complete("s", "u", None).text == "ok"
+    assert "Authorization" not in seen["headers"]
+
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "omni-secret")
+    complete("s", "u", None)
+    assert seen["headers"]["Authorization"] == "Bearer omni-secret"
