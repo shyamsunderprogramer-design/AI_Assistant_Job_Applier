@@ -75,7 +75,25 @@ def _normalise(text: str) -> str:
 
 
 def _base_vocabulary(base_text: str) -> set[str]:
-    return set(tokenize(base_text))
+    """Every word the resume contains, with and without trailing punctuation.
+
+    TOKEN_RE keeps "." inside a token so that node.js and asp.net survive
+    tokenising. The side effect is that a word ending a sentence keeps its
+    full stop -- "operational KPIs." yields "kpis.", which never matches the
+    same word written mid-sentence. In this resume that hid thirteen ordinary
+    words from the guard: stakeholders, documentation, decisions, exceptions,
+    monitoring. A tailoring that used any of them was rejected as invented.
+
+    Both forms go in. This can only forgive words the resume actually
+    contains, so it cannot let a genuine fabrication through.
+    """
+    vocabulary: set[str] = set()
+    for token in tokenize(base_text):
+        vocabulary.add(token)
+        trimmed = token.strip(".-")
+        if trimmed:
+            vocabulary.add(trimmed)
+    return vocabulary
 
 
 def _digit_runs(text: str) -> set[str]:
