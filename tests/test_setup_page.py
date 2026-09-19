@@ -77,14 +77,26 @@ def test_saving_creates_an_owner_only_file(site):
     assert stat.S_IMODE((site / ".env").stat().st_mode) == 0o600
 
 
-def test_a_visible_field_can_be_emptied(site):
-    """Unlike secrets, a field whose value is on screen means what it shows."""
+def test_a_blank_box_never_deletes_a_visible_value_either(site):
+    """This is how MAIL_ADDRESS was silently emptied by a save of something
+    else, which broke the job-alert import with no error anywhere. A blank
+    box means "unchanged" for every field, not just for secrets."""
     (site / ".env").write_text("MAIL_ADDRESS=old@example.com\n")
 
     with webapp.app.test_client() as client:
-        client.post("/setup", data={"MAIL_ADDRESS": ""})
+        client.post("/setup", data={"MAIL_ADDRESS": "", "OMNIROUTE_API_KEY": "k"})
 
-    assert read_env(site / ".env")["MAIL_ADDRESS"] == ""
+    assert read_env(site / ".env")["MAIL_ADDRESS"] == "old@example.com"
+
+
+def test_a_visible_field_is_removed_only_on_the_explicit_checkbox(site):
+    (site / ".env").write_text("MAIL_ADDRESS=old@example.com\n")
+
+    with webapp.app.test_client() as client:
+        client.post("/setup", data={"MAIL_ADDRESS": "",
+                                    "clear__MAIL_ADDRESS": "on"})
+
+    assert "MAIL_ADDRESS" not in read_env(site / ".env")
 
 
 def test_the_page_loads_with_no_env_file_at_all(site):
