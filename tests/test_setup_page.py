@@ -224,7 +224,30 @@ def test_a_paid_provider_with_no_key_cannot_run(site, monkeypatch):
     assert webapp.writer_state()["ready"] is False
 
 
-def test_a_keyless_gateway_can_always_run(site, monkeypatch):
+def test_a_keyless_gateway_is_ready_only_while_it_is_running(site, monkeypatch):
+    """Needing no key makes it configured, not reachable. A gateway that was
+    never started would otherwise show a button that fails on press."""
     monkeypatch.setenv("RESUME_PROVIDER", "omniroute")
-    state = webapp.writer_state()
-    assert state["ready"] is True and state["free"] is True
+
+    monkeypatch.setattr(webapp, "service_up", lambda url, timeout=0.4: True)
+    up = webapp.writer_state()
+    assert up["ready"] is True and up["free"] is True
+    assert up["needs_starting"] is False
+
+    monkeypatch.setattr(webapp, "service_up", lambda url, timeout=0.4: False)
+    down = webapp.writer_state()
+    assert down["ready"] is False
+    assert down["needs_starting"] is True
+
+
+def test_a_local_model_that_is_switched_off_is_not_ready(site, monkeypatch):
+    monkeypatch.setenv("RESUME_PROVIDER", "ollama")
+    monkeypatch.setattr(webapp, "service_up", lambda url, timeout=0.4: False)
+    assert webapp.writer_state()["ready"] is False
+
+
+def test_service_up_says_no_for_a_closed_port():
+    # Port 1 is reserved and nothing listens there.
+    assert webapp.service_up("http://localhost:1", timeout=0.2) is False
+    assert webapp.service_up("") is False
+    assert webapp.service_up("not a url") is False

@@ -36,6 +36,17 @@
             {% elif o.ready %}Key saved. Default model: <code>{{ o.default_model }}</code>.
             {% else %}Needs <code>{{ o.env_key }}</code> above before it can run.{% endif %}
           </span>
+          {# A local service can be chosen and still be switched off. Say so
+             here rather than letting the button fail when it is pressed. #}
+          {% if o.local %}
+            {% if o.running %}
+              <span class="sub dim">running at {{ o.url }}</span>
+            {% else %}
+              <span class="sub warn">not running — nothing is listening at
+                {{ o.url }}{% if o.name == 'omniroute' %}. Install it with
+                <code>npm install -g omniroute</code>{% endif %}</span>
+            {% endif %}
+          {% endif %}
         </span>
       </label>
       {% endfor %}
