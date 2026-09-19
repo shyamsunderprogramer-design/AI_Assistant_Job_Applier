@@ -255,3 +255,4 @@ ol.steps{list-style:none;margin:0;padding:0}
 /* A resume that derived no search is the one failure that looks like success:
    the page is otherwise identical to a working one. */
 .sub.warn{color:var(--warn);font-weight:600}
+.sub.dim{color:var(--muted);font-size:.85em}
