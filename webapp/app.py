@@ -503,6 +503,24 @@ ENV_FIELDS = [
         "link_label": "Create a key in the Anthropic Console",
     },
     {
+        "key": "OPENAI_API_KEY", "secret": True,
+        "label": "OpenAI API key",
+        "needed_for": "Writing with OpenAI instead of Anthropic",
+        "help": "Only if you pick OpenAI as the writing model below.",
+        "placeholder": "sk-...",
+        "link": "https://platform.openai.com/api-keys",
+        "link_label": "Create an OpenAI key",
+    },
+    {
+        "key": "XAI_API_KEY", "secret": True,
+        "label": "xAI (Grok) API key",
+        "needed_for": "Writing with Grok instead of Anthropic",
+        "help": "Only if you pick Grok as the writing model below.",
+        "placeholder": "xai-...",
+        "link": "https://console.x.ai",
+        "link_label": "Create an xAI key",
+    },
+    {
         "key": "MAIL_ADDRESS", "secret": False,
         "label": "Mailbox address",
         "needed_for": "Importing jobs out of job-alert emails",
@@ -597,6 +615,46 @@ def env_state() -> list[dict]:
     return state
 
 
+def writing_model_state() -> dict:
+    """Which model writes the tailoring, and whether it can actually run.
+
+    Free and local is the default and is listed first, deliberately. Somebody
+    who already pays for a chat subscription should not be nudged into buying
+    API credit to use this tool -- the job page's first offer is still a
+    prompt to paste into the subscription they already have, and this page
+    should not contradict that.
+    """
+    from config.envfile import read_env
+    from resume.llm import PROVIDERS, default_model_for, provider_name
+
+    stored = read_env(env_path())
+    cfg = load_config()
+    # provider_name reads os.environ, which may lag the file the user just
+    # saved, so the file wins here.
+    chosen = (stored.get("RESUME_PROVIDER") or "").strip().lower() or provider_name(cfg)
+
+    options = []
+    for name, spec in PROVIDERS.items():
+        key = spec.get("env_key")
+        options.append({
+            "name": name,
+            "label": spec["label"],
+            "free": spec["free"],
+            "env_key": key,
+            "ready": True if key is None else bool((stored.get(key) or "").strip()),
+            "note": spec.get("note", ""),
+            "default_model": default_model_for(name),
+        })
+    options.sort(key=lambda o: (not o["free"], o["label"]))
+
+    return {
+        "chosen": chosen,
+        "model": (stored.get("RESUME_MODEL") or "").strip(),
+        "model_placeholder": default_model_for(chosen),
+        "options": options,
+    }
+
+
 @app.get("/setup")
 def setup_form():
     """The settings a public repo cannot carry, filled in on this machine.
@@ -609,6 +667,7 @@ def setup_form():
     return render_template(
         "setup.html",
         fields=env_state(),
+        writing=writing_model_state(),
         env_file=str(env_path()),
         exists=env_path().exists(),
         applicant=applicant_state(),
@@ -640,6 +699,17 @@ def setup_save():
             # on the form at all. A field that was never submitted is a field
             # nobody touched, and must not be wiped by saving something else.
             updates[key] = ""
+
+    from resume.llm import PROVIDERS
+
+    provider = (request.form.get("RESUME_PROVIDER") or "").strip().lower()
+    if provider:
+        if provider not in PROVIDERS:
+            return jsonify(ok=False, error=f"Unknown writing model {provider!r}."), 400
+        updates["RESUME_PROVIDER"] = provider
+    if "RESUME_MODEL" in request.form:
+        # Blank means "whatever that provider's default is", not a blank model.
+        updates["RESUME_MODEL"] = (request.form.get("RESUME_MODEL") or "").strip() or None
 
     try:
         changed = write_env(env_path(), updates)
