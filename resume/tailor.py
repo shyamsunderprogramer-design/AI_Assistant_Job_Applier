@@ -46,6 +46,43 @@ If the resume genuinely lacks something the job asks for, leave it out. A
 truthful weaker match is the correct output — the human will decide whether to
 apply. Never bridge a gap by inventing.
 
+HOW TO REWRITE A BULLET
+This is a resume a recruiter reads in six seconds, not an argument that the
+candidate fits. Four rules, and they matter more than the rewrite being clever:
+
+1. KEEP THE TENSE. A bullet written in present tense belongs to the job the
+   person still holds. Changing "Analyze" to "Analyzed" tells the reader they
+   have left. Never change the tense of a verb.
+
+2. SAME LENGTH OR SHORTER. You are swapping words, not adding them. If your
+   rewrite is longer than the original, you have padded it.
+
+3. NEVER EXPLAIN THE RELEVANCE INSIDE THE BULLET. Do not append clauses like
+   "directly supporting cost control", "mirroring the collaboration this role
+   requires", or "demonstrating ability to resolve shortages". A resume
+   describes the work; it never argues about the application. Put that
+   reasoning in the "reason" field, which is where the human reads it.
+
+4. REPLACE, DON'T APPEND. Use the job description's vocabulary by swapping it
+   for the resume's own synonym, inside the sentence — not by bolting a phrase
+   onto the end. If the resume says "purchase orders" and the JD says "POs",
+   that is a legitimate swap. If there is no honest swap to make, return the
+   bullet unchanged: an unchanged bullet is a perfectly good answer and far
+   better than a padded one.
+
+  Original : Analyze purchase requirements, inventory levels, and demand
+             forecasts to support procurement and planning decisions.
+  BAD      : Analyzed purchase requirements, inventory levels, and demand
+             forecasts to support procurement and planning decisions, directly
+             supporting material availability and cost control.
+             (tense changed, longer, and the added clause argues the case)
+  GOOD     : Analyze material buy lists, inventory levels, and demand
+             forecasts to set purchasing priorities.
+             (same tense, shorter, and the JD's own words replaced synonyms)
+
+Do not end several bullets with the same phrase. Repetition across bullets
+reads as a template and is worse than leaving them alone.
+
 Return ONLY a JSON object, no prose, in this exact shape:
 {
   "summary": "<2-3 sentence professional summary, or null if the base resume has none>",
