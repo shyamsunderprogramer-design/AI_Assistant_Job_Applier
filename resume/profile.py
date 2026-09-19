@@ -53,7 +53,8 @@ ROLE_FAMILIES: dict[str, dict[str, list[str]]] = {
     },
     "devops": {
         "identifies": ["devops", "dev ops", "ci/cd", "release engineer"],
-        "searches": ["devops", "dev ops", "release engineer", "build engineer"],
+        "searches": ["devops", "dev ops", "site reliability", "sre",
+                     "release engineer", "build engineer"],
     },
     "cloud": {
         "identifies": ["cloud engineer", "cloud architect", "cloud infrastructure", "aws", "azure"],

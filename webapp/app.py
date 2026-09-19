@@ -118,7 +118,7 @@ def index():
             session.query(Job).filter(Job.is_open.is_(True))
             .order_by(Job.ats_match_score.desc()).all()
         )
-        rows = [job_row(j) for j in jobs]
+        rows = collapse_repeats([job_row(j) for j in jobs])
 
     resume = current_resume()
     return render_template(
@@ -127,6 +127,10 @@ def index():
         statuses=STATUS_VALUES,
         resume=resume.name if resume else None,
         resume_dir=str(resume_dir()),
+        # The filename alone does not say whether the search matches the
+        # person: a supply chain resume that silently derived a software
+        # search looks identical on the page. Show the derived search.
+        search=derived_search() if resume else None,
         strong=sum(1 for r in rows if r["score"] is not None and r["score"] >= 70),
         my_years=derived_years(),
         applicant=applicant_state(),
@@ -239,6 +243,39 @@ def derived_years() -> int | None:
         return None
 
 
+def collapse_repeats(rows: list[dict]) -> list[dict]:
+    """Fold a company's identical postings into one row, counted.
+
+    Employers repost. Bluelight Consulting had one role listed twenty times,
+    Accenture Federal six, and Xometry four -- each a separate posting id, so
+    each a separate row. 286 of 1,983 open postings were repeats, and they
+    cluster at the top because a good match repeats as a good match. The top
+    hundred held four copies of one Xometry role.
+
+    Folded rather than deleted: a repost can be a real second location, and
+    the job page for each still exists. The row says how many, so nothing is
+    hidden -- it just stops one employer filling the screen.
+    """
+    seen: dict[tuple[str, str], dict] = {}
+    ordered: list[dict] = []
+    for row in rows:
+        key = ((row.get("company") or "").strip().lower(),
+               (row.get("title") or "").strip().lower())
+        first = seen.get(key)
+        if first is None:
+            row["repeats"] = 1
+            seen[key] = row
+            ordered.append(row)
+            continue
+        first["repeats"] += 1
+        # Keep the freshest of the set on screen: the same role posted twice
+        # is worth applying to at its newest, not its oldest.
+        if (row.get("ageDays") is not None and first.get("ageDays") is not None
+                and row["ageDays"] < first["ageDays"]):
+            first["id"], first["age"], first["url"] = row["id"], row["age"], row["url"]
+    return ordered
+
+
 def last_run_stats() -> dict:
     """What the last full scrape actually did.
 
@@ -341,6 +378,25 @@ def current_resume() -> Path | None:
     return find_base_resume(resume_dir())
 
 
+def resume_candidates() -> list[Path]:
+    """Every file in resume/ that could become the active resume.
+
+    The same rule `find_base_resume` selects from, so nothing can be left
+    behind that would silently take over once the current one is gone.
+    """
+    from resume.parser import find_base_resume
+
+    directory = resume_dir()
+    if not directory.exists():
+        return []
+    return [
+        p for p in directory.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in RESUME_SUFFIXES
+        and not p.name.startswith("~$")
+    ] if find_base_resume(directory) else []
+
+
 # -- actions ----------------------------------------------------------------
 
 @app.post("/upload")
@@ -369,6 +425,40 @@ def upload():
 
     ok, output = run_command("profile", "--force")
     return jsonify(ok=ok, file=target.name, output=output, search=derived_search())
+
+
+@app.post("/resume/remove")
+def remove_resume():
+    """Detach the resume and the search derived from it, together.
+
+    Both or neither. A profile left behind without its resume is the failure
+    this tool is meant to prevent -- the next person to upload would be
+    searched for under the last person's job titles until they noticed.
+
+    Stored jobs are deliberately left alone. They are evidence of what was
+    already found, they cost a scrape to replace, and they are scored against
+    whatever resume is current, so a stale one cannot masquerade as a match.
+    """
+    from config.loader import PROJECT_ROOT, load_config
+    from resume.profile import PROFILE_FILENAME
+
+    # Every readable file in resume/ is a candidate, and the newest one wins.
+    # So removing only the active file promotes whichever resume is next in
+    # line -- on this machine that was a previous person's, which would have
+    # made "remove" quietly mean "switch back to the last user".
+    removed = []
+    for path in sorted(resume_candidates()):
+        path.unlink()
+        removed.append(path.name)
+
+    profile = PROJECT_ROOT / load_config().get("filters.profile_path", PROFILE_FILENAME)
+    if profile.exists():
+        profile.unlink()
+        removed.append(profile.name)
+
+    if not removed:
+        return jsonify(ok=False, error="There was no resume to remove."), 404
+    return jsonify(ok=True, removed=removed)
 
 
 def derived_search() -> dict:

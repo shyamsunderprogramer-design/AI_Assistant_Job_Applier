@@ -246,3 +246,12 @@ ol.steps{list-style:none;margin:0;padding:0}
 .radio{display:inline-flex;align-items:center;gap:6px;font-size:13px;
   color:var(--ink);cursor:pointer}
 .radio input{margin:0}
+
+/* An employer reposting the same role. Folded into one row and counted, so
+   one company cannot fill the screen while nothing is hidden. */
+.rep{margin-left:6px;font-family:var(--mono);font-size:10px;color:var(--faint);
+  border:1px solid var(--line);border-radius:10px;padding:1px 5px}
+
+/* A resume that derived no search is the one failure that looks like success:
+   the page is otherwise identical to a working one. */
+.sub.warn{color:var(--warn);font-weight:600}
