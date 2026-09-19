@@ -269,3 +269,32 @@ def test_a_genuine_invention_is_still_caught():
     assert not result.ok
     flagged = {v.value.lower() for v in result.violations}
     assert "kubernetes" in flagged or "fedramp" in flagged
+
+
+def test_an_ampersand_term_printed_in_the_resume_is_not_invented():
+    """TOKEN_RE has no "&", so "S&OP" tokenises to "s" and "op" and the whole
+    term is never in the vocabulary. gemma4:e4b was rejected for writing S&OP,
+    which appears twice in the resume it was tailoring."""
+    from resume.guard import check_no_fabrication
+
+    base = "Supported S&OP and demand planning. Skills: MRP, MPS, S&OP, IBP."
+    tailored = "Ran S&OP cycles and MRP planning."
+    assert check_no_fabrication(base, tailored).ok
+
+
+def test_a_multi_word_name_needs_every_word_evidenced():
+    from resume.guard import check_no_fabrication
+
+    base = "Built Power BI dashboards for demand planning."
+    assert check_no_fabrication(base, "Built Power BI dashboards.").ok
+    # "Tableau" appears nowhere, so the pair cannot borrow support from "BI".
+    assert not check_no_fabrication(base, "Built Tableau BI dashboards.").ok
+
+
+def test_decomposition_does_not_excuse_a_single_invented_word():
+    """A one-word name has no parts to hide behind."""
+    from resume.guard import check_no_fabrication
+
+    base = "Supply chain analyst. Reported on operational KPIs."
+    result = check_no_fabrication(base, "Certified in Kubernetes.")
+    assert not result.ok

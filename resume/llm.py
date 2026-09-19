@@ -64,6 +64,29 @@ PROVIDERS = {
         "base_url": "https://api.openai.com/v1",
         "default_model": "gpt-4o",
     },
+    "omniroute": {
+        "label": "OmniRoute (self-hosted gateway)",
+        "free": True,           # keyless by default and runs on this machine
+        "env_key": None,        # a self-hosted gateway needs no Authorization
+        "base_url": "http://localhost:20128/v1",
+        "default_model": "",    # whatever the gateway is configured to route
+        "note": "An MIT gateway you run yourself, reaching many providers "
+                "through one endpoint -- including free tiers. Free like "
+                "Ollama, but the work happens on someone else's hardware, so "
+                "it does not need 18GB of your RAM. Your resume does leave "
+                "this machine: it goes to whichever provider it routes to.",
+    },
+    "openrouter": {
+        "label": "OpenRouter (one key, many models)",
+        "free": False,          # pay-as-you-go by default -- but see the note
+        "env_key": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "qwen/qwen3.8-27b:free",
+        "note": "One key reaches ~450 models from most vendors, and about 25 "
+                "of them cost nothing -- any model id ending ':free'. Those "
+                "run on their hardware, so they are free without being slow "
+                "on yours.",
+    },
     "grok": {
         "label": "xAI Grok API",
         "free": False,
@@ -271,9 +294,11 @@ def _openai_compatible(provider: str, system: str, user: str, cfg=None, *,
     import requests
 
     spec = PROVIDERS[provider]
-    env_key = spec["env_key"]
-    api_key = os.getenv(env_key, "").strip()
-    if not api_key:
+    env_key = spec.get("env_key")
+    # A self-hosted gateway authenticates by being on localhost. Demanding a
+    # key there would make a working setup look broken.
+    api_key = os.getenv(env_key, "").strip() if env_key else ""
+    if env_key and not api_key:
         raise ProviderUnavailable(
             f"{env_key} is not set, and the writing model is {provider!r}.\n"
             f"  Add it on the Settings page, or switch the model to 'ollama' "
@@ -300,8 +325,8 @@ def _openai_compatible(provider: str, system: str, user: str, cfg=None, *,
     try:
         response = requests.post(
             f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}",
-                     "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {api_key}"} if api_key else {})},
             json=payload, timeout=timeout,
         )
     except requests.RequestException as exc:

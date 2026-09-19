@@ -145,3 +145,33 @@ def test_every_provider_honours_the_model_override(monkeypatch, provider, fallba
     assert model_name(None) == "something-else"
     monkeypatch.delenv("RESUME_MODEL")
     assert model_name(None) == fallback
+
+
+def test_a_self_hosted_gateway_needs_no_key(monkeypatch):
+    """OmniRoute runs on localhost and authenticates by being there.
+    Demanding a key would make a working setup look broken."""
+    monkeypatch.setenv("RESUME_PROVIDER", "omniroute")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        seen["headers"] = kwargs["headers"]
+        return _Response(payload={"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    assert complete("s", "u", None).text == "ok"
+    assert seen["url"] == "http://localhost:20128/v1/chat/completions"
+    # No key, so no Authorization header at all -- not an empty Bearer.
+    assert "Authorization" not in seen["headers"]
+
+
+def test_a_keyed_provider_still_sends_the_header(monkeypatch):
+    monkeypatch.setenv("RESUME_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    seen = {}
+    monkeypatch.setattr(requests, "post", lambda url, **kw: (
+        seen.update(headers=kw["headers"]),
+        _Response(payload={"choices": [{"message": {"content": "ok"}}]}))[1])
+    complete("s", "u", None)
+    assert seen["headers"]["Authorization"] == "Bearer sk-or-test"

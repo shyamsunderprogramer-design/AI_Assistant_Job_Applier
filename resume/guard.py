@@ -106,6 +106,24 @@ def _digit_runs(text: str) -> set[str]:
     return {run.lstrip("0") or "0" for run in re.findall(r"\d+", text.replace(",", ""))}
 
 
+def _supported(noun: str, base_vocab: set[str]) -> bool:
+    """Is this name evidenced in the resume, allowing for punctuation?
+
+    A direct lookup misses terms the tokeniser cannot represent. TOKEN_RE has
+    no "&", so "S&OP" becomes "s" and "op" and the whole term is never in the
+    vocabulary -- gemma4:e4b was rejected for writing S&OP, which is printed
+    twice in the resume it was tailoring.
+
+    So a name also counts as supported when every word inside it is. That is
+    still evidence-based: each part has to appear in the resume, and an
+    invented "Kubernetes" has no parts to hide behind.
+    """
+    if noun.lower() in base_vocab:
+        return True
+    parts = [p for p in re.split(r"[^A-Za-z0-9+#.]+", noun.lower()) if p]
+    return len(parts) > 1 and all(part in base_vocab for part in parts)
+
+
 def check_no_fabrication(base_text: str, tailored_text: str) -> GuardResult:
     """Flag claims in `tailored_text` not evidenced in `base_text`."""
     base_norm = _normalise(base_text)
@@ -142,7 +160,7 @@ def check_no_fabrication(base_text: str, tailored_text: str) -> GuardResult:
         for noun in PROPER_NOUN_RE.findall(stripped):
             if noun in COMMON_CAPITALISED or noun.lower() in STOPWORDS:
                 continue
-            if noun.lower() not in base_vocab:
+            if not _supported(noun, base_vocab):
                 violations.append(Violation("entity", noun, stripped))
 
     # De-duplicate on (kind, value) — one report per invented thing.

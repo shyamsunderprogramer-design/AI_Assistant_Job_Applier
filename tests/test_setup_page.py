@@ -153,13 +153,15 @@ def test_a_missing_git_binary_is_not_an_error(monkeypatch):
 
 # --- choosing who writes ---------------------------------------------------
 
-def test_the_free_option_is_listed_first(site):
+def test_free_options_are_listed_before_paid_ones(site):
     """Somebody who already pays for a chat subscription should not be nudged
     into buying API credit as well."""
     options = webapp.writing_model_state()["options"]
-    assert options[0]["name"] == "ollama"
-    assert options[0]["free"] is True
-    assert all(not o["free"] for o in options[1:])
+    free = [o["free"] for o in options]
+    assert free[0] is True
+    # Every free option comes before every paid one: no True after a False.
+    assert free == sorted(free, reverse=True)
+    assert "ollama" in [o["name"] for o in options if o["free"]]
 
 
 def test_a_provider_with_no_key_is_marked_not_ready(site):
