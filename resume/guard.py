@@ -97,6 +97,16 @@ def _base_vocabulary(base_text: str) -> set[str]:
         # Collaboration"; the entity check reads "Functional" as a name of its
         # own, and without this the guard called it invented.
         vocabulary.update(part for part in re.split(r"[-.]+", trimmed) if part)
+
+    # PDF extraction splits letter-spaced words: this resume holds
+    # "CUMMINS INDIA L TD" and "requiremen ts". A model that spells them
+    # correctly then looks like it invented the employer's name. Rejoin
+    # adjacent pairs where the second piece is too short to be a word on its
+    # own, which is the signature of a break rather than of two real words.
+    tokens = tokenize(base_text)
+    for first, second in zip(tokens, tokens[1:]):
+        if len(second) <= 3 and first.isalpha() and second.isalpha():
+            vocabulary.add(first + second)
     return vocabulary
 
 

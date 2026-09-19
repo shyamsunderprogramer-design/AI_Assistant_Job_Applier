@@ -42,26 +42,50 @@ the resume — not even one the job description asks for. If the candidate does
 not have something the posting wants, leave it out; do not imply it.
 
 Write plainly. No "I am writing to express my interest", no "passionate", no
-"synergy", no "I would be thrilled". Contractions are fine. Short sentences
-are better than long ones. Under 320 words in total — a letter a tired person
-reads at the end of a long day.
+"synergy", no "I would be thrilled". No "Furthermore", "Moreover",
+"Additionally" — start the next sentence instead. Contractions are fine.
+Short sentences are better than long ones. Under 320 words in total — a
+letter a tired person reads at the end of a long day.
+
+NEVER DESCRIBE THE JOB BACK TO THE PEOPLE WHO WROTE IT. They know what the
+role requires; they advertised it. Any sentence beginning "The Buyer role
+requires", "This position involves" or "Your company is looking for" is
+wasted, and it is the single most common way these letters open.
 
 Three paragraphs, each with a job to do:
 
-  1. WHY THIS ROLE. Name something specific from the posting — a system, a
-     problem, a scale, a constraint — and connect it to work the candidate has
-     actually done. Never "I was excited to see your posting". This paragraph
-     is the only reason anyone reads the second one.
+  1. WHY THIS ROLE. Say what the CANDIDATE does, and tie it to something
+     specific about THIS employer — what they make, who they serve, the
+     constraint they work under, a detail in the posting only they would
+     write. Start with "I", not with "The role". Never "I was excited to see
+     your posting". This paragraph is the only reason anyone reads the second.
 
-  2. THE EVIDENCE. One or two concrete things from the resume that bear
-     directly on paragraph one: what was built, at what scale, with what
-     result. Numbers if the resume has them; no numbers if it does not.
-     Specific beats comprehensive — this is not a summary of the resume,
-     which is attached anyway.
+  2. THE EVIDENCE. ONE thing from the resume, told properly: what the
+     situation was, what the candidate did, and what changed because of it.
+     One story with an outcome beats three achievements in a row — a list
+     with no result is what the attached resume is already for. Numbers if
+     the resume has them; no numbers if it does not.
 
-  3. THE CLOSE. Short. What the candidate would work on, or what they want to
-     talk about. No restating, no "I look forward to hearing from you at your
-     earliest convenience".
+  3. THE CLOSE. Short, and about the work rather than about the letter. Name
+     something at this employer the candidate would want to get into. Never
+     "I look forward to hearing from you", and never "I am ready to discuss
+     how my experience can support your goals" — that says nothing and every
+     applicant sends it.
+
+  BAD opening : The Buyer role requires coordinating purchasing across
+                departments to resolve material shortages. My background
+                involves collaborating with Procurement and Production teams.
+                (describes their own job back to them, then says nothing)
+  GOOD opening: I buy and plan materials for a distributor where a missed
+                lead time stops a shipment the same week. Rocket EMS builds
+                to customer schedules on a contract line, where a late
+                component stops a build — the same problem with less slack.
+
+  BAD close   : I am ready to discuss how my experience in supply chain
+                analytics can support Rocket EMS's operational goals.
+  GOOD close  : I would want to start with the shortage list — where the
+                repeat offenders are and whether they are supplier lead time
+                or forecast error. Happy to talk it through.
 
 If the resume does not support a claim the posting asks for, leave it out of
 the letter entirely and name it in "left_out" instead. A letter that quietly
