@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Settings</h1>
+    <div class="sub">The things this repo deliberately does not carry. They are
+      written to <code>{{ env_file }}</code> on this machine — gitignored, never
+      committed, never sent anywhere.</div>
+  </div>
+  <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+</header>
+
+<section class="card">
+  <p class="sub" style="margin-top:0">
+    This repository is public, so keys and passwords are kept out of it on
+    purpose. The cost is that a fresh clone starts with none of them and no
+    obvious sign of which are missing. This page is that list.
+    <b>Everything here is optional</b> — scraping, scoring and ranking all work
+    with the whole page blank.
+  </p>
+
+  <form id="setup">
+    {% for f in fields %}
+    <fieldset class="fset">
+      <legend>{{ f.label }}
+        {% if f.set %}<span class="pill good">set</span>
+        {% else %}<span class="pill">not set</span>{% endif %}
+      </legend>
+      <div class="sub" style="margin-bottom:8px">
+        <b>{{ f.needed_for }}.</b> {{ f.help }}
+        {% if f.note %}<span class="caution">{{ f.note }}</span>{% endif %}
+      </div>
+      {% if f.link %}
+        {# Straight to the page that issues the value, not to documentation
+           about it. noopener because these open in a new tab. #}
+        <a class="getlink" href="{{ f.link }}" target="_blank" rel="noopener noreferrer">
+          {{ f.link_label }} &#8599;</a>
+      {% endif %}
+      <label class="wide">
+        {% if f.secret %}
+          <input type="password" name="{{ f.key }}" autocomplete="new-password"
+                 spellcheck="false" placeholder="{{ 'leave blank to keep the one already saved'
+                 if f.set else f.placeholder }}">
+        {% else %}
+          <input type="text" name="{{ f.key }}" value="{{ f.value }}"
+                 spellcheck="false" placeholder="{{ f.placeholder }}">
+        {% endif %}
+      </label>
+      {% if f.secret and f.set %}
+        {# A blank box cannot mean "delete" for a value the page never shows,
+           so removing one has to be asked for explicitly. #}
+        <label class="check"><input type="checkbox" name="clear__{{ f.key }}">
+          Remove the saved value</label>
+      {% endif %}
+    </fieldset>
+    {% endfor %}
+
+    <div class="row" style="gap:10px;margin-top:14px">
+      <button class="btn primary" type="submit">Save to .env</button>
+      <span class="sub">Saved secrets are never shown again — only whether they are set.</span>
+    </div>
+  </form>
+  <div id="out" hidden></div>
+</section>
+
+<section class="card" style="margin-top:14px">
+  <h2 style="margin-top:0;font-size:1.05em">The rest of your setup</h2>
+  <div class="row" style="gap:12px;flex-wrap:wrap">
+    <span class="pill {{ 'good' if resume else '' }}">
+      {{ 'Resume: ' + resume.name if resume else 'No resume' }}</span>
+    <span class="pill {{ 'good' if applicant.ready else '' }}">
+      {{ 'Your details: ready' if applicant.ready else 'Your details: not finished' }}</span>
+    <a class="btn" href="{{ url_for('applicant_form') }}">Edit your details</a>
+  </div>
+  <div class="sub" style="margin-top:10px">Your resume and personal details are
+    kept out of the repo the same way, in <code>resume/</code> and
+    <code>config/applicant.yaml</code>.</div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+
+$('setup').addEventListener('submit', async e => {
+  e.preventDefault();
+  const out = $('out');
+  out.hidden = false; out.className = 'out'; out.textContent = 'Saving…';
+  try {
+    const r = await fetch('/setup', {method: 'POST', body: new FormData(e.target)});
+    const d = await r.json();
+    if (!d.ok) {
+      out.className = 'out bad'; out.textContent = d.error || 'Could not save.';
+      return;
+    }
+    out.className = 'out good';
+    // Names only. The values must not end up in the page, a screenshot or a log.
+    out.textContent = d.changed.length
+      ? 'Saved ' + d.changed.join(', ') + ' to .env. Reloading…'
+      : 'Nothing changed.';
+    if (d.changed.length) setTimeout(() => location.reload(), 900);
+  } catch (err) {
+    out.className = 'out bad';
+    out.textContent = 'Could not reach the app. If you restarted it, reload this page.';
+  }
+});
+</script>
+{% endblock %}

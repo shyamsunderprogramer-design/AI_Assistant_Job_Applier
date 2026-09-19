@@ -8,6 +8,7 @@
   <div class="row">
     <button class="btn primary" id="run-scrape">Get latest postings</button>
     <button class="btn" id="run-score">Re-score</button>
+    <a class="btn" href="{{ url_for('setup_form') }}" title="Keys and settings kept out of the repo">Settings</a>
     <div class="statusbox idle" id="statusbox" aria-live="polite">
       <span class="sb-dot" id="sb-dot"></span>
       <div class="sb-body">
