@@ -149,3 +149,44 @@ def test_a_missing_git_binary_is_not_an_error(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", boom)
     assert webapp.github_secrets_url() is None
+
+
+# --- choosing who writes ---------------------------------------------------
+
+def test_the_free_option_is_listed_first(site):
+    """Somebody who already pays for a chat subscription should not be nudged
+    into buying API credit as well."""
+    options = webapp.writing_model_state()["options"]
+    assert options[0]["name"] == "ollama"
+    assert options[0]["free"] is True
+    assert all(not o["free"] for o in options[1:])
+
+
+def test_a_provider_with_no_key_is_marked_not_ready(site):
+    (site / ".env").write_text("OPENAI_API_KEY=sk-test\n")
+    ready = {o["name"]: o["ready"] for o in webapp.writing_model_state()["options"]}
+    assert ready["openai"] is True
+    assert ready["grok"] is False
+    assert ready["ollama"] is True          # needs no key at all
+
+
+def test_choosing_a_provider_writes_it_to_env(site):
+    with webapp.app.test_client() as client:
+        body = client.post("/setup", data={"RESUME_PROVIDER": "ollama"}).get_json()
+    assert body["ok"] is True
+    assert read_env(site / ".env")["RESUME_PROVIDER"] == "ollama"
+
+
+def test_an_unknown_provider_is_refused(site):
+    with webapp.app.test_client() as client:
+        response = client.post("/setup", data={"RESUME_PROVIDER": "definitely-not"})
+    assert response.status_code == 400
+    assert "RESUME_PROVIDER" not in read_env(site / ".env")
+
+
+def test_a_blank_model_means_the_provider_default(site):
+    (site / ".env").write_text("RESUME_MODEL=gpt-4o-mini\n")
+    with webapp.app.test_client() as client:
+        client.post("/setup", data={"RESUME_PROVIDER": "ollama", "RESUME_MODEL": ""})
+    # Removed, not stored as an empty model name that nothing could serve.
+    assert "RESUME_MODEL" not in read_env(site / ".env")

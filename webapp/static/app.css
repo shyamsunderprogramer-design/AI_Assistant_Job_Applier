@@ -268,3 +268,13 @@ ol.steps{list-style:none;margin:0;padding:0}
   color:var(--signal);text-decoration:none;border-bottom:1px solid transparent}
 .getlink:hover{border-bottom-color:currentColor}
 .caution{display:block;margin-top:5px;color:var(--warn);font-size:11.5px}
+
+/* Writing-model chooser: the free option reads as a real choice, not a downgrade. */
+.picks{display:grid;gap:8px}
+.pick{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;
+  border:1px solid var(--line);border-radius:7px;cursor:pointer}
+.pick:hover{border-color:var(--signal)}
+.pick.on{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 6%,transparent)}
+.pick input{margin-top:3px;width:auto}
+.pick-body{display:grid;gap:3px}
+.pick-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px}

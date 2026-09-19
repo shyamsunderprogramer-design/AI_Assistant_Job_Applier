@@ -11,6 +11,50 @@
 </header>
 
 <section class="card">
+  <h2 style="margin-top:0;font-size:1.05em">Which model writes your resume</h2>
+  <p class="sub">Tailoring and cover letters are the <b>only</b> part of this
+    tool that needs a model. Scraping, scoring, ranking and the daily run are
+    offline arithmetic and keep working with none of this set.</p>
+  <p class="sub">If you already pay for a chat subscription, you do not need to
+    buy API credit as well — the job page hands you a prompt to paste into the
+    subscription you have. These options are for people who would rather the
+    tool did it in one step.</p>
+
+  <form id="writing">
+    <div class="picks">
+      {% for o in writing.options %}
+      <label class="pick {{ 'on' if o.name == writing.chosen }}">
+        <input type="radio" name="RESUME_PROVIDER" value="{{ o.name }}"
+               {{ 'checked' if o.name == writing.chosen }}>
+        <span class="pick-body">
+          <span class="pick-title">{{ o.label }}
+            {% if o.free %}<span class="pill good">free</span>
+            {% else %}<span class="pill">costs money</span>{% endif %}
+          </span>
+          <span class="sub">
+            {% if o.note %}{{ o.note }}
+            {% elif o.ready %}Key saved. Default model: <code>{{ o.default_model }}</code>.
+            {% else %}Needs <code>{{ o.env_key }}</code> above before it can run.{% endif %}
+          </span>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+
+    <label class="wide" style="margin-top:12px">
+      <span class="sub">Model name — blank uses that provider's default</span>
+      <input type="text" name="RESUME_MODEL" value="{{ writing.model }}"
+             spellcheck="false" placeholder="{{ writing.model_placeholder }}">
+    </label>
+
+    <div class="row" style="gap:10px;margin-top:12px">
+      <button class="btn primary" type="submit">Save the writing model</button>
+    </div>
+  </form>
+  <div id="writing-out" hidden></div>
+</section>
+
+<section class="card">
   <p class="sub" style="margin-top:0">
     This repository is public, so keys and passwords are kept out of it on
     purpose. The cost is that a fresh clone starts with none of them and no
@@ -79,6 +123,28 @@
 
 <script>
 const $ = id => document.getElementById(id);
+
+async function save(form, outId, done) {
+  const out = document.getElementById(outId);
+  out.hidden = false; out.className = 'out'; out.textContent = 'Saving…';
+  try {
+    const r = await fetch('/setup', {method: 'POST', body: new FormData(form)});
+    const d = await r.json();
+    if (!d.ok) { out.className = 'out bad'; out.textContent = d.error || 'Could not save.'; return; }
+    out.className = 'out good';
+    // Names only. Values must not reach the page, a screenshot or a log.
+    out.textContent = d.changed.length ? done(d) : 'Nothing changed.';
+    if (d.changed.length) setTimeout(() => location.reload(), 900);
+  } catch (err) {
+    out.className = 'out bad';
+    out.textContent = 'Could not reach the app. If you restarted it, reload this page.';
+  }
+}
+
+$('writing').addEventListener('submit', e => {
+  e.preventDefault();
+  save(e.target, 'writing-out', () => 'Saved. This model writes your tailoring now.');
+});
 
 $('setup').addEventListener('submit', async e => {
   e.preventDefault();
