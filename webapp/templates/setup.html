@@ -101,11 +101,12 @@
                  spellcheck="false" placeholder="{{ f.placeholder }}">
         {% endif %}
       </label>
-      {% if f.secret and f.set %}
+      {% if f.set %}
         {# A blank box cannot mean "delete" for a value the page never shows,
            so removing one has to be asked for explicitly. #}
         <label class="check"><input type="checkbox" name="clear__{{ f.key }}">
-          Remove the saved value</label>
+          Remove the saved value{% if not f.secret %} (clearing the box alone
+          will not){% endif %}</label>
       {% endif %}
     </fieldset>
     {% endfor %}

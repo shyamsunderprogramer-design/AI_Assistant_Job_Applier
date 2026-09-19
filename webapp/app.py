@@ -797,11 +797,11 @@ def setup_save():
             updates[key] = None
         elif submitted:
             updates[key] = submitted
-        elif not field["secret"] and key in request.form:
-            # A visible field left blank really is blank -- but only if it was
-            # on the form at all. A field that was never submitted is a field
-            # nobody touched, and must not be wiped by saving something else.
-            updates[key] = ""
+        # A blank box never deletes anything, visible or secret. It used to
+        # for visible fields, on the theory that you can see what is there --
+        # and MAIL_ADDRESS was silently emptied by a save of something else,
+        # which broke the job-alert import with no error anywhere. Losing a
+        # stored value must take the same deliberate act as losing a key.
 
     from resume.llm import PROVIDERS
 
