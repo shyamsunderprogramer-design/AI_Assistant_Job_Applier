@@ -69,16 +69,25 @@
             {% if packet.has_resume %}Copy the prompt again{% else %}Copy the prompt{% endif %}
           </button>
           {% if api_ready %}
-          <button class="btn" data-tailor="1">Or pay the API to do it</button>
+          <button class="btn" data-tailor="1">{{ writer.label }}</button>
           {% endif %}
           <span class="hint" id="hint-resume" hidden>Copied — paste it into any
             chat, then bring the reply back below.</span>
         </div>
         {% if api_ready %}
         <div class="hint" style="margin-top:6px">
-          Copying is free and works with any chat or a local model. The API
-          button uses {{ api_model }} and charges per letter — only worth it if
-          you have no other way to run a model. Both go through the same guard.
+          Copying is free and works with any chat — use it when you want the
+          best writing and do not mind four steps.
+          {% if writer.free %}
+            The second button runs <b>{{ writer.model }}</b> here and costs
+            nothing either, taking about half a minute — that is the one for
+            doing thirty in a day.
+          {% else %}
+            The second button uses <b>{{ writer.model }}</b> and <b>charges per
+            letter</b>. A model on this machine does the same job for nothing —
+            <a href="{{ url_for('setup_form') }}">choose one in Settings</a>.
+          {% endif %}
+          Both go through the same guard.
         </div>
         {% endif %}
         <details class="fold" id="fold-resume">
@@ -157,6 +166,11 @@
 
 <script>
 const JOB = {{ job.id }};
+// Who writes when the second button is pressed. The label is rendered by the
+// server and restored by the JS after a run, so the two must agree.
+const WRITER_LABEL = {{ writer.label|tojson }};
+const WRITER_MODEL = {{ writer.model|tojson }};
+const WRITER_FREE  = {{ writer.free|tojson }};
 const $ = id => document.getElementById(id);
 const show = (id, text, kind) => {
   const el = $(id); el.hidden = false;
@@ -227,15 +241,16 @@ document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click
   $('reply-' + kind).focus();
 }));
 
-// "Write it for me" — the API route. It costs money, so the first press asks
-// what it would cost and the second one spends it. Pressing a button on a page
-// should never quietly charge someone.
+// "Write it for me". When it costs money the first press prices it and the
+// second one spends it -- pressing a button on a page should never quietly
+// charge anyone. When a local model is doing the work there is nothing to
+// confirm, and asking twice would be friction in exchange for nothing.
 let tailorConfirmed = false;
 document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
   const button = e.currentTarget;
   button.disabled = true;
 
-  if (!tailorConfirmed) {
+  if (!WRITER_FREE && !tailorConfirmed) {
     show('out-resume', 'Checking what this would cost…');
     const est = await ask(`/job/${JOB}/tailor?estimate=1`, {method: 'POST'});
     button.disabled = false;
@@ -246,10 +261,12 @@ document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
     return;
   }
 
-  show('out-resume', 'Writing it with the API — this takes a minute…');
+  show('out-resume', WRITER_FREE
+       ? `Writing it with ${WRITER_MODEL} on this machine — about half a minute…`
+       : `Writing it with ${WRITER_MODEL} — this takes a minute…`);
   const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 300000);
   button.disabled = false;
-  button.textContent = 'Or pay the API to do it';
+  button.textContent = WRITER_LABEL;
   tailorConfirmed = false;
   show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok) { $('step-resume').classList.add('done'); countDone(); }
