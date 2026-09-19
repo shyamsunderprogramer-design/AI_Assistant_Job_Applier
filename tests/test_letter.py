@@ -318,3 +318,25 @@ def test_compound_parts_do_not_excuse_an_unrelated_word():
     result = check_no_fabrication(base, "Cross-Functional work on Kubernetes.")
     assert not result.ok
     assert "kubernetes" in {v.value.lower() for v in result.violations}
+
+
+def test_a_word_the_pdf_split_is_not_treated_as_invented():
+    """PDF extraction letter-spaces words: this resume holds "CUMMINS INDIA
+    L TD" and "requiremen ts". A model that spells the employer correctly then
+    looks like it invented the name -- gemma4:e4b was rejected for 'Ltd'."""
+    from resume.guard import check_no_fabrication
+
+    base = "Worked at CUMMINS INDIA L TD on material requiremen ts planning."
+    tailored = "At Cummins India Ltd, evaluated material requirements."
+    assert check_no_fabrication(base, tailored).ok
+
+
+def test_rejoining_does_not_invent_a_whole_employer():
+    """Only adjacent pairs rejoin, and only where the second piece is too
+    short to be a word. An unrelated company still has nothing to stand on."""
+    from resume.guard import check_no_fabrication
+
+    base = "Worked at CUMMINS INDIA L TD on procurement."
+    result = check_no_fabrication(base, "Worked at Siemens on procurement.")
+    assert not result.ok
+    assert "siemens" in {v.value.lower() for v in result.violations}
