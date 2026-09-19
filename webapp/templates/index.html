@@ -26,7 +26,17 @@
   <span class="lbl">Resume</span>
   {% if resume %}
     <span class="name">{{ resume }}</span>
-    <span class="sub">Everything is written from this, and checked against it.</span>
+    {# The filename does not say whose search this is. A supply chain resume
+       that derived a software search looks identical without this line. #}
+    {% if search and search.ok %}
+      <span class="sub">Searching as <b>{{ search.seniority }}</b>{% if search.years %},
+        {{ search.years|round|int }} years{% endif %} —
+        <b>{{ search.families|join(', ')|replace('_', ' ') }}</b>.
+        {{ search.title_count }} job titles: {{ search.titles[:4]|join(', ') }}{% if search.title_count > 4 %}…{% endif %}</span>
+    {% elif search %}
+      <span class="sub warn">No search could be derived from this resume —
+        nothing will match until you fix it.</span>
+    {% endif %}
   {% else %}
     <span class="name">No resume found</span>
     <span class="sub">Upload one — the whole search is derived from it.</span>
@@ -34,6 +44,9 @@
   <form id="upload" class="row" style="margin-left:auto" enctype="multipart/form-data">
     <input type="file" id="file" name="resume" accept=".docx,.pdf,.txt,.md" aria-label="Resume file">
     <button class="btn primary" type="submit">{{ 'Replace' if resume else 'Upload' }}</button>
+    {% if resume %}
+      <button class="btn" type="button" id="remove-resume">Remove</button>
+    {% endif %}
   </form>
 </section>
 <div id="upload-out" hidden></div>
@@ -207,7 +220,9 @@ function render() {
           : `<span class="sc sc-${band(r.score)}">${r.score}</span>`}</td>
       <td class="num age"></td><td class="num dim w"></td><td class="num dim e"></td>
       <td class="num y"></td><td class="co"></td>
-      <td class="ti"><a></a></td>
+      <td class="ti"><a></a>${r.repeats > 1
+        ? `<span class="rep" title="This employer has posted the same role ${r.repeats} times. Shown once, newest first.">×${r.repeats}</span>`
+        : ''}</td>
       <td><span class="b b-${r.board}"></span></td>
       <td><span class="pill ${cls(r.status)}"></span></td>`;
     const age = tr.querySelector('.age');
@@ -291,6 +306,30 @@ async function ask(url, options, ms = 120000) {
       : 'Lost contact with the app. If you restarted it, reload this page.'};
   } finally { clearTimeout(timer); }
 }
+
+// Removing the resume also removes the search derived from it. Confirmed
+// first, because the next scrape has nothing to search for until a new
+// resume is uploaded.
+const removeBtn = $('remove-resume');
+if (removeBtn) removeBtn.addEventListener('click', async () => {
+  const out = $('upload-out');
+  if (!confirm('Remove the resume and the search derived from it?\n\n'
+      + 'Jobs already found are kept. Nothing new can be searched for '
+      + 'until you upload another resume.')) return;
+  // Held before the await: e.currentTarget is null by the time it returns.
+  removeBtn.disabled = true;
+  out.hidden = false; out.className = 'out'; out.textContent = 'Removing…';
+  const d = await ask('/resume/remove', {method: 'POST'}, 30000);
+  if (d.ok) {
+    out.className = 'out good';
+    out.textContent = 'Removed ' + d.removed.join(' and ') + '. Reloading…';
+    setTimeout(() => location.reload(), 900);
+  } else {
+    removeBtn.disabled = false;
+    out.className = 'out bad';
+    out.textContent = d.error || 'Could not remove the resume.';
+  }
+});
 
 $('upload').addEventListener('submit', async e => {
   e.preventDefault();

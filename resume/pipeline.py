@@ -22,6 +22,24 @@ from resume.writer import output_filename, write_review_note, write_tailored_res
 log = logging.getLogger(__name__)
 
 
+def _profile_titles(cfg) -> tuple[list[str], list[str]]:
+    """(titles searched for, titles actually held) from the derived profile.
+
+    Empty lists when there is no profile, and then role fit is skipped rather
+    than guessed -- an absent profile must not silently penalise every job.
+    """
+    try:
+        from resume.profile import PROFILE_FILENAME, load_profile
+
+        profile = load_profile(
+            PROJECT_ROOT / cfg.get("filters.profile_path", PROFILE_FILENAME))
+        if profile is None:
+            return [], []
+        return list(profile.titles or []), list(profile.held_titles or [])
+    except Exception:
+        return [], []
+
+
 @dataclass
 class RunCost:
     """What a tailoring run cost, and what it was allowed to cost."""
@@ -112,12 +130,24 @@ def score_jobs(
         if limit:
             jobs = jobs[:limit]
 
+        # The titles this person searches for, and the titles they have held.
+        # Loaded once for the run: they are the same for every posting, and
+        # they are what tells a data engineer's resume that a DevSecOps
+        # posting is not their job however much vocabulary it shares.
+        search_titles, held_titles = _profile_titles(cfg)
+
         for job in jobs:
             result = score_resume(
                 resume_text,
                 job.description or job.title,
                 requirements=job.requirements,
                 company=job.company,
+                # Without these the score answers only "do you have these
+                # skills", and shared infrastructure vocabulary made a
+                # DevSecOps posting score 93% for a data engineer.
+                job_title=job.title,
+                search_titles=search_titles,
+                held_titles=held_titles,
             )
             job.ats_match_score = result.score
             # Record what the number was measured against, so nothing later

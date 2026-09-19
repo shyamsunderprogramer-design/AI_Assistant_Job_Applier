@@ -167,14 +167,77 @@ def jd_keyword_weights(
     return dict(ranked[:top_n])
 
 
+# How much of the final score survives when the job is not the job this person
+# does. Not zero: a data engineer CAN take a platform role, and the tool should
+# show it rather than hide it. But it must not outrank their own field.
+WRONG_ROLE_FLOOR = 0.45
+
+
+def _title_words(value) -> str:
+    """A job title as space-separated words, padded, for whole-word matching.
+
+    Punctuation becomes a space, because ATS titles are full of it and the
+    separator carries no meaning: "Engineer, Data Platform", "Engineer - Cloud
+    Infrastructure" and "Engineer (Data Platform)" are all the same job as
+    "Data Platform Engineer". Padding both ends lets `" sre " in title` mean
+    the word, so "sre" is never found inside "Presenter".
+    """
+    return " " + " ".join(re.split(r"[^a-z0-9+#]+", str(value or "").lower()) ) + " "
+
+
+def role_fit(job_title: str, search_titles=(), held_titles=()) -> float:
+    """Is this the kind of job this person does? 1.0 yes, 0.0 no.
+
+    The coverage score alone cannot tell. Scoring a data engineer's resume
+    against two postings gave 97% for Senior Data Engineer and 94% for Senior
+    DevSecOps Engineer -- three points between his own field and someone
+    else's -- because both descriptions are full of AWS, Python, Kubernetes,
+    Terraform and CI/CD, and coverage counts shared vocabulary.
+
+    Titles are where the difference actually lives, and the person's own
+    titles are the most reliable statement of what they do.
+    """
+    title = _title_words(job_title)
+    if not title.strip():
+        return 1.0                  # nothing to judge; do not penalise
+
+    for phrase in held_titles:
+        phrase = _title_words(phrase).strip()
+        if phrase and phrase in title:
+            return 1.0              # they have literally held this title
+
+    best = 0.0
+    for phrase in search_titles:
+        phrase = _title_words(phrase).strip()
+        if not phrase:
+            continue
+        if phrase in title:
+            return 1.0              # the search asked for exactly this
+        # A partial match: "data engineer" against "senior data platform
+        # engineer". Every word present, in any order, is still the same job.
+        words = phrase.split()
+        if len(words) > 1 and all(f" {w} " in title for w in words):
+            best = max(best, 0.85)
+    return best
+
+
 def score_resume(
     resume_text: str,
     jd_text: str,
     requirements: str | None = None,
     company: str | None = None,
     top_n: int = 40,
+    job_title: str | None = None,
+    search_titles=(),
+    held_titles=(),
 ) -> ScoreResult:
-    """Weighted coverage of the JD's salient terms by the resume."""
+    """How well this posting fits, from both halves of the question.
+
+    Coverage answers "do you have what it asks for". Role fit answers "is this
+    your job". Only the first was ever measured, and shared vocabulary made
+    every infrastructure-flavoured posting look like a match for anyone with
+    an infrastructure-flavoured resume.
+    """
     weights = jd_keyword_weights(
         jd_text, requirements=requirements, company=company, top_n=top_n
     )
@@ -197,6 +260,13 @@ def score_resume(
             missing.append(term)
 
     score = hit_weight / total_weight if total_weight else 0.0
+
+    # Scale by whether this is the person's job at all. A wrong-field posting
+    # keeps WRONG_ROLE_FLOOR of its coverage rather than zero: it is still
+    # worth seeing, it just must not sit above their own field.
+    fit = role_fit(job_title, search_titles, held_titles) if job_title else 1.0
+    score *= WRONG_ROLE_FLOOR + (1 - WRONG_ROLE_FLOOR) * fit
+
     # missing is already weight-ordered, so the biggest gaps come first.
     return ScoreResult(
         score=round(score, 4),
