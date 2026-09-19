@@ -512,6 +512,16 @@ ENV_FIELDS = [
         "link_label": "Create an OpenAI key",
     },
     {
+        "key": "OPENROUTER_API_KEY", "secret": True,
+        "label": "OpenRouter key",
+        "needed_for": "Reaching ~450 models from most vendors with one key",
+        "help": "About 25 of those models cost nothing — any id ending "
+                "':free'. Pay-as-you-go for the rest, no subscription.",
+        "placeholder": "sk-or-...",
+        "link": "https://openrouter.ai/keys",
+        "link_label": "Create an OpenRouter key",
+    },
+    {
         "key": "XAI_API_KEY", "secret": True,
         "label": "xAI (Grok) API key",
         "needed_for": "Writing with Grok instead of Anthropic",
