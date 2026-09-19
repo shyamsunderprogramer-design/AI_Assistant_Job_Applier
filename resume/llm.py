@@ -174,7 +174,7 @@ def _ollama(system: str, user: str, cfg=None, *, want_json: bool = True) -> Comp
     import requests
 
     host = str(_setting(cfg, "resume.ollama.host", DEFAULT_OLLAMA_HOST)).rstrip("/")
-    model = str(_setting(cfg, "resume.ollama.model", DEFAULT_OLLAMA_MODEL))
+    model = model_name(cfg)          # not the config directly: RESUME_MODEL must win
     timeout = int(_setting(cfg, "resume.ollama.timeout_seconds", DEFAULT_TIMEOUT_S))
     # A resume plus a job description plus the reply runs well past the 4k
     # default, and Ollama silently truncates the START of an overlong prompt --
@@ -237,7 +237,7 @@ def _anthropic(system: str, user: str, cfg=None, *, max_tokens: int = 16000) -> 
             "  Either add the key to .env, or set resume.provider: ollama in "
             "config.yaml to use a model on this machine for free."
         )
-    model = str(_setting(cfg, "resume.anthropic.model", DEFAULT_ANTHROPIC_MODEL))
+    model = model_name(cfg)          # not the config directly: RESUME_MODEL must win
     client = anthropic.Anthropic()
 
     # Streaming: a JD plus a resume plus reasoning is long, and streaming

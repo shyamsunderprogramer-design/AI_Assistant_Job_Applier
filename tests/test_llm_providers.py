@@ -131,3 +131,17 @@ def test_a_wrong_model_name_says_which_name_was_sent(monkeypatch):
     with pytest.raises(ProviderUnavailable) as err:
         complete("s", "u", None)
     assert "gpt-does-not-exist" in str(err.value)
+
+
+@pytest.mark.parametrize("provider,fallback", [
+    ("ollama", "qwen3.5:9b"), ("anthropic", "claude-opus-5"),
+])
+def test_every_provider_honours_the_model_override(monkeypatch, provider, fallback):
+    """The two original backends read config.yaml directly and ignored
+    RESUME_MODEL, so the settings page's model box silently did nothing for
+    them -- a run would quietly use a different model than the page showed."""
+    monkeypatch.setenv("RESUME_PROVIDER", provider)
+    monkeypatch.setenv("RESUME_MODEL", "something-else")
+    assert model_name(None) == "something-else"
+    monkeypatch.delenv("RESUME_MODEL")
+    assert model_name(None) == fallback

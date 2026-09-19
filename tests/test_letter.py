@@ -234,3 +234,38 @@ def test_a_compound_with_an_invented_half_is_still_caught():
     assert not _from_posting("FedRAMP-certified", vocabulary)
     assert not _from_posting("SOC2-audited", vocabulary)
     assert not _from_posting("Palantir", vocabulary)
+
+
+# --- the guard's own blind spot -------------------------------------------
+
+def test_a_word_ending_a_sentence_is_not_treated_as_invented():
+    """TOKEN_RE keeps "." inside tokens so node.js survives. The cost was that
+    "operational KPIs." produced "kpis.", which never matched "KPIs" written
+    mid-sentence -- so the guard rejected a real local-model tailoring for
+    using a word printed twice in the resume."""
+    from resume.guard import check_no_fabrication
+
+    base = "Reported on operational KPIs. Worked with stakeholders."
+    tailored = "Tracked KPIs and briefed stakeholders on performance."
+    result = check_no_fabrication(base, tailored)
+    assert result.ok, result.report()
+
+
+def test_hyphenated_and_dotted_terms_still_match_themselves():
+    from resume.guard import check_no_fabrication
+
+    base = "Built services on Node.js and ASP.NET with cost-to-serve models."
+    tailored = "Built Node.js services and cost-to-serve analysis on ASP.NET."
+    assert check_no_fabrication(base, tailored).ok
+
+
+def test_a_genuine_invention_is_still_caught():
+    """Forgiving punctuation must not become forgiving everything."""
+    from resume.guard import check_no_fabrication
+
+    base = "Supply chain analyst. Reported on operational KPIs."
+    tailored = "Supply chain analyst certified in Kubernetes and FedRAMP."
+    result = check_no_fabrication(base, tailored)
+    assert not result.ok
+    flagged = {v.value.lower() for v in result.violations}
+    assert "kubernetes" in flagged or "fedramp" in flagged
