@@ -69,7 +69,10 @@ PROVIDERS = {
         "free": True,           # keyless by default and runs on this machine
         "env_key": None,        # a self-hosted gateway needs no Authorization
         "base_url": "http://localhost:20128/v1",
-        "default_model": "",    # whatever the gateway is configured to route
+        # "auto" is the gateway's own routing combo: it picks a provider,
+        # falls back when one fails, and the keyless free providers are wired
+        # into it on a fresh install.
+        "default_model": "auto",
         "note": "An MIT gateway you run yourself, reaching many providers "
                 "through one endpoint -- including free tiers. Free like "
                 "Ollama, but the work happens on someone else's hardware, so "

@@ -331,6 +331,30 @@ def last_run_stats() -> dict:
     }
 
 
+def service_up(base_url: str, timeout: float = 0.4) -> bool:
+    """Is something listening at this address right now?
+
+    A keyless local provider is always "configured", so without this the page
+    would call a gateway ready whether or not it had ever been started, and
+    the button would fail on press with nothing on the page having warned
+    about it. A TCP connect is enough and costs under half a second.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url or "")
+    host, port = parsed.hostname, parsed.port
+    if not host:
+        return False
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def writer_state() -> dict:
     """The one-click writer: who it is, whether it can run, and what it costs.
 
@@ -346,7 +370,8 @@ def writer_state() -> dict:
     """
     import os
 
-    from resume.llm import PROVIDERS, model_name, provider_name
+    from resume.llm import (DEFAULT_OLLAMA_HOST, PROVIDERS, model_name,
+                            provider_name)
 
     provider = provider_name(cfg())
     spec = PROVIDERS.get(provider, {})
@@ -356,8 +381,15 @@ def writer_state() -> dict:
     ready = bool(spec) and (not env_key or bool(os.getenv(env_key)))
     free = bool(spec.get("free"))
 
+    # A service on this machine also has to be running, not merely chosen.
+    local_url = spec.get("base_url") or (
+        DEFAULT_OLLAMA_HOST if provider == "ollama" else "")
+    if ready and local_url and "localhost" in local_url:
+        ready = service_up(local_url)
+
     return {
         "provider": provider,
+        "needs_starting": bool(local_url) and not ready,
         "model": model_name(cfg()),
         "ready": ready,
         "free": free,
@@ -672,7 +704,8 @@ def writing_model_state() -> dict:
     should not contradict that.
     """
     from config.envfile import read_env
-    from resume.llm import PROVIDERS, default_model_for, provider_name
+    from resume.llm import (DEFAULT_OLLAMA_HOST, PROVIDERS,
+                            default_model_for, provider_name)
 
     stored = read_env(env_path())
     cfg = load_config()
@@ -683,12 +716,20 @@ def writing_model_state() -> dict:
     options = []
     for name, spec in PROVIDERS.items():
         key = spec.get("env_key")
+        # A keyless provider is always "configured". Whether it can actually
+        # answer is a different question, and the one worth showing.
+        url = spec.get("base_url") or (DEFAULT_OLLAMA_HOST if name == "ollama" else "")
+        local = bool(url) and "localhost" in url
+        has_key = True if key is None else bool((stored.get(key) or "").strip())
         options.append({
             "name": name,
             "label": spec["label"],
             "free": spec["free"],
             "env_key": key,
-            "ready": True if key is None else bool((stored.get(key) or "").strip()),
+            "local": local,
+            "url": url,
+            "running": service_up(url) if local else None,
+            "ready": has_key and (service_up(url) if local else True),
             "note": spec.get("note", ""),
             "default_model": default_model_for(name),
         })
