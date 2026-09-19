@@ -25,7 +25,14 @@
 <section class="resume {% if not resume %}none{% endif %}">
   <span class="lbl">Resume</span>
   {% if resume %}
-    <span class="name">{{ resume }}</span>
+    <span class="name">{{ resume.name }}</span>
+    {# Every upload is stored as base_resume.<ext> so the active resume is
+       never ambiguous. Say so, rather than showing a name the user did not
+       choose and never mentioning the one they did. #}
+    {% if resume.renamed %}
+      <span class="sub dim">saved as {{ resume.stored }}{% if resume.at %} ·
+        {{ resume.at[:10] }}{% endif %}</span>
+    {% endif %}
     {# The filename does not say whose search this is. A supply chain resume
        that derived a software search looks identical without this line. #}
     {% if search and search.ok %}
@@ -350,7 +357,7 @@ $('upload').addEventListener('submit', async e => {
     const who = [s.seniority, s.years ? s.years + ' years' : null]
                   .filter(Boolean).join(', ');
     out.textContent =
-      `Saved as ${d.file}.\n\n`
+      `${d.file} uploaded.\n\n`
       + `Read as: ${who || 'level unknown'}`
       + (s.families && s.families.length ? ` — ${s.families.join(', ')}` : '')
       + `\n\nSearching for ${s.title_count} job title`
@@ -363,7 +370,7 @@ $('upload').addEventListener('submit', async e => {
     setTimeout(() => location.reload(), 6000);
   } else if (d.ok) {
     out.className = 'out bad';
-    out.textContent = `Saved as ${d.file}, but no search could be derived.\n\n`
+    out.textContent = `${d.file} uploaded, but no search could be derived.\n\n`
       + (s.reason || d.output);
   } else {
     out.className = 'out bad';

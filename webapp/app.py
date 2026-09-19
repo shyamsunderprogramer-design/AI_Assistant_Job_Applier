@@ -13,6 +13,7 @@ their own copy rather than sharing yours.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -20,6 +21,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for
@@ -125,7 +127,7 @@ def index():
         "index.html",
         rows=rows,
         statuses=STATUS_VALUES,
-        resume=resume.name if resume else None,
+        resume=resume_label(),
         resume_dir=str(resume_dir()),
         # The filename alone does not say whether the search matches the
         # person: a supply chain resume that silently derived a software
@@ -397,6 +399,57 @@ def resume_candidates() -> list[Path]:
     ] if find_base_resume(directory) else []
 
 
+UPLOAD_NOTE = ".uploaded.json"     # a dot-file, and not a resume suffix,
+                                   # so it can never be mistaken for a resume
+
+
+def upload_note_path() -> Path:
+    return resume_dir() / UPLOAD_NOTE
+
+
+def remember_upload(original: str, stored: Path) -> None:
+    """Write down the filename the user actually chose.
+
+    Storing every upload as `base_resume.<ext>` is what makes the active
+    resume unambiguous -- "base" beats every other candidate, so the choice
+    never depends on which file was touched last. The cost is that the name
+    the person recognises is thrown away, and the page then shows everybody
+    the same meaningless `base_resume.pdf`. This keeps the name beside the
+    file instead of in it.
+    """
+    try:
+        upload_note_path().write_text(json.dumps({
+            "original": original,
+            "stored": stored.name,
+            "at": datetime.now().isoformat(timespec="seconds"),
+        }), encoding="utf-8")
+    except OSError:
+        pass          # a missing note falls back to the stored name; not fatal
+
+
+def resume_label() -> dict | None:
+    """What to call the active resume on the page, and what it is stored as.
+
+    Falls back to the stored filename when there is no note, or when the note
+    describes a different file -- somebody can drop a resume into the folder
+    by hand, and then the note is about a file that is no longer there.
+    """
+    resume = current_resume()
+    if resume is None:
+        return None
+    try:
+        note = json.loads(upload_note_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        note = {}
+    original = note.get("original") if note.get("stored") == resume.name else None
+    return {
+        "name": original or resume.name,
+        "stored": resume.name,
+        "renamed": bool(original) and original != resume.name,
+        "at": note.get("at") if original else None,
+    }
+
+
 # -- actions ----------------------------------------------------------------
 
 @app.post("/upload")
@@ -422,9 +475,11 @@ def upload():
     target = resume_dir() / f"base_resume{suffix}"
     resume_dir().mkdir(parents=True, exist_ok=True)
     uploaded.save(target)
+    remember_upload(Path(uploaded.filename).name, target)
 
     ok, output = run_command("profile", "--force")
-    return jsonify(ok=ok, file=target.name, output=output, search=derived_search())
+    return jsonify(ok=ok, file=Path(uploaded.filename).name, stored=target.name,
+                   output=output, search=derived_search())
 
 
 @app.post("/resume/remove")
@@ -455,6 +510,8 @@ def remove_resume():
     if profile.exists():
         profile.unlink()
         removed.append(profile.name)
+
+    upload_note_path().unlink(missing_ok=True)
 
     if not removed:
         return jsonify(ok=False, error="There was no resume to remove."), 404
