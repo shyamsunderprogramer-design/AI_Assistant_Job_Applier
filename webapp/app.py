@@ -1191,7 +1191,11 @@ def probe_control(action: str):
             pass
         return jsonify(ok=True, note="stopping after the current batch")
 
-    names = PROJECT_ROOT / "data" / "refined_names_all.txt"
+    # The refined list first: it holds the 22% of companies that can plausibly
+    # have a board, and the button pointed past it at the raw 1.75M file.
+    names = PROJECT_ROOT / "data" / "refined_names_worthwhile.txt"
+    if not names.exists():
+        names = PROJECT_ROOT / "data" / "refined_names_all.txt"
     if not names.exists():
         return jsonify(ok=False, error=f"No name list at {names.name}. Build one "
                                        f"with: python -m companies.refine"), 400
