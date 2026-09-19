@@ -37,7 +37,19 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-NAMES = Path("data/refined_names_all.txt")
+def _default_names() -> Path:
+    """The refined list when it exists, the raw one only as a fallback.
+
+    `companies.refine` cuts the list to the 22% of companies that can plausibly
+    have a board -- 393,823 names rather than 1,755,557. Defaulting to the raw
+    file quietly threw that away: a restart walked all 1.75M again, which is
+    eight days instead of two and mostly companies too small to run an ATS.
+    """
+    refined = Path("data/refined_names_worthwhile.txt")
+    return refined if refined.exists() else Path("data/refined_names_all.txt")
+
+
+NAMES = _default_names()
 STATE = Path("data/probe_state.json")
 PIDFILE = Path("data/probe_runner.pid")
 LOG = Path("data/probe_runner.log")
