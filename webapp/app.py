@@ -331,6 +331,42 @@ def last_run_stats() -> dict:
     }
 
 
+def writer_state() -> dict:
+    """The one-click writer: who it is, whether it can run, and what it costs.
+
+    This button used to be hard-wired to the paid API, so it appeared only
+    when an Anthropic key was set and always said "pay". A local model does
+    the same job for nothing -- measured at ~31s for a full tailoring -- so
+    the button now follows whatever the settings page chose and says plainly
+    which of the two it is. Nobody is asked to pay for what their own machine
+    can already do.
+
+    Copy-and-paste stays the primary button regardless. It costs nothing and
+    uses a chat subscription the person is probably already paying for.
+    """
+    import os
+
+    from resume.llm import PROVIDERS, model_name, provider_name
+
+    provider = provider_name(cfg())
+    spec = PROVIDERS.get(provider, {})
+    env_key = spec.get("env_key")
+    # A provider needing a key it has not got cannot run; one that needs no
+    # key -- a local model, a self-hosted gateway -- always can.
+    ready = bool(spec) and (not env_key or bool(os.getenv(env_key)))
+    free = bool(spec.get("free"))
+
+    return {
+        "provider": provider,
+        "model": model_name(cfg()),
+        "ready": ready,
+        "free": free,
+        "label": ("Or let this Mac write it" if provider == "ollama"
+                  else "Or write it here, free" if free
+                  else "Or pay the API to do it"),
+    }
+
+
 @app.route("/job/<int:job_id>")
 def job_detail(job_id: int):
     with get_session() as session:
@@ -345,9 +381,10 @@ def job_detail(job_id: int):
 
     from resume.llm import model_name, provider_name
 
-    # Only offer the paid button where it could actually work.
-    api_ready = (provider_name(cfg()) == "anthropic"
-                 and bool(os.getenv("ANTHROPIC_API_KEY")))
+    writer = writer_state()
+    # The template's older name. It means "the second button can run", not
+    # "the API is configured" -- a local model makes it free.
+    api_ready = writer["ready"]
 
     folder = packet_folder(row)
     packet = {
@@ -360,7 +397,7 @@ def job_detail(job_id: int):
         "job.html",
         job=row, description=description, requirements=requirements,
         statuses=STATUS_VALUES, packet=packet,
-        api_ready=api_ready, api_model=model_name(cfg()),
+        api_ready=api_ready, api_model=writer["model"], writer=writer,
     )
 
 

@@ -192,3 +192,39 @@ def test_a_blank_model_means_the_provider_default(site):
         client.post("/setup", data={"RESUME_PROVIDER": "ollama", "RESUME_MODEL": ""})
     # Removed, not stored as an empty model name that nothing could serve.
     assert "RESUME_MODEL" not in read_env(site / ".env")
+
+
+# --- the second button on the job page ------------------------------------
+
+def test_the_second_button_is_free_when_a_local_model_writes(site, monkeypatch):
+    """It used to be hard-wired to the paid API: it appeared only with an
+    Anthropic key and always said "pay". A local model does the same job for
+    nothing, so nobody should be asked to pay for what their Mac can do."""
+    monkeypatch.setenv("RESUME_PROVIDER", "ollama")
+    monkeypatch.setenv("RESUME_MODEL", "gemma4:e4b")
+    state = webapp.writer_state()
+    assert state["free"] is True
+    assert state["ready"] is True          # needs no key
+    assert "pay" not in state["label"].lower()
+    assert state["model"] == "gemma4:e4b"
+
+
+def test_a_paid_provider_still_says_so(site, monkeypatch):
+    monkeypatch.setenv("RESUME_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    state = webapp.writer_state()
+    assert state["free"] is False
+    assert "pay" in state["label"].lower()
+
+
+def test_a_paid_provider_with_no_key_cannot_run(site, monkeypatch):
+    """Offering a button that can only fail is worse than not offering it."""
+    monkeypatch.setenv("RESUME_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert webapp.writer_state()["ready"] is False
+
+
+def test_a_keyless_gateway_can_always_run(site, monkeypatch):
+    monkeypatch.setenv("RESUME_PROVIDER", "omniroute")
+    state = webapp.writer_state()
+    assert state["ready"] is True and state["free"] is True

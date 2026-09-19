@@ -93,6 +93,10 @@ def _base_vocabulary(base_text: str) -> set[str]:
         trimmed = token.strip(".-")
         if trimmed:
             vocabulary.add(trimmed)
+        # And the pieces of a compound. The resume prints "Cross-Functional
+        # Collaboration"; the entity check reads "Functional" as a name of its
+        # own, and without this the guard called it invented.
+        vocabulary.update(part for part in re.split(r"[-.]+", trimmed) if part)
     return vocabulary
 
 

@@ -298,3 +298,23 @@ def test_decomposition_does_not_excuse_a_single_invented_word():
     base = "Supply chain analyst. Reported on operational KPIs."
     result = check_no_fabrication(base, "Certified in Kubernetes.")
     assert not result.ok
+
+
+def test_half_of_a_hyphenated_phrase_is_not_invented():
+    """The resume prints "Cross-Functional Collaboration". The entity check
+    reads "Functional" as a name of its own, and the vocabulary held only the
+    joined token -- so gemma4:e4b was rejected for a phrase copied verbatim."""
+    from resume.guard import check_no_fabrication
+
+    base = "Business Skills: Cross-Functional Collaboration, Stakeholder Management."
+    tailored = "Led Cross-Functional teams. Functional ownership of planning."
+    assert check_no_fabrication(base, tailored).ok
+
+
+def test_compound_parts_do_not_excuse_an_unrelated_word():
+    from resume.guard import check_no_fabrication
+
+    base = "Cross-Functional Collaboration and demand planning."
+    result = check_no_fabrication(base, "Cross-Functional work on Kubernetes.")
+    assert not result.ok
+    assert "kubernetes" in {v.value.lower() for v in result.violations}
