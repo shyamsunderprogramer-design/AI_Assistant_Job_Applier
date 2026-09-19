@@ -482,6 +482,177 @@ def upload():
                    output=output, search=derived_search())
 
 
+# Everything a fresh clone needs that is deliberately not in the repo. The
+# repo is public, so these are gitignored -- which means a person who clones
+# it gets a working tool with no way to see what is missing except by reading
+# .env.example. This is that list, as a form.
+#
+# `secret` fields are never sent back to the browser. The page reports only
+# whether one is set, because a page that redisplays a key is a page that can
+# leak it -- to a screenshot, a shoulder, a cached tab.
+ENV_FIELDS = [
+    {
+        "key": "ANTHROPIC_API_KEY", "secret": True,
+        "label": "Anthropic API key",
+        "needed_for": "Writing tailored resumes and cover letters with the API",
+        "help": "Optional. Everything else -- scraping, scoring, ranking -- "
+                "works without it, and the app can hand you a prompt to paste "
+                "into a Claude subscription instead of spending on API calls.",
+        "placeholder": "sk-ant-...",
+        "link": "https://console.anthropic.com/settings/keys",
+        "link_label": "Create a key in the Anthropic Console",
+    },
+    {
+        "key": "MAIL_ADDRESS", "secret": False,
+        "label": "Mailbox address",
+        "needed_for": "Importing jobs out of job-alert emails",
+        "help": "The mailbox that receives job alerts. Opened read-only -- "
+                "nothing is ever sent, moved, marked or deleted.",
+        "placeholder": "you@gmail.com",
+        "link": "https://mail.google.com/mail/u/0/#settings/fwdandpop",
+        "link_label": "Turn IMAP on in Gmail settings",
+    },
+    {
+        "key": "MAIL_APP_PASSWORD", "secret": True,
+        "label": "Mailbox app password",
+        "needed_for": "Importing jobs out of job-alert emails",
+        "help": "An app password, not your account password. Gmail: "
+                "myaccount.google.com/apppasswords",
+        "placeholder": "16 characters",
+        "link": "https://myaccount.google.com/apppasswords",
+        "link_label": "Create a Google app password",
+        "note": "Needs 2-Step Verification switched on first, or the page "
+                "will not offer app passwords.",
+    },
+    {
+        "key": "SCRAPER_CONTACT_EMAIL", "secret": False,
+        "label": "Contact address for site owners",
+        "needed_for": "Politeness — advertised in the scraper's User-Agent",
+        "help": "Optional but good practice: it is how a site owner reaches "
+                "you instead of silently blocking you.",
+        "placeholder": "you@example.com",
+    },
+    {
+        "key": "RESULTS_PASSPHRASE", "secret": True,
+        "label": "Cloud results passphrase",
+        "needed_for": "Decrypting results from the GitHub Actions daily run",
+        "help": "Only if you run the scrape in GitHub Actions. Must match the "
+                "repository secret of the same name.",
+        "placeholder": "any long phrase",
+        "link_label": "Set the matching repository secret",
+    },
+    {
+        "key": "DATABASE_URL", "secret": False,
+        "label": "Database location",
+        "needed_for": "Optional — defaults to data/jobs.db",
+        "help": "Leave blank unless you want the database somewhere else.",
+        "placeholder": "sqlite:///data/jobs.db",
+    },
+]
+
+
+def env_path() -> Path:
+    return PROJECT_ROOT / ".env"
+
+
+def github_secrets_url() -> str | None:
+    """This clone's own Actions-secrets page, or None if there is no GitHub remote.
+
+    Sending someone to a generic documentation page when the exact page they
+    need is one `git remote` away is a small rudeness that adds up.
+    """
+    import re
+    import subprocess
+
+    try:
+        remote = subprocess.run(
+            ["git", "remote", "get-url", "origin"], cwd=PROJECT_ROOT,
+            capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"github\.com[:/]([^/]+)/(.+?)(?:\.git)?$", remote)
+    if not match:
+        return None
+    return f"https://github.com/{match.group(1)}/{match.group(2)}/settings/secrets/actions"
+
+
+def env_state() -> list[dict]:
+    """Each setting, and whether it is set -- never the secret values themselves."""
+    from config.envfile import read_env
+
+    stored = read_env(env_path())
+    state = []
+    for field in ENV_FIELDS:
+        value = (stored.get(field["key"]) or "").strip()
+        link = field.get("link")
+        if field["key"] == "RESULTS_PASSPHRASE":
+            link = github_secrets_url()       # this clone's repo, not a generic one
+        state.append({
+            **field,
+            "link": link,
+            "set": bool(value),
+            # Shown only for things that are not credentials.
+            "value": "" if field["secret"] else value,
+        })
+    return state
+
+
+@app.get("/setup")
+def setup_form():
+    """The settings a public repo cannot carry, filled in on this machine.
+
+    These live in .env, which is gitignored precisely so that cloning the repo
+    never hands anybody someone else's keys. The consequence is that a fresh
+    clone silently lacks all of them, and the only way to find out which was
+    to read .env.example. This says it out loud instead.
+    """
+    return render_template(
+        "setup.html",
+        fields=env_state(),
+        env_file=str(env_path()),
+        exists=env_path().exists(),
+        applicant=applicant_state(),
+        resume=resume_label(),
+    )
+
+
+@app.post("/setup")
+def setup_save():
+    """Write the settings to .env. Blank leaves a secret alone; Clear removes it.
+
+    A blank box cannot mean "delete" for a secret, because the page never
+    shows the current value -- so a blank box is the normal state of a field
+    that is already set, and treating that as "delete" would wipe a working
+    key every time somebody saved an unrelated change.
+    """
+    from config.envfile import write_env
+
+    updates: dict[str, str | None] = {}
+    for field in ENV_FIELDS:
+        key = field["key"]
+        submitted = (request.form.get(key) or "").strip()
+        if request.form.get(f"clear__{key}"):
+            updates[key] = None
+        elif submitted:
+            updates[key] = submitted
+        elif not field["secret"] and key in request.form:
+            # A visible field left blank really is blank -- but only if it was
+            # on the form at all. A field that was never submitted is a field
+            # nobody touched, and must not be wiped by saving something else.
+            updates[key] = ""
+
+    try:
+        changed = write_env(env_path(), updates)
+    except OSError as exc:
+        return jsonify(ok=False, error=f"Could not write .env: {exc}"), 500
+
+    # The names of what changed, never the values -- this response is logged
+    # by the browser, the terminal, and anything watching either.
+    return jsonify(ok=True, changed=changed, fields=[
+        {"key": f["key"], "set": f["set"]} for f in env_state()
+    ])
+
+
 @app.post("/resume/remove")
 def remove_resume():
     """Detach the resume and the search derived from it, together.
