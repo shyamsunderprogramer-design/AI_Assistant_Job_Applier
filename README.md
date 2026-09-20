@@ -6,6 +6,7 @@ against your resume, and tailors that resume per job — without inventing a sin
 thing you haven't done.
 
 **This file is the whole project's documentation: setup, decisions, and plan.**
+Last verified against the code on **2026-09-20**.
 It replaces the old `README.md` + `constraints.txt` + `PLAN.md` split (originals in
 `.archive/`). Code comments cite the constraint sections as **§C1–§C10** below;
 those numbers are stable, don't renumber them.
@@ -15,19 +16,25 @@ those numbers are stable, don't renumber them.
 | Part | State | Evidence |
 |---|---|---|
 | **P0** Foundation | ✅ Done | venv, config, logging, additive migrations |
-| **P1** Job discovery | ✅ Done, verified live | 10 companies · 3,110 postings seen · 105 matched · 0 dupes on re-run |
-| **P2** Excel tracker | ✅ Done, verified live | 105 exported · re-export is a no-op · your Status edits survive |
-| **P3A** ATS scoring | ✅ Done, calibrated | 105 real postings: max 47%, p90 31%, median 20% |
-| **P3B** Resume tailoring | ⚠️ Built, **never run** | Blocked: needs an `ANTHROPIC_API_KEY` |
+| **P1** Job discovery | ✅ Done, verified live | 2,867 boards · 90,311 postings seen in one run · 0 dupes on re-run |
+| **P2** Excel tracker | ✅ Done, verified live | re-export is a no-op · your Status edits survive |
+| **P3A** ATS scoring | ✅ Done, recalibrated | 2,509 postings scored; role fit added (see **P8**) |
+| **P3B** Resume tailoring | ✅ Done, **runs free** | `gemma4:e4b` locally: 31s per resume, £0, guard clean |
 | **Auto-search** | ✅ Done, verified live | Reads any resume, derives the search — no keywords to write |
-| **P5** Pipeline integrity | ✅ Done, verified live | Closed 3 vanished postings on a real run; a simulated outage closes nothing |
-| **P6** Breadth | ✅ Done, verified live | 10 boards → **149**; Ashby added; 13,242 postings scanned |
+| **P5** Pipeline integrity | ✅ Done, verified live | Closes vanished postings; a simulated outage closes nothing |
+| **P6** Breadth | ✅ Done, verified live | 10 boards → **2,867**; Ashby, Workday and Workable added |
 | **P7** Daily loop | ✅ Done | `main.py daily` — one command, one digest |
-| **P8** Relevance v2 | ❌ Not started | Needs P6 first |
-| **P4** Assisted apply | ❌ Not started | Recast from auto-submit; needs your go/no-go |
+| **P8** Relevance v2 | ✅ Done, verified live | Role fit: 971 wrong-field postings fell below threshold, 0 remained |
+| **P4** Assisted apply | ⚠️ Built, untested | Fills Greenhouse forms and stops at the CAPTCHA (§C9) |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
 
-**260 tests, all passing, all offline.** Under git as of 2026-09-06 (§C11).
+**599 tests, all passing, all offline.** Under git (§C11).
+
+**The model is free by default.** Tailoring and cover letters are the only part
+that needs one, and a model on your own machine does it in about thirty seconds
+at no cost. Paid APIs (Anthropic, OpenAI, xAI, OpenRouter) and a self-hosted
+OmniRoute gateway are supported and entirely optional — see §C10. Nobody with a
+chat subscription should have to buy API credit to use this.
 
 ### Contents
 
@@ -222,20 +229,45 @@ service run on behalf of others. Built incrementally; each phase is reviewed and
 tested before the next begins. Do not build ahead.
 
 ### §C2 — Scope: portals
-**In scope:** Greenhouse (`boards-api.greenhouse.io`), Lever (`api.lever.co/v0/postings`),
-and Ashby (planned, P6) — all public JSON APIs.
+**In scope**, all public JSON APIs, one module each in `scraper/`:
 
-**Out of scope:** Workday (per-tenant subdomains, heavy JS, shadow DOM, session
-auth — high effort, fragile; track manually), plus iCIMS, Taleo/Oracle,
-SuccessFactors, BambooHR, and custom in-house sites.
+| ATS | endpoint | boards held |
+|---|---|---|
+| Greenhouse | `boards-api.greenhouse.io` | 1,643 |
+| Lever | `api.lever.co/v0/postings` | 618 |
+| Ashby | `api.ashbyhq.com/posting-api` | 536 |
+| Workday | `POST /wday/cxs/<tenant>/<site>/jobs` | 70 |
+| Workable | `POST apply.workable.com/api/v1/accounts/<slug>/jobs` | added 2026-09-19 |
+
+**Workable matters more than its board count suggests.** The first three are a
+tech-sector habit: of the companies whose boards we can read, 43% are software,
+IT, internet or marketing firms, and manufacturers, distributors and trucking
+firms are almost absent. Measured against the full company list, only **0.021%**
+of supply-chain-adjacent companies (1,030,301 of them) have a board on the
+original three. Workable's customers skew smaller and much broader.
+
+**SmartRecruiters is deliberately out**, despite having a clean public API:
+
+    User-agent: LinkedInBot
+    Allow: /v1/companies/
+    User-agent: *
+    Disallow: /
+
+The API is open to one named crawler and closed to everyone else. Impersonating
+that crawler is not something this project does. Workable, by contrast, opens it
+explicitly — `Disallow:` empty, plus `Content-Signal: search=yes, ai-input=yes`
+— which is why one is here and the other is not.
+
+**Out of scope:** iCIMS, Taleo/Oracle, SuccessFactors, BambooHR, and custom
+in-house sites.
 
 **Rule:** one scraper module per **ATS type**, never per company. A company is a
 tenant of an ATS, not a portal. Adding a company is a config/DB row, never code.
 
-Workday later moved **into** scope (`scraper/workday.py`): its public career-site
-API turned out to be reachable without JS, and it is where the large employers
-are. The rest of the "out of scope" list stayed out, and the reason is no longer
-only effort — it is `robots.txt`. Checked 2026-09-14 against the campus ATS
+Workday moved **into** scope (`scraper/workday.py`): its public career-site API
+turned out to be reachable without JS, and it is where the large employers are.
+The rest of the "out of scope" list stayed out, and the reason is no longer only
+effort — it is `robots.txt`. Checked 2026-09-14 against the campus ATS
 directory in `universities/data`:
 
 | ATS | schools | what `robots.txt` says to `User-agent: *` |
@@ -321,6 +353,29 @@ edit, not a database.
 - A match score below `resume.min_score` flags for manual review rather than
   auto-proceeding — and the flag clears symmetrically if the job later clears the bar.
 
+**ATS-safe is not the same as unformatted**, and the first writer confused the
+two. Measured on a real output: 145 paragraphs, every one styled `Normal`, with
+43 bullets carrying a marker and 64 body lines carrying none — four bullets
+under one heading with a marker on exactly one. Bullets were decided by whether
+the *source* line still had its marker, and PDF extraction keeps it on some
+lines and drops it from others. After the rewrite (2026-09-19): 186 of 186
+bullets, all with hanging indents, and 5 real `Heading 1` sections.
+
+The layout rules, each one costing a parser nothing:
+
+- bullets decided **per section**, because a section either is a list or is not;
+- a hanging indent, so wrapped text aligns under text rather than under the dot;
+- real Heading styles — a fair number of parsers locate EXPERIENCE and EDUCATION
+  by style rather than by reading the words;
+- `keep_with_next` on headings and job titles, so neither is stranded at a page
+  foot and no job splits from its first bullet;
+- job dates on a right tab stop, since spaces break when the font changes and a
+  table breaks the parser;
+- one separator on the contact line, because resumes arrive with `|`, ` - ` and
+  ` * ` mixed on one line after years of edits.
+
+`tests/test_writer_layout.py` pins each of these to the defect it fixes.
+
 ### §C9 — Applying: human in the loop
 Most career portals' Terms of Service prohibit automated submission. **This project
 does not click Submit.** P4 is recast as *prefill and hand over* (see the plan below).
@@ -335,8 +390,34 @@ does not click Submit.** P4 is recast as *prefill and hand over* (see the plan b
 - A per-day application cap is enforced from `config.yaml`.
 
 ### §C10 — Cost control
-Tailoring is a per-job Opus call and the **only** part of this tool that spends
-money. Three brakes, all in place as of 2026-09-11:
+Tailoring and cover letters are the **only** part of this tool that can spend
+money, and by default they do not.
+
+**Free is the default and the recommended route.** `resume.provider: ollama`
+runs a model on your own machine: no key, no network, and the resume never
+leaves the laptop. Measured 2026-09-19 on a real posting, `gemma4:e4b` produced
+a clean tailoring in **31 seconds** and passed the fabrication guard. The job
+page's primary button is still "copy the prompt", for a chat subscription you
+are probably already paying for; the second button runs the local model. Neither
+costs anything.
+
+Two things worth knowing before choosing a local model:
+
+- **Size matters more than cleverness.** `muse-glimmer` (18 GB) wrote well but
+  used 69% of a 24 GB machine's memory, swapped to disk, and the second run
+  never returned inside a 900-second timeout. `gemma4:e4b` (9.5 GB) fits, and
+  does the same job in half a minute with 104 page-outs instead of 683,000.
+- **A rejection is not always the model's fault.** Three guard false positives
+  were found this way — `KPIs`, `S&OP` and `Functional` were all flagged as
+  invented while printed verbatim in the resume. Check the resume before
+  blaming the model.
+
+**Paid providers are supported and entirely optional:** `anthropic`, `openai`,
+`grok`, `openrouter`, and a self-hosted `omniroute` gateway. They are chosen on
+the Settings page, which states plainly which of them charge. A provider needing
+a key it has not got is never offered as a button that can only fail.
+
+When a paid provider *is* selected, three brakes apply:
 
 - `resume.max_spend_per_run_usd` (default **$2.00**) is checked *before* each
   call, from that call's projected cost. The run stops cleanly rather than
@@ -345,8 +426,10 @@ money. Three brakes, all in place as of 2026-09-11:
 - `resume.overwrite: false` skips jobs that already have output.
 
 Every run reports what it actually spent. Prices live in `config.yaml` because a
-hardcoded stale price produces a confidently wrong estimate — check
-anthropic.com/pricing before a large run.
+hardcoded stale price produces a confidently wrong estimate — check the
+provider's pricing page before a large run. A model the price table has never
+heard of is costed at the **most expensive** model it knows, so an unpriced
+name cannot quietly render the cap inert.
 
 ### §C11 — Version control
 Under git since 2026-09-06, pushed to
@@ -384,11 +467,11 @@ execution order below, which is deliberately *not* 0,1,2,3,4.
 |---|---|---|---|
 | ~~0~~ | ~~**git init** (§C11)~~ | ✅ Done 2026-09-06 — repo initialised and pushed. | — |
 | ~~1~~ | ~~**P5 — Pipeline integrity**~~ | ✅ Done 2026-09-06 — closure live, 3 dead postings retired on the first run. | — |
-| ~~2~~ | ~~**P6 — Breadth**~~ ✅ Done 2026-09-11 — 149 companies, 3 ATSs. | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
+| ~~2~~ | ~~**P6 — Breadth**~~ ✅ Done 2026-09-11, extended since — 2,867 boards, 5 ATSs. | 10 boards / 105 jobs is a demo, not a job search. Biggest lever on outcomes, and Ashby is nearly free coverage. | No |
 | ~~3~~ | ~~**P7 — Daily loop**~~ ✅ Done 2026-09-12. | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
-| 4 | **P3B — Live tailoring** | Fully built, never run. Unblocks the moment a resume + key exist. | Yes — you |
-| 5 | **P8 — Relevance v2** | Only worth it once the funnel is wide. Re-ranking 105 jobs is pointless; re-ranking 3,000 is not. | Yes — key |
-| 6 | **P4 — Assisted apply** | Highest risk, lowest reliability, ToS-constrained. Last on purpose, and recast from "auto-submit" to "prefill and hand over". | Yes — profile + go/no-go |
+| ~~4~~ | ~~**P3B — Live tailoring**~~ ✅ Done 2026-09-19 — and it needed no key in the end: a local model does it in 31s for nothing. | — |
+| ~~5~~ | ~~**P8 — Relevance v2**~~ ✅ Role fit done 2026-09-18; structured JD facts still open. | Partly |
+| 6 | **P4 — Assisted apply** | Built, untested end to end. Blocked on `config/applicant.yaml`, which asks two legal declarations this tool will not guess. | Yes — fill the form |
 | 7 | **P9 — Outcome feedback** | Needs real applications before it has anything to learn from. | After P4 |
 
 ### Why the order changed
@@ -491,7 +574,7 @@ Verified live on 105 real postings and calibrated.
 - [x] CLI: `score`, `reparse`
 - [x] Verified live: 105 jobs ranked, backend roles top, frontend bottom
 
-### Phase 3B — Resume Tailoring ⚠️ built, never run
+### Phase 3B — Resume Tailoring ✅ built, run, and free
 
 - [x] `resume/tailor.py` — Claude API call (`claude-opus-5`, adaptive thinking, streaming)
 - [x] Anti-fabrication guard: prompt rule + post-hoc check for invented skills,
@@ -708,12 +791,40 @@ remembering the order was the thing most worth removing.
 
 **Done when:** one command, run daily, produces a digest you actually read.
 
-### Phase 8 — Relevance v2 ❌
+### Phase 8 — Relevance v2 ✅ (role fit), remainder open
 
-The current scorer is keyword overlap, and its own calibration is the argument for
-this phase: on 105 postings the *best* match scored 47% and the median 20%. That is
-a weak signal to rank on, and it cannot tell a must-have from a nice-to-have, or a
-senior role from a new-grad one.
+**Done 2026-09-18: the scorer now asks whether the job is the kind of job you
+do**, not only whether you have the skills. It could not before, and the
+measurement was stark — a data engineer's resume scored:
+
+    97%  Senior Data Engineer        <- his field
+    94%  Senior DevSecOps Engineer   <- somebody else's
+
+Three points apart, because both descriptions are full of AWS, Python,
+Kubernetes, Terraform and CI/CD, and coverage counts shared vocabulary.
+`role_fit()` reads the posting's **title** against the titles the profile
+searches for and the titles the person has actually held, then multiplies:
+`WRONG_ROLE_FLOOR + (1 - WRONG_ROLE_FLOOR) * fit`, floor 0.45. A wrong-field
+posting with genuinely shared skills is pushed down, never erased.
+
+Verified on live data: of 971 software, data and devops postings sitting in a
+supply-chain search, **all 971 fell below threshold and none remained**, while
+buyers, planners and procurement analysts took the top of the list.
+
+Two traps found by checking *both* directions, since widening must not become
+"keep everything":
+
+- ATS titles are full of punctuation that carries no meaning. "Engineer, Data
+  Platform", "Engineer - Cloud Infrastructure" and "Engineer (Data Platform)"
+  are the same job; matching now splits on non-word characters and pads, so
+  `sre` is never found inside `Presenter`.
+- A missing synonym reads as a wrong field. `ROLE_FAMILIES["devops"]` had no
+  "site reliability" or "sre", so real SRE postings were being penalised. When a
+  family looks over-strict, check its `searches` list before the scorer.
+
+**Still open**, and unchanged by the above: structured JD facts, hard filters,
+must-have weighting, and `score --why`. The keyword-overlap criticism below
+still stands for everything except role fit.
 
 - [ ] Structured JD facts extracted once and stored: seniority, years of experience,
       visa/citizenship requirements, comp range, remote/hybrid/onsite
@@ -729,7 +840,7 @@ senior role from a new-grad one.
 **Done when:** the top 20 by score are ones you agree are the top 20 — and
 disagreements are explainable.
 
-### Phase 4 — Assisted Apply ❌ (recast from "Submission")
+### Phase 4 — Assisted Apply ⚠️ built, untested end to end
 
 **Gate: your go/no-go on this recast before any code is written.**
 
