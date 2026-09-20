@@ -268,7 +268,10 @@ limits:
 # Company discovery (name -> ATS slug probing). See README.md §C3.
 # ---------------------------------------------------------------------------
 discovery:
-  probe_sources: ["greenhouse", "lever", "ashby"]
+  # Workable is fourth because it is the broadest: the other three are a
+  # tech-sector habit, and Workable's customers are smaller and cover the
+  # manufacturers and distributors the first three barely reach.
+  probe_sources: ["greenhouse", "lever", "ashby", "workable"]
   # Suffixes stripped when deriving a slug from a company name.
   strip_suffixes: ["inc", "inc.", "corp", "corp.", "corporation", "llc",
                    "ltd", "ltd.", "co", "co.", "plc", "group", "holdings",

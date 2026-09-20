@@ -19,6 +19,7 @@ from jobfields import derive
 from scraper.ashby import AshbyScraper
 from scraper.base import CompanyRef, PortalScraper, RawJob
 from scraper.discovery import upsert_company
+from scraper.workable import WorkableScraper
 from scraper.workday import WorkdayScraper
 from scraper.filters import JobFilter, resolve_filter
 from scraper.greenhouse import GreenhouseScraper
@@ -33,6 +34,7 @@ SCRAPER_TYPES: dict[str, type[PortalScraper]] = {
     "lever": LeverScraper,
     "ashby": AshbyScraper,
     "workday": WorkdayScraper,
+    "workable": WorkableScraper,
 }
 
 
