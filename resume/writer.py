@@ -281,6 +281,56 @@ def _section_is_a_list(lines: list[str], rewrites: dict) -> bool:
     return sum(1 for l in body if len(l.strip()) > 70) >= 2
 
 
+def plan_document(base: Resume, result: TailorResult,
+                  header_lines: list[str] | None = None) -> list[tuple[str, str]]:
+    """The resume as a list of (kind, text) blocks, before any format exists.
+
+    Both renderers read this, so the .docx and the .pdf cannot disagree about
+    what is a bullet, a job title or a section. Deciding twice is how two
+    exports of "the same" resume end up different documents.
+
+    kinds: name · contact · heading · role · subheading · bullet · text
+    """
+    rewrites = {
+        (b.get("original") or "").strip(): (b.get("tailored") or "").strip()
+        for b in result.bullets
+        if b.get("original") and b.get("tailored")
+    }
+
+    blocks: list[tuple[str, str]] = []
+    header = header_lines if header_lines is not None else _base_header(base)
+    for i, line in enumerate(header):
+        if (line or "").strip():
+            blocks.append(("name" if i == 0 else "contact", line.strip()))
+
+    if result.summary:
+        blocks.append(("heading", "Summary"))
+        blocks.append(("text", result.summary))
+
+    for section in base.sections:
+        if section.heading == "HEADER":
+            continue
+        if result.summary and section.heading.lower() in ("summary", "objective", "profile"):
+            continue
+        blocks.append(("heading", section.heading))
+        as_list = _section_is_a_list(section.lines, rewrites)
+        for line in section.lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            body = strip_bullet(stripped)
+            replacement = rewrites.get(stripped) or rewrites.get(body)
+            if _is_role_line(stripped):
+                blocks.append(("role", stripped))
+            elif _is_subheading(stripped) and not replacement:
+                blocks.append(("subheading", stripped))
+            elif as_list or replacement:
+                blocks.append(("bullet", replacement or body))
+            else:
+                blocks.append(("text", body))
+    return blocks
+
+
 def write_tailored_resume(
     base: Resume,
     result: TailorResult,
@@ -299,55 +349,25 @@ def write_tailored_resume(
     document = Document()
     _style_document(document)
 
-    rewrites = {
-        (b.get("original") or "").strip(): (b.get("tailored") or "").strip()
-        for b in result.bullets
-        if b.get("original") and b.get("tailored")
-    }
-
-    # Header: contact block, verbatim from the base resume. Only the type
-    # changes -- the name leads, the rest is quieter and smaller, and the
-    # separators are normalised so one line does not use "|" and the next " - ".
-    header = header_lines if header_lines is not None else _base_header(base)
-    for i, line in enumerate(header):
-        if not (line or "").strip():
-            continue
-        if i == 0:
-            name = _add(document, line.strip(), bold=True, size=NAME_SIZE,
+    for kind, text in plan_document(base, result, header_lines):
+        if kind == "name":
+            name = _add(document, text, bold=True, size=NAME_SIZE,
                         align=WD_ALIGN_PARAGRAPH.CENTER)
             name.paragraph_format.space_after = Pt(1)
-        else:
-            contact = _add(document, _tidy_contact(line), size=CONTACT_SIZE,
+        elif kind == "contact":
+            contact = _add(document, _tidy_contact(text), size=CONTACT_SIZE,
                            align=WD_ALIGN_PARAGRAPH.CENTER, color=MUTED)
             contact.paragraph_format.space_after = Pt(1)
-
-    if result.summary:
-        _add_heading(document, "Summary")
-        _add(document, result.summary)
-
-    for section in base.sections:
-        if section.heading == "HEADER":
-            continue
-        if result.summary and section.heading.lower() in ("summary", "objective", "profile"):
-            continue  # already emitted above, tailored
-
-        _add_heading(document, section.heading)
-        as_list = _section_is_a_list(section.lines, rewrites)
-        for line in section.lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            body = strip_bullet(stripped)
-            replacement = rewrites.get(stripped) or rewrites.get(body)
-
-            if _is_role_line(stripped):
-                _add_role(document, stripped)
-            elif _is_subheading(stripped) and not replacement:
-                _add_subheading(document, stripped)
-            elif as_list or replacement:
-                _add_bullet(document, replacement or body)
-            else:
-                _add(document, body)
+        elif kind == "heading":
+            _add_heading(document, text)
+        elif kind == "role":
+            _add_role(document, text)
+        elif kind == "subheading":
+            _add_subheading(document, text)
+        elif kind == "bullet":
+            _add_bullet(document, text)
+        else:
+            _add(document, text)
 
     document.save(output_path)
     log.info("Wrote ATS-safe resume: %s", output_path)
