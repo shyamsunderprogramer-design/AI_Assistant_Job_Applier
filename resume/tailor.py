@@ -110,6 +110,10 @@ class TailorResult:
     guard: GuardResult | None = None
     raw_response: str = ""
     cost: CallCost | None = None
+    retried: bool = False
+    # What the first attempt claimed and the retry dropped. Kept so the review
+    # note can show it: a near miss is worth seeing, not hiding.
+    first_violations: list[str] = field(default_factory=list)
 
     @property
     def accepted(self) -> bool:
@@ -152,6 +156,76 @@ def tailor_resume(
     so that a daily run and a manual run can never disagree about it.
     """
     user_prompt = build_prompt(resume, job_title, company, jd_text)
+    result = _attempt(resume, user_prompt, cfg, ledger, job_title, company)
+
+    # A rejected tailoring produces nothing the person can send, and the model
+    # is usually wrong in a small, nameable way -- measured over five real
+    # postings, three were held for lifting service names out of the job
+    # description (GuardDuty, CloudTrail, Pulumi) into experience the resume
+    # does not claim. Naming those terms and asking again fixes most of them,
+    # so the alternative to one more call is handing back nothing.
+    #
+    # Once, never in a loop: a model that reintroduces a claim after being
+    # told exactly which one to drop will keep doing it, and each attempt
+    # costs real money on a paid provider.
+    if not result.guard.ok and _retries_allowed(cfg):
+        log.info("Retrying %s at %s without: %s", job_title, company,
+                 ", ".join(_claims(result.guard)))
+        retry = _attempt(resume, _retry_prompt(user_prompt, result.guard),
+                         cfg, ledger, job_title, company)
+        # Keep the retry only if it is genuinely cleaner. A second answer that
+        # invented different things is not progress.
+        if retry.guard.ok or len(retry.guard.violations) < len(result.guard.violations):
+            retry.retried = True
+            retry.first_violations = [str(v) for v in result.guard.violations]
+            result = retry
+
+    if not result.guard.ok:
+        log.warning(
+            "Fabrication guard rejected tailoring for %s at %s:\n%s",
+            job_title, company, result.guard.report(),
+        )
+    elif getattr(result, "retried", False):
+        log.info("Retry cleared the guard for %s at %s", job_title, company)
+
+    return result
+
+
+def _retries_allowed(cfg) -> bool:
+    return bool(cfg is None or cfg.get("resume.retry_on_guard_rejection", True))
+
+
+def _claims(guard) -> list[str]:
+    """The distinct values the guard objected to, for the retry prompt."""
+    return list(dict.fromkeys(v.value for v in guard.violations))
+
+
+def _retry_prompt(original: str, guard) -> str:
+    """The same task, with the rejected claims named.
+
+    Naming them matters. "Do not invent anything" is what the first prompt
+    already said and the model still wrote GuardDuty; "the resume never
+    mentions GuardDuty" is a fact it can act on.
+    """
+    claims = _claims(guard)
+    listed = "\n".join(f"  - {c}" for c in claims)
+    return (
+        f"{original}\n\n"
+        f"# Your previous answer was rejected\n"
+        f"It used these terms, and the resume above does not contain any of "
+        f"them:\n{listed}\n\n"
+        f"Every one of those came from the job description, not from this "
+        f"person's experience. Write the tailoring again with all of them "
+        f"removed. Do not substitute a synonym and do not describe the same "
+        f"capability in other words -- if the resume does not evidence it, it "
+        f"belongs in \"gaps\", not in a bullet. Everything else about your "
+        f"previous answer was fine; change only what is listed."
+    )
+
+
+def _attempt(resume: Resume, user_prompt: str, cfg, ledger: Ledger | None,
+             job_title: str, company: str) -> TailorResult:
+    """One model call, parsed and guarded."""
     answer = complete(SYSTEM_PROMPT, user_prompt, cfg, max_tokens=16000)
 
     cost = None
@@ -175,12 +249,5 @@ def tailor_resume(
         raw_response=text,
         cost=cost,
     )
-
     result.guard = check_no_fabrication(resume.text(), result.tailored_text())
-    if not result.guard.ok:
-        log.warning(
-            "Fabrication guard rejected tailoring for %s at %s:\n%s",
-            job_title, company, result.guard.report(),
-        )
-
     return result

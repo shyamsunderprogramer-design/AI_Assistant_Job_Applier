@@ -393,6 +393,16 @@ def write_review_note(result: TailorResult, path: Path | str, job_desc: str = ""
         ]
     if result.omitted:
         lines += ["OMITTED:"] + [f"  - {o}" for o in result.omitted] + [""]
+    if getattr(result, "retried", False) and result.first_violations:
+        # A near miss is worth seeing. The first answer claimed these, the
+        # guard caught them, and the second answer was asked to drop them --
+        # if any keep reappearing across postings, the prompt needs the fix,
+        # not the retry.
+        lines += [
+            "RETRIED — the first answer claimed these and the resume does not:",
+            *(f"  - {v}" for v in result.first_violations),
+            "",
+        ]
     if result.guard and not result.guard.ok:
         lines += ["FABRICATION GUARD — REJECTED:", result.guard.report(), ""]
 

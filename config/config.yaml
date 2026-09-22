@@ -39,6 +39,16 @@ resume:
   # Re-tailor a job that already has an output file?
   overwrite: false
 
+  # When the fabrication guard rejects a tailoring, ask once more with the
+  # rejected claims named. Measured over five real postings: three were held
+  # for writing service names out of the job description (GuardDuty,
+  # CloudTrail, Pulumi) into experience the resume does not claim, and a
+  # rejected tailoring gives the person nothing to send. Once only, never in
+  # a loop -- a model that reintroduces a claim after being told exactly which
+  # one to drop will keep doing it, and each attempt costs money on a paid
+  # provider. Set false to hand back the first answer and its verdict.
+  retry_on_guard_rejection: true
+
   # ---------------------------------------------------------------------
   # Which model writes the tailored resume.
   #
