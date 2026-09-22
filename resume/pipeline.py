@@ -87,6 +87,27 @@ def load_base_resume(cfg) -> Resume:
     return parse_resume(path)
 
 
+def _write_both(resume, result, target: Path) -> None:
+    """Write the .docx, and the PDF beside it.
+
+    Employers ask for either, and exporting one from the other by hand is the
+    manual step this tool exists to remove. The PDF is drawn from the same
+    document plan rather than converted, so the two cannot disagree.
+
+    A PDF failure never loses the .docx: reportlab is an optional dependency
+    and a missing font or a broken install must not cost the document that
+    already succeeded.
+    """
+    write_tailored_resume(resume, result, target)
+    try:
+        from resume.pdf import write_pdf
+
+        write_pdf(resume, result, target.with_suffix(".pdf"))
+    except Exception as exc:
+        log.warning("PDF not written for %s (%s: %s) — the .docx is unaffected",
+                    target.name, type(exc).__name__, exc)
+
+
 def score_jobs(
     cfg, limit: int = 0, rescore: bool = False, include_closed: bool = False,
     max_age_days: float = 0, remote_only: bool = False,
@@ -274,7 +295,7 @@ def accept_reply(cfg, job_id: int, reply_text: str) -> JobOutcome:
             return JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0,
                               "rejected", result.guard.report(), None)
 
-        write_tailored_resume(resume, result, target)
+        _write_both(resume, result, target)
         rescored = score_resume(
             resume.text() + "\n" + result.tailored_text(),
             job.description or job.title,
@@ -380,7 +401,7 @@ def tailor_jobs(
                 )
                 continue
 
-            write_tailored_resume(resume, result, target)
+            _write_both(resume, result, target)
 
             # Re-score against the tailored text so the sheet reflects reality.
             rescored = score_resume(
