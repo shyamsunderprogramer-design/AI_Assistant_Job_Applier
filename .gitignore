@@ -13,6 +13,10 @@ resume/*.md
 resume/*.rtf
 resume/*.odt
 resume/output/
+# The note recording which file the user uploaded. Per-user state like the
+# resume itself, and it carries their filename -- which on a public repo is
+# their name.
+resume/.uploaded.json
 
 # Derived from the resume, so it carries the person's titles and seniority.
 config/search_profile.yaml
@@ -50,3 +54,4 @@ data/*.exit
 .env.backup*
 .env.bak*
 .env.*.backup
+.gstack/
