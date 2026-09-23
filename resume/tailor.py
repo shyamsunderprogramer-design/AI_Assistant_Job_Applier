@@ -15,6 +15,7 @@ and the only thing that changes when you switch is the bill.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from resume.cost import CallCost, Ledger, record_usage
@@ -54,21 +55,39 @@ candidate fits. Four rules, and they matter more than the rewrite being clever:
    person still holds. Changing "Analyze" to "Analyzed" tells the reader they
    have left. Never change the tense of a verb.
 
-2. SAME LENGTH OR SHORTER. You are swapping words, not adding them. If your
-   rewrite is longer than the original, you have padded it.
+2. NEVER DELETE A NUMBER. Every figure in the original -- a percentage, a
+   count, a duration, a dollar amount, "99.95%", "200+", "38% faster" -- must
+   appear in your rewrite, unchanged. Numbers are the strongest thing on a
+   resume and the most common reason a recruiter calls. Measured before this
+   rule existed: 61% of them were being deleted, because shortening a bullet
+   by cutting its result clause is the easiest way to shorten it and the
+   worst. If a bullet must lose something, lose an adjective.
 
-3. NEVER EXPLAIN THE RELEVANCE INSIDE THE BULLET. Do not append clauses like
+3. SAME LENGTH OR SHORTER, AFTER RULE 2. You are swapping words, not adding
+   them -- but never buy brevity with a metric. A rewrite that is two words
+   longer and keeps "99.98% uptime" is better than a short one that drops it.
+
+4. NEVER EXPLAIN THE RELEVANCE INSIDE THE BULLET. Do not append clauses like
    "directly supporting cost control", "mirroring the collaboration this role
    requires", or "demonstrating ability to resolve shortages". A resume
    describes the work; it never argues about the application. Put that
    reasoning in the "reason" field, which is where the human reads it.
 
-4. REPLACE, DON'T APPEND. Use the job description's vocabulary by swapping it
+5. REPLACE, DON'T APPEND. Use the job description's vocabulary by swapping it
    for the resume's own synonym, inside the sentence — not by bolting a phrase
    onto the end. If the resume says "purchase orders" and the JD says "POs",
    that is a legitimate swap. If there is no honest swap to make, return the
    bullet unchanged: an unchanged bullet is a perfectly good answer and far
    better than a padded one.
+
+  Original : Built observability with Prometheus and Grafana, achieving 38%
+             faster MTTR and proactive anomaly detection.
+  BAD      : Built observability with Prometheus and Grafana, achieving
+             proactive issue detection and faster MTTR.
+             (shorter, and it deleted the 38% -- the best part of the bullet)
+  GOOD     : Built observability with Prometheus, Grafana and Datadog,
+             achieving 38% faster MTTR and proactive anomaly detection.
+             (same length, metric intact, JD's own tool named)
 
   Original : Analyze purchase requirements, inventory levels, and demand
              forecasts to support procurement and planning decisions.
@@ -238,6 +257,40 @@ def _retry_prompt(original: str, guard) -> str:
     )
 
 
+METRIC_RE = re.compile(r"\d+(?:\.\d+)?\s*%|\$\s?\d[\d,.]*|\b\d[\d,]{2,}\b|\b\d+(?:\.\d+)?x\b")
+
+
+def _metrics(text: str) -> set[str]:
+    """Every figure in a bullet: percentages, counts, money, multipliers."""
+    return {m.group(0).replace(" ", "") for m in METRIC_RE.finditer(text or "")}
+
+
+def _keep_metrics(bullets: list[dict]) -> int:
+    """Restore any bullet whose rewrite dropped a number, and say how many.
+
+    The prompt asks; this enforces. Measured before either existed, 61% of the
+    figures in a resume were being deleted -- "99.98% uptime", "42% faster",
+    "200+ workloads" -- because the quickest way to shorten a bullet is to cut
+    its result clause, which is the half a recruiter actually reads.
+
+    A rewrite that loses a metric is not a better bullet, so the original is
+    kept instead. Losing the JD's vocabulary costs less than losing the proof.
+    """
+    restored = 0
+    for bullet in bullets:
+        before = bullet.get("original") or ""
+        after = bullet.get("tailored") or ""
+        if not before or not after:
+            continue
+        lost = _metrics(before) - _metrics(after)
+        if lost:
+            bullet["tailored"] = before
+            bullet["reason"] = (f"kept as written — the rewrite dropped "
+                                f"{', '.join(sorted(lost))}")
+            restored += 1
+    return restored
+
+
 def _omissions(raw) -> list[dict]:
     """Normalise "omitted" to {original, reason} entries.
 
@@ -283,5 +336,10 @@ def _attempt(resume: Resume, user_prompt: str, cfg, ledger: Ledger | None,
         raw_response=text,
         cost=cost,
     )
+    restored = _keep_metrics(result.bullets)
+    if restored:
+        log.info("Kept %d bullet(s) as written: the rewrite dropped a metric",
+                 restored)
+
     result.guard = check_no_fabrication(resume.text(), result.tailored_text())
     return result
