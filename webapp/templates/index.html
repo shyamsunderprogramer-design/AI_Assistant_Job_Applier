@@ -135,8 +135,8 @@
 <div class="tw">
   <table>
     <thead><tr>
-      <th data-k="score" aria-sort="descending">Fit <span class="ar">▼</span></th>
-      <th data-k="ageDays">Age</th>
+      <th data-k="score">Fit <span class="ar"></span></th>
+      <th data-k="ageDays" aria-sort="ascending">Age <span class="ar">▲</span></th>
       <th data-k="workplace">Where</th>
       <th data-k="expMin">Exp</th>
       <th data-k="payMin">Salary</th>
@@ -158,14 +158,11 @@
 const RAW = JSON.parse(document.getElementById('data').textContent);
 const $ = id => document.getElementById(id);
 
-// The table shows labels ("3 mo", "$160K–$210K"); sorting needs the numbers
-// behind them, so derive those once rather than parsing on every click.
-const UNIT = {min:1/1440, hr:1/24, day:1, days:1, wk:7, wks:7, mo:30.44, yr:365.25};
-const ageDays = label => {
-  const m = String(label||'').match(/([\d.]+)\s*(min|hr|days?|wks?|mo|yr)/);
-  if (!m) return null;
-  return parseFloat(m[1]) * (UNIT[m[2]] || 1);
-};
+// Salary and experience are still read off their labels; age is not. The
+// server sends the exact age in days, because parsing it back out of "3 days"
+// lost the precision and could not read "just now" at all -- a posting thirty
+// seconds old sorted as though its age were unknown, which is the opposite of
+// what it is.
 const firstNum = t => {
   const m = String(t||'').match(/([\d.,]+)\s*K?/);
   if (!m) return null;
@@ -173,7 +170,7 @@ const firstNum = t => {
   return /K/i.test(t) ? v*1000 : v;
 };
 const ROWS = RAW.map(r => ({...r,
-  ageDays: ageDays(r.age), expMin: firstNum(r.experience), payMin: firstNum(r.salary)}));
+  expMin: firstNum(r.experience), payMin: firstNum(r.salary)}));
 
 const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
                recent:false, board:'', today:false, week:false, pay150:false,
@@ -181,7 +178,10 @@ const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
 // Years of experience the derived profile says you have. Used by the
 // "Within my experience" filter, which hides roles asking for more.
 const MY_YEARS = {{ my_years or 'null' }};
-let sortKey = 'score', sortDir = -1;
+// Newest first. A posting that went up an hour ago is the one worth opening
+// -- it has the fewest applicants ahead of it -- and the quality filters
+// ("70%+", "Within my experience") are there to keep the list relevant.
+let sortKey = 'ageDays', sortDir = 1;
 
 function visible() {
   const q = state.q.trim().toLowerCase();

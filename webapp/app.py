@@ -29,7 +29,7 @@ from flask import Flask, jsonify, redirect, render_template, request, url_for
 from config.loader import PROJECT_ROOT, load_config
 from db.models import Job, STATUS_VALUES
 from db.session import get_session, init_engine
-from jobage import age_label
+from jobage import age_days, age_label
 from jobfields import UNSTATED, experience_label, salary_label, workplace_label
 
 log = logging.getLogger(__name__)
@@ -102,6 +102,11 @@ def job_row(job: Job) -> dict:
         # misleads in the one direction that matters: burying a good job.
         "basis": job.score_basis or "full",
         "age": age_label(job),
+        # The exact age, not the label. The page used to parse "3 days" back
+        # into a number to sort by, which lost the precision and could not
+        # read "just now" at all -- so a posting thirty seconds old sorted as
+        # though its age were unknown.
+        "ageDays": age_days(job),
         "workplace": stated(workplace_label(job.workplace)),
         "experience": stated(experience_label(job.experience_min_years,
                                               job.experience_max_years)),
