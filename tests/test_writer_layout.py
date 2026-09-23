@@ -132,3 +132,61 @@ def test_nothing_a_parser_chokes_on_is_emitted(written):
         assert not [p for p in section.header.paragraphs if p.text.strip()]
         assert not [p for p in section.footer.paragraphs if p.text.strip()]
     assert not written.inline_shapes
+
+
+# --- omission: the half of tailoring that was never wired up --------------
+
+def _plan(omitted, lines=None):
+    from resume.writer import plan_document
+
+    base = Resume(raw_text="", sections=[
+        Section(heading="HEADER", lines=["Jane Roe", "jane@example.com"]),
+        Section(heading="EXPERIENCE", lines=lines or [
+            "SENIOR PLATFORM ENGINEER, ACME CORP\tFeb 2025 - Present",
+            "Ran the weekly release train for eleven services across three regions.",
+            "Cut the median deploy from forty minutes to under six by reworking it all.",
+            "Maintained the legacy Perl reporting jobs nobody else would touch here.",
+            "Held the on-call rota and wrote the runbooks that the rota depends on.",
+        ]),
+    ])
+    return plan_document(base, TailorResult(summary=None, bullets=[], omitted=omitted))
+
+
+def _texts(plan):
+    return [t for _, t in plan]
+
+
+def test_a_named_bullet_is_actually_removed():
+    """The model reported omissions and the writer emitted everything anyway,
+    so every tailored resume came out the same length as the original."""
+    plan = _plan([{"original": "Maintained the legacy Perl reporting jobs nobody"
+                               " else would touch here.",
+                   "reason": "irrelevant to this role"}])
+    assert not any("Perl" in t for t in _texts(plan))
+    assert any("release train" in t for t in _texts(plan))
+
+
+def test_a_prose_omission_removes_nothing():
+    """The old shape: a description names no line, so nothing can be dropped."""
+    plan = _plan(["The legacy Perl work was omitted as irrelevant."])
+    assert any("Perl" in t for t in _texts(plan))
+
+
+def test_a_job_title_is_never_dropped():
+    plan = _plan([{"original": "SENIOR PLATFORM ENGINEER, ACME CORP\tFeb 2025 - Present",
+                   "reason": "not relevant"}])
+    assert any("ACME CORP" in t for t in _texts(plan))
+
+
+def test_a_section_never_gives_up_more_than_half():
+    """A role stripped to one line reads as a gap in the career."""
+    body = [
+        "Ran the weekly release train for eleven services across three regions.",
+        "Cut the median deploy from forty minutes to under six by reworking it all.",
+        "Maintained the legacy Perl reporting jobs nobody else would touch here.",
+        "Held the on-call rota and wrote the runbooks that the rota depends on.",
+    ]
+    plan = _plan([{"original": b, "reason": "x"} for b in body],
+                 lines=["SENIOR PLATFORM ENGINEER, ACME CORP\tFeb 2025 - Present", *body])
+    kept = [t for k, t in plan if k == "bullet"]
+    assert len(kept) >= 2, "the whole job was gutted"

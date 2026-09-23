@@ -71,7 +71,7 @@ def strip_bullet(line: str) -> str:
 
 
 def looks_like_heading(line: str) -> bool:
-    """A short line that is all-caps or matches a known resume section name."""
+    """A short line that is all-caps or names a known resume section."""
     stripped = line.strip().rstrip(":")
     if not stripped or len(stripped) > 48 or is_bullet(line):
         return False
@@ -79,7 +79,31 @@ def looks_like_heading(line: str) -> bool:
         return True
     # ALL CAPS with no sentence punctuation, e.g. "PROFESSIONAL EXPERIENCE"
     letters = [c for c in stripped if c.isalpha()]
-    return bool(letters) and all(c.isupper() for c in letters) and "." not in stripped
+    if letters and all(c.isupper() for c in letters) and "." not in stripped:
+        return True
+    # A heading that decorates a known name: "Core Competencies / Technical
+    # Skills Summary" equals no entry in the list and is not all-caps, so it
+    # was read as body text -- and the sixty-two lines under it were filed
+    # under EDUCATION, which is where the previous heading happened to be.
+    #
+    # A colon with content after it is the thing to exclude: "Technical
+    # Skills: Terraform, Kubernetes" is a labelled list, not a section, and
+    # treating it as a heading would throw the list away.
+    if ":" in line.strip().rstrip(":"):
+        return False
+    # Take the known names out and see what is left. A heading is made almost
+    # entirely of them plus joining words; a sentence that merely mentions one
+    # keeps its subject and verb. "Core Competencies / Technical Skills
+    # Summary" reduces to nothing; "Experience with Terraform across three
+    # teams" keeps "with terraform across three teams".
+    lowered = stripped.lower()
+    if not any(known in lowered for known in KNOWN_HEADINGS):
+        return False
+    for known in sorted(KNOWN_HEADINGS, key=len, reverse=True):
+        lowered = lowered.replace(known, " ")
+    residue = re.sub(r"[^a-z0-9]+", "", re.sub(
+        r"\b(and|or|of|the|a|summary|section|list|overview)\b", " ", lowered))
+    return len(residue) <= 3
 
 
 def parse_docx(path: Path | str) -> Resume:
