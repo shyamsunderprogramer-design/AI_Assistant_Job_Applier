@@ -92,9 +92,24 @@ Return ONLY a JSON object, no prose, in this exact shape:
      "reason": "<why this bullet matters for this JD, one clause>"}
   ],
   "skills_order": ["<the resume's own skills, reordered by relevance>"],
-  "omitted": ["<base bullets you left out and why, one clause each>"],
+  "omitted": [
+    {"original": "<the base-resume bullet you dropped, VERBATIM>",
+     "reason": "<why it does not earn its place for this role, one clause>"}
+  ],
   "gaps": ["<what the JD asks for that the resume genuinely lacks>"]
 }
+
+"omitted" is how the resume gets SHORTER. Tailoring is as much about what you
+leave out as what you rephrase, and a resume that keeps everything for every
+job is not tailored. Copy the dropped bullet VERBATIM into "original" -- a
+description of what you dropped cannot be acted on, so a paraphrase means the
+bullet stays in the document.
+
+Drop a bullet when it is genuinely irrelevant to this posting. Never drop an
+employer, a job title, a date, a degree, or a whole role -- those are the
+person's record, not padding. Keep at least half of each job's bullets: a role
+stripped to one line reads as a gap in the career, which is worse than a
+slightly long resume.
 
 "gaps" is important — be honest there. It is how the human learns whether to
 apply at all."""
@@ -105,7 +120,7 @@ class TailorResult:
     summary: str | None
     bullets: list[dict[str, str]] = field(default_factory=list)
     skills_order: list[str] = field(default_factory=list)
-    omitted: list[str] = field(default_factory=list)
+    omitted: list[dict] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
     guard: GuardResult | None = None
     raw_response: str = ""
@@ -223,6 +238,25 @@ def _retry_prompt(original: str, guard) -> str:
     )
 
 
+def _omissions(raw) -> list[dict]:
+    """Normalise "omitted" to {original, reason} entries.
+
+    It used to be a list of prose descriptions -- "the front-end technologies
+    were omitted" -- which read well in the review note and could not be acted
+    on, so nothing was ever dropped and every tailored resume came out the
+    same length as the original. A bare string is still accepted, and still
+    cannot drop anything; it is kept so the note can show it.
+    """
+    entries = []
+    for item in raw or []:
+        if isinstance(item, dict):
+            entries.append({"original": str(item.get("original") or "").strip(),
+                            "reason": str(item.get("reason") or "").strip()})
+        elif str(item).strip():
+            entries.append({"original": "", "reason": str(item).strip()})
+    return entries
+
+
 def _attempt(resume: Resume, user_prompt: str, cfg, ledger: Ledger | None,
              job_title: str, company: str) -> TailorResult:
     """One model call, parsed and guarded."""
@@ -244,7 +278,7 @@ def _attempt(resume: Resume, user_prompt: str, cfg, ledger: Ledger | None,
         summary=payload.get("summary"),
         bullets=[b for b in payload.get("bullets", []) if isinstance(b, dict)],
         skills_order=[str(s) for s in payload.get("skills_order", [])],
-        omitted=[str(s) for s in payload.get("omitted", [])],
+        omitted=_omissions(payload.get("omitted")),
         gaps=[str(s) for s in payload.get("gaps", [])],
         raw_response=text,
         cost=cost,

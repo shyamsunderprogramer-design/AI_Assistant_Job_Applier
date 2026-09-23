@@ -281,6 +281,54 @@ def _section_is_a_list(lines: list[str], rewrites: dict) -> bool:
     return sum(1 for l in body if len(l.strip()) > 70) >= 2
 
 
+# At most this share of one section's body lines may be dropped. A model asked
+# to tailor will sometimes cut most of a job; a role stripped to one line reads
+# as a gap in the career, which is worse than a slightly long resume.
+MAX_DROPPED_SHARE = 0.5
+
+
+def _dropped_lines(result: TailorResult) -> set[str]:
+    """The base-resume lines the model asked to leave out, verbatim.
+
+    Only entries carrying the original text can drop anything. A prose
+    description of what was dropped -- which is what this field used to be --
+    names no line and removes nothing.
+    """
+    lines = set()
+    for entry in result.omitted or []:
+        if isinstance(entry, dict):
+            original = (entry.get("original") or "").strip()
+            if original:
+                lines.add(original)
+                lines.add(strip_bullet(original))
+    return lines
+
+
+def _keepable(lines: list[str], dropped: set[str]) -> set[str]:
+    """Which of this section's lines to actually remove.
+
+    Returns the lines to SKIP, having refused the removals that would damage
+    the record: a job title, a date line or a degree is the person's history,
+    not padding, and no section gives up more than half its body.
+    """
+    if not dropped:
+        return set()
+
+    body = [l.strip() for l in lines
+            if l.strip() and not _is_role_line(l) and not _is_subheading(l)]
+    asked = [l for l in body
+             if l in dropped or strip_bullet(l) in dropped]
+    if not asked:
+        return set()
+
+    allowed = int(len(body) * MAX_DROPPED_SHARE)
+    if len(asked) > allowed:
+        # Keep the ones it asked for first; the model puts its weakest
+        # material at the front of the list.
+        asked = asked[:allowed]
+    return set(asked)
+
+
 def plan_document(base: Resume, result: TailorResult,
                   header_lines: list[str] | None = None) -> list[tuple[str, str]]:
     """The resume as a list of (kind, text) blocks, before any format exists.
@@ -296,6 +344,8 @@ def plan_document(base: Resume, result: TailorResult,
         for b in result.bullets
         if b.get("original") and b.get("tailored")
     }
+
+    dropped = _dropped_lines(result)
 
     blocks: list[tuple[str, str]] = []
     header = header_lines if header_lines is not None else _base_header(base)
@@ -314,12 +364,15 @@ def plan_document(base: Resume, result: TailorResult,
             continue
         blocks.append(("heading", section.heading))
         as_list = _section_is_a_list(section.lines, rewrites)
+        keep = _keepable(section.lines, dropped)
         for line in section.lines:
             stripped = line.strip()
             if not stripped:
                 continue
             body = strip_bullet(stripped)
             replacement = rewrites.get(stripped) or rewrites.get(body)
+            if stripped in keep:
+                continue
             if _is_role_line(stripped):
                 blocks.append(("role", stripped))
             elif _is_subheading(stripped) and not replacement:
@@ -412,7 +465,15 @@ def write_review_note(result: TailorResult, path: Path | str, job_desc: str = ""
             "",
         ]
     if result.omitted:
-        lines += ["OMITTED:"] + [f"  - {o}" for o in result.omitted] + [""]
+        lines += ["OMITTED (removed from the document):"]
+        for entry in result.omitted:
+            if isinstance(entry, dict):
+                text = entry.get("original") or entry.get("reason") or ""
+                why = entry.get("reason") if entry.get("original") else ""
+                lines.append(f"  - {text}" + (f"\n      why: {why}" if why else ""))
+            else:
+                lines.append(f"  - {entry}")
+        lines.append("")
     if getattr(result, "retried", False) and result.first_violations:
         # A near miss is worth seeing. The first answer claimed these, the
         # guard caught them, and the second answer was asked to drop them --

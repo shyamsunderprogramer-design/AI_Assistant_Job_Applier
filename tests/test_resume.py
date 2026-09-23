@@ -269,3 +269,53 @@ def _write_base(tmp_path):
     path = tmp_path / "base_resume.txt"
     path.write_text(BASE_RESUME, encoding="utf-8")
     return path
+
+
+# --- headings that decorate a known name ----------------------------------
+
+def test_a_decorated_heading_is_still_a_heading():
+    """"Core Competencies / Technical Skills Summary" equals no entry in
+    KNOWN_HEADINGS and is not all-caps, so it read as body text -- and the 61
+    skills lines under it were filed under EDUCATION, which is simply where
+    the previous recognised heading happened to be. The generated resume then
+    printed a page of tooling under the reader's "Education" heading."""
+    from resume.parser import looks_like_heading
+
+    assert looks_like_heading("Core Competencies / Technical Skills Summary")
+    assert looks_like_heading("Skills and Certifications")
+    assert looks_like_heading("Professional Experience")
+
+
+def test_a_sentence_mentioning_a_section_name_is_not_a_heading():
+    """The risk of widening: "Experience with Terraform" is not a section."""
+    from resume.parser import looks_like_heading
+
+    assert not looks_like_heading("Experience with Terraform across three teams")
+    assert not looks_like_heading("Hands-on experience across AWS EC2, S3 and EKS")
+    assert not looks_like_heading("Led the skills matrix and training programme")
+
+
+def test_a_labelled_list_is_not_a_heading():
+    """"Technical Skills: Terraform, Kubernetes" is a list with a label.
+    Reading it as a heading would throw the list away."""
+    from resume.parser import looks_like_heading
+
+    assert not looks_like_heading("Technical Skills: Terraform, Kubernetes, Docker")
+
+
+def test_education_keeps_only_education(tmp_path):
+    """The shape of the real failure, end to end."""
+    from resume.parser import parse_text
+
+    resume = parse_text(
+        "Jane Roe\n"
+        "EDUCATION\n"
+        "Master of Science\tJan 2023 - Dec 2024\n"
+        "Fitchburg State University\n"
+        "Core Competencies / Technical Skills Summary\n"
+        "Hands-on experience across AWS EC2, S3, RDS, EKS and Lambda daily.\n"
+        "Extensive use of Terraform for modularised infrastructure as code.\n"
+    )
+    education = next(s for s in resume.sections if s.heading == "EDUCATION")
+    assert len(education.lines) == 2, [l for l in education.lines]
+    assert not any("Terraform" in l for l in education.lines)
