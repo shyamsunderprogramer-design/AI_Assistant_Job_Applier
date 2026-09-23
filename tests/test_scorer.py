@@ -58,3 +58,38 @@ def test_score_resume_penalises_the_wrong_role():
     assert right.score > wrong.score
     # Penalised, not erased: the skills really are shared.
     assert wrong.score == pytest.approx(right.score * WRONG_ROLE_FLOOR, abs=1e-3)
+
+
+# --- postings with no description -----------------------------------------
+
+def test_a_posting_with_no_description_cannot_score_full_marks():
+    """A real posting sat at the top of a 2,482-job list: "Embedded Systems
+    Engineer", 25 characters of description, scored 1.00 -- above every job
+    that had actually been measured. With no text, coverage is undefined, and
+    reporting 100% claims certainty from no evidence."""
+    from resume.scorer import TITLE_ONLY_CEILING, score_basis
+
+    resume = "Systems engineer. Kubernetes, AWS, Terraform, Python."
+    thin = score_resume(resume, "Embedded Systems Engineer",
+                        job_title="Embedded Systems Engineer",
+                        search_titles=["systems engineer"])
+    assert score_basis("Embedded Systems Engineer") == "title"
+    assert thin.score <= TITLE_ONLY_CEILING
+
+
+def test_a_real_description_is_not_capped():
+    resume = "DevOps engineer. Kubernetes, AWS, Terraform, Python, CI/CD."
+    jd = ("We need a DevOps engineer with Kubernetes, AWS, Terraform and "
+          "Python for our CI/CD platform. ") * 12
+    from resume.scorer import TITLE_ONLY_CEILING
+
+    full = score_resume(resume, jd, job_title="DevOps Engineer",
+                        search_titles=["devops"])
+    assert full.score > TITLE_ONLY_CEILING
+
+
+def test_the_cap_sits_below_the_default_threshold():
+    """So an unmeasurable posting reads as "worth a look", not "best match"."""
+    from resume.scorer import TITLE_ONLY_CEILING
+
+    assert TITLE_ONLY_CEILING < 0.60

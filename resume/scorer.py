@@ -95,6 +95,22 @@ class ScoreResult:
 # Scraped postings average 6,758 characters; a job-alert email gives 217.
 DESCRIPTION_FLOOR = 600
 
+# The most a posting can score when there is no description to measure.
+#
+# The comment below says a title-only score "lands in the twenties". That was
+# true of a title that matched poorly; a title that matches WELL lands at
+# 100%, because with almost no text every salient term is trivially covered.
+# A real example sat at the top of a 2,482-job list: "Embedded Systems
+# Engineer", 25 characters of description, scored 1.00 -- above every job that
+# had a real description and had actually been measured.
+#
+# A score is "how much of this posting's salient vocabulary does the resume
+# cover". With no posting text that quantity is undefined, and reporting 100%
+# claims certainty from no evidence. The cap sits just below the default
+# threshold so these surface as "worth a look" rather than "best match", and
+# `score_basis` still records why.
+TITLE_ONLY_CEILING = 0.55
+
 
 def score_basis(description: str | None) -> str:
     """"full" if there is a real description to measure against, else "title".
@@ -260,6 +276,8 @@ def score_resume(
             missing.append(term)
 
     score = hit_weight / total_weight if total_weight else 0.0
+    if score_basis(jd_text) == "title":
+        score = min(score, TITLE_ONLY_CEILING)
 
     # Scale by whether this is the person's job at all. A wrong-field posting
     # keeps WRONG_ROLE_FLOOR of its coverage rather than zero: it is still
