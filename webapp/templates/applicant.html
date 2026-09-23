@@ -50,8 +50,8 @@
       form filler stops and leaves it to you.</p>
 
     <div class="ask">
-      <span>Are you legally authorised to work in the United States?</span>
-      <div class="row">
+      <span id="q-authorised">Are you legally authorised to work in the United States?</span>
+      <div class="row" role="radiogroup" aria-labelledby="q-authorised">
         <label class="radio"><input type="radio" name="authorised_to_work" value="yes"
           {% if a.authorisation.get('authorised_to_work') is true %}checked{% endif %}> Yes</label>
         <label class="radio"><input type="radio" name="authorised_to_work" value="no"
@@ -60,8 +60,8 @@
     </div>
 
     <div class="ask">
-      <span>Will you now or in the future require visa sponsorship?</span>
-      <div class="row">
+      <span id="q-sponsorship">Will you now or in the future require visa sponsorship?</span>
+      <div class="row" role="radiogroup" aria-labelledby="q-sponsorship">
         <label class="radio"><input type="radio" name="requires_sponsorship" value="yes"
           {% if a.authorisation.get('requires_sponsorship') is true %}checked{% endif %}> Yes</label>
         <label class="radio"><input type="radio" name="requires_sponsorship" value="no"
