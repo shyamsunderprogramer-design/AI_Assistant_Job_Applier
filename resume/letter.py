@@ -26,7 +26,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from resume.guard import GuardResult, Violation, check_no_fabrication
+from resume.guard import (TECH_TERMS, GuardResult, Violation,
+                          _base_vocabulary, _supported, check_no_fabrication)
 from resume.parser import Resume
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,35 @@ def parse_reply(text: str) -> dict:
     return data
 
 
+# Words that turn a noun into an adjective and carry no claim of their own.
+# "Terraform-based" says nothing about the writer that "Terraform" does not,
+# so requiring evidence for "based" rejects a true sentence. Kept short and
+# explicit: every entry is a suffix modifier, never a skill, a tool or a name.
+MODIFIERS = frozenset("""
+based driven focused oriented enabled native first ready centric led aware
+grade level scale wide side heavy light only style like ish less full
+powered backed facing facing-out managed hosted owned aligned compliant
+authorized certified approved ready related specific agnostic
+""".split())
+
+
+def _evidenced(value: str, *pools: set[str]) -> bool:
+    """Is every meaningful part of this name evidenced in one of the pools?
+
+    Generic modifiers are exempt -- they are grammar, not claims. Everything
+    else must appear somewhere, and `_claims_a_skill` separately refuses any
+    part that is a skill the resume cannot support, so this cannot launder
+    one however many pools it is given.
+    """
+    parts = [p for p in re.split(r"[-\s/]+", (value or "").lower()) if p]
+    if not parts:
+        return False
+    meaningful = [p for p in parts if p not in MODIFIERS]
+    if not meaningful:
+        return False          # "based-driven" is not a name
+    return all(any(p in pool for pool in pools) for p in meaningful)
+
+
 def check_letter(resume_text: str, jd_text: str, letter_text: str) -> GuardResult:
     """Guard a letter: claims against the resume, names against the posting.
 
@@ -183,11 +213,43 @@ def check_letter(resume_text: str, jd_text: str, letter_text: str) -> GuardResul
         return verdict
 
     jd_vocabulary = _vocabulary(jd_text)
+    resume_vocabulary = _base_vocabulary(resume_text)
     kept: list[Violation] = [
         violation for violation in verdict.violations
-        if not (violation.kind == "entity" and _from_posting(violation.value, jd_vocabulary))
+        # Forgiven when the name comes from the posting (quoting the employer)
+        # OR from the resume itself (describing the writer) -- but never when
+        # it smuggles in a skill the resume cannot support.
+        if not ((violation.kind == "entity")
+                and _evidenced(violation.value, jd_vocabulary, resume_vocabulary)
+                and not _claims_a_skill(violation.value, resume_vocabulary))
     ]
     return GuardResult(ok=not kept, violations=kept)
+
+
+def _claims_a_skill(value: str, resume_vocabulary: set[str]) -> bool:
+    """Does this name smuggle in a skill the resume does not have?
+
+    The entity rule exists so a letter can quote the employer back -- name
+    the company, its product, its stack. It must never become a way to claim
+    a SKILL, and a hyphen was exactly that hole:
+
+        "I have shipped Snowflake-platform work."   -> passed
+
+    `snowflake` is a known skill and is absent from the resume, but
+    TOKEN_RE keeps the hyphen, so the skill check sees one token
+    `snowflake-platform`, which is in no skill list. The entity check then
+    forgave the whole compound because "snowflake" and "platform" each
+    appear somewhere in the posting -- and a job description is 700 words of
+    vocabulary, so almost any two-part invention clears that bar.
+
+    So each part is tested on its own: a part that is a known skill, and is
+    not in the resume, is a claim about the writer rather than a quotation of
+    the employer, whatever the posting happens to mention.
+    """
+    for part in re.split(r"[-\s/.]+", (value or "").lower()):
+        if part and part in TECH_TERMS and part not in resume_vocabulary:
+            return True
+    return False
 
 
 def _vocabulary(text: str) -> set[str]:

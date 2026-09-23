@@ -340,3 +340,55 @@ def test_rejoining_does_not_invent_a_whole_employer():
     result = check_no_fabrication(base, "Worked at Siemens on procurement.")
     assert not result.ok
     assert "siemens" in {v.value.lower() for v in result.violations}
+
+
+# --- the letter guard must not launder a skill ----------------------------
+# Found by code review, confirmed by hand: the entity rule exists so a letter
+# can quote the employer back -- name the company, its product, its stack --
+# and a hyphen turned it into a way to claim a SKILL instead.
+
+RESUME_FOR_SKILLS = ("Jane Roe. Platform engineer. Kubernetes, AWS, Terraform, "
+                     "Python. Built CI/CD at Acme for five years.")
+JD_FOR_SKILLS = ("We need a platform engineer for our Rust platform and "
+                 "Snowflake warehouse. Third-party risk, end-to-end supply "
+                 "chain, data-driven. Exiger is FedRAMP authorized.")
+
+
+def _letter(claim):
+    from resume.letter import check_letter
+
+    return check_letter(RESUME_FOR_SKILLS, JD_FOR_SKILLS, claim)
+
+
+def test_a_hyphen_cannot_smuggle_in_a_skill():
+    """"Snowflake-platform" passed: TOKEN_RE keeps the hyphen, so the skill
+    check saw one token that is in no skill list, and the entity check then
+    forgave it because "snowflake" and "platform" both appear in the posting.
+    A job description is 700 words, so almost any two-part invention cleared
+    that bar."""
+    assert not _letter("I have shipped Snowflake-platform work.").ok
+    assert not _letter("I ran Rust-platform services.").ok
+    assert not _letter("I led Rust-based development.").ok
+
+
+def test_a_skill_the_resume_has_is_still_allowed():
+    assert _letter("I am certified in Kubernetes.").ok
+    assert _letter("I have run Terraform-based pipelines.").ok
+    assert _letter("I built Kubernetes-native tooling.").ok
+
+
+def test_quoting_the_employer_is_still_allowed():
+    """The whole reason the entity rule exists."""
+    assert _letter("Your FedRAMP-authorized platform is the draw.").ok
+    assert _letter("I built CI/CD at Acme.").ok
+
+
+def test_an_employer_assembled_from_posting_words_is_refused():
+    """Two generic words from a long posting are not evidence of a company."""
+    assert not _letter("I spent four years at End-Risk Systems.").ok
+
+
+def test_a_name_made_only_of_modifiers_is_not_a_name():
+    from resume.letter import _evidenced
+
+    assert not _evidenced("based-driven", {"based", "driven"})
