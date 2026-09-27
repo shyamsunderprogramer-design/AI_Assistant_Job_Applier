@@ -4,22 +4,22 @@ logs/
 # Every resume document, whatever it is called. The old pattern matched only
 # `base_resume.*`, so a resume saved under the person's own name was NOT
 # ignored — and this repo is public. Match by extension instead; the .py files
-# in resume/ are code and stay tracked.
-resume/*.doc
-resume/*.docx
-resume/*.pdf
-resume/*.txt
-resume/*.md
-resume/*.rtf
-resume/*.odt
-resume/output/
+# in ml/resume/ are code and stay tracked.
+ml/resume/*.doc
+ml/resume/*.docx
+ml/resume/*.pdf
+ml/resume/*.txt
+ml/resume/*.md
+ml/resume/*.rtf
+ml/resume/*.odt
+ml/resume/output/
 # The note recording which file the user uploaded. Per-user state like the
 # resume itself, and it carries their filename -- which on a public repo is
 # their name.
-resume/.uploaded.json
+ml/resume/.uploaded.json
 
 # Derived from the resume, so it carries the person's titles and seniority.
-config/search_profile.yaml
+backend/config/search_profile.yaml
 submitter/audit_log/
 *.xlsx
 
@@ -35,18 +35,20 @@ venv/
 # a person chooses to send — these are answers to questions employers ask
 # once. Ignored BEFORE the file exists, so it can never be added by a
 # `git add -A` on the day it is created.
-config/applicant.yaml
-config/applicant.local.yaml
+backend/config/applicant.yaml
+backend/config/applicant.local.yaml
+# Screening answers learned from forms you finished: salary, legal answers.
+backend/config/answers.yaml
 
 # Screenshots and logs from the apply runs: they show filled forms, so they
 # carry the same details.
-apply/runs/
+backend/apply/runs/
 
 # The 7.2M-company dataset: 1GB, far past GitHub every limit.
-companies/companies_sorted.csv
-companies/*.csv
-companies/raw_sources/
-companies/*.tsv
+data_engineering/companies/companies_sorted.csv
+data_engineering/companies/*.csv
+data_engineering/companies/raw_sources/
+data_engineering/companies/*.tsv
 data/*.exit
 
 # Backups of .env. These carry the same keys as .env itself, and one was

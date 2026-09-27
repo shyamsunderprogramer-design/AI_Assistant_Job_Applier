@@ -1,0 +1,259 @@
+"""Polite HTTP client: robots.txt enforcement, per-host rate limiting, backoff.
+
+See README.md §C5. Do not weaken these defaults to go faster.
+"""
+
+from __future__ import annotations
+
+import logging
+import random
+import threading
+import time
+import urllib.robotparser
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+import requests
+
+log = logging.getLogger(__name__)
+
+
+class RobotsDisallowed(Exception):
+    """Raised when robots.txt forbids a URL. Caller logs and skips."""
+
+
+class FetchError(Exception):
+    """Non-retryable or retry-exhausted HTTP failure."""
+
+
+class RateLimited(FetchError):
+    """The host is refusing us with 429s. Not an answer about the URL.
+
+    A subclass so every existing `except FetchError` still treats it as a
+    failure, but callers that record answers -- slug probing above all -- must
+    let it through rather than read it as "this board does not exist". That
+    reading filed hundreds of Workable companies as board-less on 23 Sep 2026,
+    on a day Workable was refusing every request.
+    """
+
+
+@dataclass
+class HttpSettings:
+    user_agent: str
+    respect_robots: bool = True
+    timeout_seconds: int = 20
+    min_delay_seconds: float = 1.5
+    jitter_seconds: float = 0.75
+    max_retries: int = 3
+    backoff_base_seconds: float = 2.0
+    # After a host has 429'd a request through every retry, stop asking it for
+    # this long. Retrying each URL in turn cost about four minutes per board
+    # and turned a one-hour daily run into nine and a half.
+    rate_limit_cooldown_seconds: float = 900.0
+    # Treat a 401/403 on robots.txt as a blanket disallow. Stricter than
+    # RFC 9309, which says a 4xx means the file is unavailable and the crawler
+    # may proceed. Off by default; see _robots_for().
+    strict_robots_on_4xx: bool = False
+
+    @classmethod
+    def from_config(cls, cfg) -> "HttpSettings":
+        return cls(
+            user_agent=cfg.user_agent,
+            respect_robots=bool(cfg.get("http.respect_robots", True)),
+            timeout_seconds=int(cfg.get("http.timeout_seconds", 20)),
+            min_delay_seconds=float(cfg.get("http.min_delay_seconds", 1.5)),
+            jitter_seconds=float(cfg.get("http.jitter_seconds", 0.75)),
+            max_retries=int(cfg.get("http.max_retries", 3)),
+            backoff_base_seconds=float(cfg.get("http.backoff_base_seconds", 2.0)),
+            rate_limit_cooldown_seconds=float(
+                cfg.get("http.rate_limit_cooldown_seconds", 900.0)),
+            strict_robots_on_4xx=bool(cfg.get("http.strict_robots_on_4xx", False)),
+        )
+
+
+class PoliteClient:
+    """Wraps requests with per-host pacing and robots.txt checks."""
+
+    def __init__(self, settings: HttpSettings):
+        self.settings = settings
+        self._session = requests.Session()
+        self._session.headers.update({"User-Agent": settings.user_agent})
+        self._last_request_at: dict[str, float] = {}
+        # A lock per host, created on demand; `_locks_guard` only protects the
+        # creation, never the wait itself.
+        self._host_locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        # host -> monotonic time before which we do not ask it anything
+        self._cooling_until: dict[str, float] = {}
+        # host -> refusals in a row; each one doubles the next cool-off
+        self._refusals: dict[str, int] = {}
+
+    # -- robots ------------------------------------------------------------
+    def _robots_for(self, host_root: str) -> urllib.robotparser.RobotFileParser | None:
+        """Fetch and cache robots.txt for a scheme://host. None = unavailable."""
+        if host_root in self._robots:
+            return self._robots[host_root]
+
+        parser = urllib.robotparser.RobotFileParser()
+        robots_url = f"{host_root}/robots.txt"
+        try:
+            resp = self._session.get(robots_url, timeout=self.settings.timeout_seconds)
+            if resp.status_code == 200:
+                parser.parse(resp.text.splitlines())
+            elif 400 <= resp.status_code < 500:
+                # RFC 9309 §2.3.1.3 ("Unavailable" Status): a 4xx means the
+                # robots.txt file is unavailable, and "the crawler MAY access
+                # any resources on the server". 401 and 403 are not exceptions
+                # — an unreadable robots.txt is an ABSENT one, not a blanket
+                # Disallow. Google's crawler documents the same reading.
+                #
+                # This code previously did the opposite while citing this very
+                # RFC, and Python's stdlib RobotFileParser has the same
+                # non-compliant behaviour, which is probably where it came from.
+                # It made api.ashbyhq.com (401 on /robots.txt, but a documented
+                # PUBLIC job-board API) unscrapeable.
+                #
+                # Set http.strict_robots_on_4xx: true to restore the cautious
+                # reading — it is stricter than the standard, not politer than
+                # it, and it will silently exclude hosts that permit crawling.
+                if resp.status_code in (401, 403) and self.settings.strict_robots_on_4xx:
+                    log.info(
+                        "robots.txt for %s returned %d; strict mode treats that as "
+                        "full disallow", host_root, resp.status_code,
+                    )
+                    parser.parse(["User-agent: *", "Disallow: /"])
+                else:
+                    parser.parse([])
+            else:
+                # 5xx. RFC 9309 §2.3.1.4: unreachable means assume complete
+                # disallow. A server having a bad day is not permission.
+                log.warning(
+                    "robots.txt for %s returned %d — assuming disallow until it recovers",
+                    host_root, resp.status_code,
+                )
+                parser.parse(["User-agent: *", "Disallow: /"])
+        except requests.RequestException as exc:
+            log.warning("robots.txt unreachable for %s (%s) — proceeding politely", host_root, exc)
+            self._robots[host_root] = None
+            return None
+
+        self._robots[host_root] = parser
+        return parser
+
+    def allowed(self, url: str) -> bool:
+        if not self.settings.respect_robots:
+            return True
+        parsed = urlparse(url)
+        host_root = f"{parsed.scheme}://{parsed.netloc}"
+        parser = self._robots_for(host_root)
+        if parser is None:
+            return True
+        return parser.can_fetch(self.settings.user_agent, url)
+
+    # -- pacing ------------------------------------------------------------
+    def _wait_turn(self, host: str) -> None:
+        """Hold back until this host's turn comes round again.
+
+        One lock per host, not one lock overall. The delay has always been
+        per-host, but the scraper walked boards one at a time, so four
+        different hosts took turns waiting on each other for no reason: an
+        hour and forty minutes of which only forty-six were greenhouse.io
+        actually being paced. Holding the lock across the sleep is what makes
+        concurrency safe -- two workers on the same host still queue, and two
+        workers on different hosts never meet.
+        """
+        with self._locks_guard:
+            lock = self._host_locks.setdefault(host, threading.Lock())
+
+        with lock:
+            delay = (self.settings.min_delay_seconds
+                     + random.uniform(0, self.settings.jitter_seconds))
+            last = self._last_request_at.get(host)
+            if last is not None:
+                elapsed = time.monotonic() - last
+                if elapsed < delay:
+                    time.sleep(delay - elapsed)
+            self._last_request_at[host] = time.monotonic()
+
+    # -- requests ----------------------------------------------------------
+    def get(self, url: str, **kwargs) -> requests.Response:
+        """GET with robots check, pacing, and bounded backoff on 429/5xx."""
+        return self._request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> requests.Response:
+        """POST under exactly the same rules as GET.
+
+        Some boards only answer a search over POST — Workday's career-site API
+        is one. Sharing `_request` means a new verb cannot quietly skip the
+        robots check or the pacing.
+        """
+        return self._request("POST", url, **kwargs)
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        if not self.allowed(url):
+            raise RobotsDisallowed(f"robots.txt disallows {url}")
+
+        host = urlparse(url).netloc
+        last_exc: Exception | None = None
+        throttled = False
+
+        for attempt in range(self.settings.max_retries + 1):
+            # Checked every attempt: another worker may have tripped it while
+            # this one was sleeping.
+            if time.monotonic() < self._cooling_until.get(host, 0.0):
+                raise RateLimited(f"{host} is rate-limiting us; not asking until it cools off")
+            self._wait_turn(host)
+            try:
+                resp = self._session.request(
+                    method, url, timeout=self.settings.timeout_seconds, **kwargs
+                )
+            except requests.RequestException as exc:
+                last_exc = exc
+                throttled = False
+            else:
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    throttled = resp.status_code == 429
+                    last_exc = FetchError(f"HTTP {resp.status_code} for {url}")
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        time.sleep(min(int(retry_after), 60))
+                        continue
+                else:
+                    self._refusals.pop(host, None)   # it answered: forgive the past
+                    return resp
+
+            if attempt < self.settings.max_retries:
+                backoff = self.settings.backoff_base_seconds ** (attempt + 1)
+                log.debug("Retry %d for %s in %.1fs (%s)", attempt + 1, url, backoff, last_exc)
+                time.sleep(backoff)
+
+        if throttled:
+            # Doubling, not fixed: Workable refused every request for four days
+            # (23-26 Sep 2026), and a fixed 15 minutes meant four stalls an
+            # hour spent being refused again. A host that keeps saying no is
+            # asked less and less often -- 15 min, 30, 1 h ... 6 h at most --
+            # and one successful answer resets it.
+            n = self._refusals.get(host, 0) + 1
+            self._refusals[host] = n
+            cooldown = min(self.settings.rate_limit_cooldown_seconds * 2 ** (n - 1), 6 * 3600)
+            self._cooling_until[host] = time.monotonic() + cooldown
+            log.warning("%s refused every retry with HTTP 429 — leaving it alone for %.0f min",
+                        host, cooldown / 60)
+            raise RateLimited(f"Giving up on {url}: {host} is rate-limiting us (HTTP 429)")
+        raise FetchError(f"Giving up on {url} after {self.settings.max_retries} retries: {last_exc}")
+
+    def get_json(self, url: str, **kwargs) -> object:
+        resp = self.get(url, **kwargs)
+        if resp.status_code == 404:
+            raise FetchError(f"HTTP 404 for {url}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def head_ok(self, url: str) -> bool:
+        """True if the URL returns a 2xx. Used by slug probing."""
+        try:
+            resp = self.get(url)
+        except (FetchError, RobotsDisallowed):
+            return False
+        return 200 <= resp.status_code < 300

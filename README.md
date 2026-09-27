@@ -8,7 +8,7 @@ thing you haven't done.
 **This file is the whole project's documentation: setup, decisions, and plan.**
 Last verified against the code on **2026-09-20**.
 It replaces the old `README.md` + `constraints.txt` + `PLAN.md` split (originals in
-`.archive/`). Code comments cite the constraint sections as **§C1–§C10** below;
+`docs/archive/`). Code comments cite the constraint sections as **§C1–§C10** below;
 those numbers are stable, don't renumber them.
 
 ### Status at a glance
@@ -62,7 +62,7 @@ python3 -m venv .venv
 cp .env.example .env          # discovery and scoring need no API key
 ```
 
-**Then drop your resume — any resume — into `resume/`** and run:
+**Then drop your resume — any resume — into `ml/resume/`** and run:
 
 ```bash
 .venv/bin/python main.py init-db     # create tables, load seed companies
@@ -75,7 +75,7 @@ cp .env.example .env          # discovery and scoring need no API key
 `profile` is the step that means you never write a keyword list. It reads the
 resume and derives the job titles to search for, the ones to exclude, your
 seniority, and where you can work — then saves that to
-`config/search_profile.yaml`, which the scraper reads in preference to
+`backend/config/search_profile.yaml`, which the scraper reads in preference to
 `config.yaml`. **The file is yours to edit**; regenerate with `profile --force`.
 
 Only resume *tailoring* needs an `ANTHROPIC_API_KEY` in `.env`. Everything
@@ -163,7 +163,7 @@ Anything you have acted on (Applied, Rejected, …) is never touched.
 
 ## 3. Configuration
 
-Everything tunable lives in `config/config.yaml`. No behaviour is hardcoded.
+Everything tunable lives in `backend/config/config.yaml`. No behaviour is hardcoded.
 
 | Section | What it controls |
 |---|---|
@@ -179,7 +179,7 @@ Everything tunable lives in `config/config.yaml`. No behaviour is hardcoded.
 | `logging` | level and log file |
 
 **You should not need to touch `filters.title_keywords`.** `main.py profile`
-derives the search from your resume and writes `config/search_profile.yaml`,
+derives the search from your resume and writes `backend/config/search_profile.yaml`,
 which the scraper prefers. The lists in `config.yaml` are the fallback for when
 no resume has been supplied. Set `filters.use_derived_profile: false` to force
 the hand-written lists instead.
@@ -190,27 +190,64 @@ Exclusions win over inclusions — that is what separates `Remote - USA` from
 
 ## 4. Layout
 
+Organised by the software-engineering role that owns each part.
+
 ```
-config/     config.yaml + loader (YAML + .env, logging setup)
-db/         SQLAlchemy models (Company, Job, ScrapeLog), session, additive migrations
-scraper/    http_client (robots + rate limiting), base, greenhouse, lever,
-            ashby, filters, discovery (+ probe cache), runner,
-            lifecycle (closure + staleness)
-excel/      tracker.py — DB -> editable workbook, append-only
-resume/     parser, profile (resume -> search), scorer, tailor, guard,
-            cost (spend cap + ledger), writer, pipeline
-            (+ your base resume, gitignored)
-submitter/  submission + audit log — EMPTY, Phase 4 not started
-tests/      260 offline unit tests
-data/       SQLite database + job_tracker.xlsx (gitignored)
-logs/       run logs (gitignored)
-.archive/   the pre-merge README / PLAN / constraints, kept because there is no git
+main.py               the CLI entrypoint (stays at the root)
+
+frontend/             UI engineer
+  templates/          Flask/Jinja pages: index, job, setup, applicant
+  static/             app.css
+  console.html        the status console served by devops/jobstatus.py
+
+backend/              backend engineer
+  api/                the Flask web app — python -m backend.api
+  apply/              assisted apply: Greenhouse form filling, profile, queue
+  core/               shared job logic: jobage, jobfields, locations, status, daily
+  config/             config.yaml + loader (YAML + .env, logging setup),
+                      boards.csv, applicant.yaml.example
+
+data_engineering/     data engineer
+  scraper/            http_client (robots + rate limiting), base, greenhouse, lever,
+                      ashby, workday, workable, recruitee, teamtailor, bamboohr,
+                      breezy, jazzhr, jobvite,
+                      filters, discovery, runner, lifecycle (closure + staleness),
+                      mailbox, alerts, adzuna
+    feeds/            job feeds searched by title: usajobs, jooble, careerjet,
+                      findwork, themuse, remotive, remoteok, himalayas, jobicy,
+                      hn_hiring, weworkremotely, workingnomads — keyless ones run daily, keyed ones once their
+                      key is in .env (python main.py feeds)
+  companies/          the worldwide company inventory (import, enrich, refine)
+  universities/       university career boards
+  db/                 SQLAlchemy models, session, additive migrations
+  excel/              tracker.py — DB -> editable workbook, append-only
+  boards.py           boards.csv <-> database
+
+ml/                   AI / ML engineer
+  resume/             parser, profile (resume -> search), scorer, tailor, guard,
+                      letter, llm, cost, writer, pdf, packet, pipeline
+                      (+ your base resume and tailored output, gitignored)
+  benchmark_resume.py tailoring benchmark
+
+devops/               DevOps / SRE
+  launchd/            macOS scheduled jobs (daily, discover, enrich, webapp)
+  daily_pipeline.sh   the scheduled run: lock, scrape, score, export, digest
+  probe_runner.py     the long-running board prober
+  jobstatus.py, pushstatus.py, build_dashboard.py, run_summary.py,
+  actions_summary.py, merge_cloud.py, fetch_cloud_results.sh, n8n workflow
+.github/workflows/    the cloud daily scrape (GitHub requires this path)
+
+qa/tests/             QA engineer: offline unit tests
+docs/archive/         the pre-merge README / PLAN / constraints, unedited
+
+data/                 SQLite databases, logs, state, xlsx (gitignored)
+logs/                 run logs (gitignored)
 ```
 
 ### Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q
+.venv/bin/python -m pytest qa/tests/ -q
 ```
 
 All parser tests run offline against captured payload shapes — no network.
@@ -229,7 +266,7 @@ service run on behalf of others. Built incrementally; each phase is reviewed and
 tested before the next begins. Do not build ahead.
 
 ### §C2 — Scope: portals
-**In scope**, all public JSON APIs, one module each in `scraper/`:
+**In scope**, all public JSON APIs, one module each in `data_engineering/scraper/`:
 
 | ATS | endpoint | boards held |
 |---|---|---|
@@ -264,11 +301,11 @@ in-house sites.
 **Rule:** one scraper module per **ATS type**, never per company. A company is a
 tenant of an ATS, not a portal. Adding a company is a config/DB row, never code.
 
-Workday moved **into** scope (`scraper/workday.py`): its public career-site API
+Workday moved **into** scope (`data_engineering/scraper/workday.py`): its public career-site API
 turned out to be reachable without JS, and it is where the large employers are.
 The rest of the "out of scope" list stayed out, and the reason is no longer only
 effort — it is `robots.txt`. Checked 2026-09-14 against the campus ATS
-directory in `universities/data`:
+directory in `data_engineering/universities/data`:
 
 | ATS | schools | what `robots.txt` says to `User-agent: *` |
 |---|---|---|
@@ -287,7 +324,7 @@ higher-ed inventory, cannot be scraped by this tool.**
 
 What is left for universities is what already works: **Workday and Greenhouse**,
 which together carry 46 distinct campus boards and need no new code at all
-(`universities/import_boards.py`).
+(`data_engineering/universities/import_boards.py`).
 
 ### §C3 — Scope: the company list
 Goal is the widest net, not a hand-curated shortlist.
@@ -327,6 +364,12 @@ Secrets live in `.env` only. Never hardcoded, never committed.
   evade detection.
 - Concurrency capped per host. **Scale breadth by adding companies, never by
   raising request rate against one host.**
+- **One documented exception: keyed official APIs.** `api.adzuna.com/robots.txt`
+  disallows everything — it is addressed to crawlers — while Adzuna's API terms
+  invite keyed use. `data_engineering/scraper/adzuna.py` therefore calls it
+  outside `PoliteClient`, only with the person's own key, one call per 3s and at
+  most `adzuna.max_calls` per run, far inside the free tier. Crawling a site
+  that says no is still never done.
 
 ### §C6 — Failure handling
 A portal or company that fails must not crash the run: log it to `scrape_log` with
@@ -374,7 +417,7 @@ The layout rules, each one costing a parser nothing:
 - one separator on the contact line, because resumes arrive with `|`, ` - ` and
   ` * ` mixed on one line after years of edits.
 
-`tests/test_writer_layout.py` pins each of these to the defect it fixes.
+`qa/tests/test_writer_layout.py` pins each of these to the defect it fixes.
 
 ### §C9 — Applying: human in the loop
 Most career portals' Terms of Service prohibit automated submission. **This project
@@ -436,12 +479,12 @@ Under git since 2026-09-06, pushed to
 `github.com/shyamsunderprogramer-design/AI_Assistant_Job_Applier` (**public**).
 
 `.gitignore` keeps `.env`, `data/` (the SQLite DB and the tracker workbook),
-`logs/`, `config/search_profile.yaml`, and **every resume document** out of the
+`logs/`, `backend/config/search_profile.yaml`, and **every resume document** out of the
 repo — so no API key, no scraped job data, and no resume is ever committed.
 
-That last one was a real near-miss: the pattern was `resume/base_resume.*`, so a
+That last one was a real near-miss: the pattern was `ml/resume/base_resume.*`, so a
 resume saved under the person's own name was **not** ignored. It is now matched
-by extension (`resume/*.docx`, `*.pdf`, …). Nothing leaked — but check
+by extension (`ml/resume/*.docx`, `*.pdf`, …). Nothing leaked — but check
 `git status` before committing if you add a new file type there. **Check that before adding a file**: the
 repo is public, and the DB in particular holds the full text of every posting.
 
@@ -471,7 +514,7 @@ execution order below, which is deliberately *not* 0,1,2,3,4.
 | ~~3~~ | ~~**P7 — Daily loop**~~ ✅ Done 2026-09-12. | Cheap glue that turns 5+ commands into one habit. Makes everything downstream actually get used. | No |
 | ~~4~~ | ~~**P3B — Live tailoring**~~ ✅ Done 2026-09-19 — and it needed no key in the end: a local model does it in 31s for nothing. | — |
 | ~~5~~ | ~~**P8 — Relevance v2**~~ ✅ Role fit done 2026-09-18; structured JD facts still open. | Partly |
-| 6 | **P4 — Assisted apply** | Built, untested end to end. Blocked on `config/applicant.yaml`, which asks two legal declarations this tool will not guess. | Yes — fill the form |
+| 6 | **P4 — Assisted apply** | Built, untested end to end. Blocked on `backend/config/applicant.yaml`, which asks two legal declarations this tool will not guess. | Yes — fill the form |
 | 7 | **P9 — Outcome feedback** | Needs real applications before it has anything to learn from. | After P4 |
 
 ### Why the order changed
@@ -497,16 +540,16 @@ everything else waiting on two files only you can provide. Six problems with tha
 
 ### Phase 0 — Foundation ✅
 
-- [x] Project skeleton (`config/`, `db/`, `scraper/`, `excel/`, `resume/`, `submitter/`, `tests/`)
+- [x] Project skeleton (`backend/config/`, `data_engineering/db/`, `data_engineering/scraper/`, `data_engineering/excel/`, `ml/resume/`, `submitter/`, `qa/tests/`)
 - [x] `requirements.txt` covering all phases
 - [x] `.gitignore` (secrets, DB, logs, resumes, audit artifacts)
 - [x] `.env.example` + `python-dotenv` loading; no hardcoded secrets
-- [x] `config/config.yaml` as the single source of tunables
-- [x] `config/loader.py` — dotted-path lookup, UA templating, logging setup
+- [x] `backend/config/config.yaml` as the single source of tunables
+- [x] `backend/config/loader.py` — dotted-path lookup, UA templating, logging setup
 - [x] Constraints recorded (now §C1–§C11 above)
 - [x] Virtualenv created, dependencies installed
 - [x] Documentation written
-- [x] `db/migrate.py` — additive-only column migration, run on every startup
+- [x] `data_engineering/db/migrate.py` — additive-only column migration, run on every startup
 - [x] **`git init` + first commit** (§C11) — pushed to GitHub 2026-09-06
 
 ### Phase 1 — Job Discovery ✅
@@ -534,14 +577,14 @@ Verified live: 10 companies, 3,110 postings seen, 105 matched, 0 duplicates on r
 - [x] 20 offline unit tests (filters, parsers, hashing, slug derivation)
 - [x] Live verification run against real Greenhouse + Lever boards
 - [x] Narrow the title filters to the user's actual roles — **solved by derivation
-      rather than by asking**: `resume/profile.py` reads the resume and writes the
+      rather than by asking**: `ml/resume/profile.py` reads the resume and writes the
       search (2026-09-09)
 
 ### Phase 2 — Excel Tracking Sheet ✅
 
 105 jobs exported live; re-export is a clean no-op.
 
-- [x] `excel/tracker.py` module, driven off `exported_to_excel`
+- [x] `data_engineering/excel/tracker.py` module, driven off `exported_to_excel`
 - [x] Columns: Company · Job Title · Application Link · JD · Location · Posting Date ·
       Required Skills · Date Found · Application Status · ATS Match Score
 - [x] Create workbook if absent; append to it if present
@@ -561,9 +604,9 @@ Verified live: 10 companies, 3,110 postings seen, 105 matched, 0 duplicates on r
 
 Verified live on 105 real postings and calibrated.
 
-- [x] `resume/parser.py` — structured text from .docx, .pdf, .txt/.md
-- [x] Auto-detect the base resume in `resume/`, ignoring Word lock files
-- [x] `resume/scorer.py` — weighted keyword overlap between resume and JD
+- [x] `ml/resume/parser.py` — structured text from .docx, .pdf, .txt/.md
+- [x] Auto-detect the base resume in `ml/resume/`, ignoring Word lock files
+- [x] `ml/resume/scorer.py` — weighted keyword overlap between resume and JD
 - [x] Works standalone: no API key, no cost, unit-tested
 - [x] Scores against the *requirements* section, not company blurb/benefits
 - [x] Skills weighted above generic JD prose; company-name tokens excluded
@@ -576,19 +619,19 @@ Verified live on 105 real postings and calibrated.
 
 ### Phase 3B — Resume Tailoring ✅ built, run, and free
 
-- [x] `resume/tailor.py` — Claude API call (`claude-opus-5`, adaptive thinking, streaming)
+- [x] `ml/resume/tailor.py` — Claude API call (`claude-opus-5`, adaptive thinking, streaming)
 - [x] Anti-fabrication guard: prompt rule + post-hoc check for invented skills,
       metrics, dates, employers (§C8)
 - [x] Guard shares one skill vocabulary with the scorer so they can't drift
 - [x] Reject any tailored output that fails the fabrication check
-- [x] `resume/writer.py` — ATS-safe .docx (no tables, columns, text boxes, graphics)
+- [x] `ml/resume/writer.py` — ATS-safe .docx (no tables, columns, text boxes, graphics)
 - [x] Employers, dates, education copied through verbatim — never rewritten
 - [x] Review note (`*_review.txt`) listing rewrites, omissions, honest gaps
 - [x] Deterministic output filenames tying a resume version to a job
 - [x] Skip re-tailoring a job that already has an output file
 - [x] CLI: `tailor [--job-id N] [--limit N]`
 - [x] 42 offline unit tests for scorer, guard, parser, writer, pipeline
-- [!] **Live tailoring run — blocked on you**: base resume in `resume/` + `ANTHROPIC_API_KEY`
+- [!] **Live tailoring run — blocked on you**: base resume in `ml/resume/` + `ANTHROPIC_API_KEY`
 
 **Cost control (§C10) — built 2026-09-11:**
 
@@ -627,7 +670,7 @@ hunting "software engineer / backend / full stack" — and **excluding "staff" a
 skills, years of experience, seniority band, and location. Offline, deterministic,
 no API key.
 
-- [x] `resume/profile.py` — held titles, years, seniority, role families, locations
+- [x] `ml/resume/profile.py` — held titles, years, seniority, role families, locations
 - [x] Title evidence weighted 10× body evidence — unweighted counting ranked
       "network engineer" (6 body mentions of *networking*) above SRE, the person's
       actual job title
@@ -637,8 +680,8 @@ no API key.
 - [x] An exclusion may never cancel a search term (a self-defeating filter returns nothing)
 - [x] A non-technical resume falls back to its own held titles rather than being
       handed a software engineer's search — narrow, but never wrong
-- [x] Saved to `config/search_profile.yaml`, printed, and editable; `--force` regenerates
-- [x] `scraper/filters.resolve_filter` prefers the derived profile over `config.yaml`
+- [x] Saved to `backend/config/search_profile.yaml`, printed, and editable; `--force` regenerates
+- [x] `data_engineering/scraper/filters.resolve_filter` prefers the derived profile over `config.yaml`
 - [x] 22 unit tests, most covering cases where a wrong guess would be silent
 - [ ] `refine_with_claude()` — the API-backed layer for careers the offline
       vocabulary does not cover (a nurse, an accountant). Hook exists, needs a key.
@@ -662,7 +705,7 @@ resume change with `score --rescore`.
 **Verified live 2026-09-06.** The lifecycle columns had been sitting in the model
 and the live DB with no code reading or writing them; every job had been
 `is_open=True` since the day it was found. Now reconciled on every successful
-scrape (`scraper/lifecycle.py`).
+scrape (`data_engineering/scraper/lifecycle.py`).
 
 First real run: 3,172 postings seen across 10 boards, **3 vanished postings
 closed** (1 Figma, 2 Instacart), 0 wrongly closed, and the median age of an open
@@ -710,7 +753,7 @@ Every comparison now goes through `lifecycle.as_utc()`.
 **Result: 10 boards → 149.** 148 companies found from 182 names (81% hit rate),
 13,242 postings scanned, and the matched-job count went from 6 to 95.
 
-- [x] **Ashby scraper** (`scraper/ashby.py`) — the third big startup ATS, and
+- [x] **Ashby scraper** (`data_engineering/scraper/ashby.py`) — the third big startup ATS, and
       companies on it were entirely invisible before. **45 of the 149 found
       companies are Ashby-only** (Benchling, Cedar, Hims & Hers, …)
 - [x] Ashby's payload is richer than the other two: salary is captured into the
@@ -865,7 +908,7 @@ Cutting across all four: **CAPTCHAs, bot detection, and account flags are the re
 failure mode, not selectors.**
 
 - [x] Written reliability assessment (above)
-- [ ] `config/profile.yaml` — name, contact, work history, EEO answers, links
+- [ ] `backend/config/profile.yaml` — name, contact, work history, EEO answers, links
 - [ ] **Application packet** per job: tailored resume + cover letter + prefilled
       answers + link in one folder — useful even with zero browser automation
 - [ ] Cover letter generation under the same anti-fabrication guard as the resume (§C8)
@@ -908,7 +951,7 @@ rather than a feeling.
 
 | # | Item | Unblocks |
 |---|---|---|
-| ~~1~~ | ~~Base resume into `resume/`~~ — ✅ supplied 2026-09-06 | done |
+| ~~1~~ | ~~Base resume into `ml/resume/`~~ — ✅ supplied 2026-09-06 | done |
 | ~~3~~ | ~~Your actual target roles~~ — ✅ now derived from the resume automatically | done |
 | 2 | **`ANTHROPIC_API_KEY`** in `.env` — no `.env` file exists yet | P3B, P8 |
 | 4 | **Profile data** — contact, work history, EEO answers | P4 |

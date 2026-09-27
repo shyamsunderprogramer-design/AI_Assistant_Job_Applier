@@ -1,0 +1,332 @@
+# Job Applier Agent — configuration
+# Everything tunable lives here. No behaviour is hardcoded in the modules.
+
+database:
+  url: "sqlite:///data/jobs.db"
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Excel tracking sheet.
+# The DB is the source of truth; the workbook is a view you can edit. The
+# Application Status column is yours — re-exports never overwrite it.
+# ---------------------------------------------------------------------------
+excel:
+  path: "data/job_tracker.xlsx"
+
+# ---------------------------------------------------------------------------
+# Phase 3 — resume tailoring + ATS scoring.
+# Claude may only rephrase/reorder/emphasise what is already in the base
+# resume. Output is checked by the fabrication guard before it is written.
+# ---------------------------------------------------------------------------
+resume:
+  # Leave null to auto-detect the newest .docx/.pdf in ml/resume/.
+  base_path: null
+  output_dir: "ml/resume/output"
+  # Below this match score a job is flagged "Manual Review" instead of being
+  # auto-tailored. 0.0–1.0.
+  #
+  # RECALIBRATED 2026-09-09 against 111 postings and a REAL resume. The old
+  # numbers (max 47%, median 20%, threshold 0.25) came from a throwaway sample
+  # resume, and were far too low once a real one was in place: 110 of 111 jobs
+  # cleared 0.25, so the flag stopped filtering anything at all.
+  #
+  # Real distribution: max 76%, p90 60%, p75 55%, median 46%, min 23%.
+  #   0.50 -> 42 jobs    0.60 -> 15 jobs    0.65 -> 6 jobs    0.70 -> 4 jobs
+  #
+  # Still a RANKING, not a grade — it measures coverage of a JD's salient
+  # terms. Recalibrate after any big change to the resume or the filters:
+  #   python main.py score --rescore
+  min_score: 0.60
+  # Postings known only by title and a snippet (Adzuna, alert emails) score
+  # at most 0.55 by design — less evidence, a lower ceiling — so they are
+  # flagged for review against this instead of min_score. Shown as "~NN".
+  min_score_title_only: 0.45
+  # The base resume is a MASTER resume, longer than any one application. Each
+  # tailored resume is cut down to this many PDF pages, keeping what is most
+  # relevant to that posting (ml/resume/fit.py). 0 keeps everything.
+  max_pages: 2
+  # Re-tailor a job that already has an output file?
+  overwrite: false
+
+  # When the fabrication guard rejects a tailoring, ask once more with the
+  # rejected claims named. Measured over five real postings: three were held
+  # for writing service names out of the job description (GuardDuty,
+  # CloudTrail, Pulumi) into experience the resume does not claim, and a
+  # rejected tailoring gives the person nothing to send. Once only, never in
+  # a loop -- a model that reintroduces a claim after being told exactly which
+  # one to drop will keep doing it, and each attempt costs money on a paid
+  # provider. Set false to hand back the first answer and its verdict.
+  retry_on_guard_rejection: true
+
+  # ---------------------------------------------------------------------
+  # Which model writes the tailored resume.
+  #
+  # Tailoring and cover letters are the ONLY parts of this tool that need a
+  # model at all. Scraping, scoring, export and the whole daily run are
+  # offline arithmetic and string matching, and will keep working with no
+  # model, no key and no network.
+  #
+  #   ollama     a model on this machine. Free, private, no key, works
+  #              offline. Slower, and smaller than a frontier model.
+  #   anthropic  the API. Costs money (see the cap below), needs
+  #              ANTHROPIC_API_KEY in .env.
+  #
+  # The safety rule does not change with the choice: whatever writes the text,
+  # ml/resume/guard.py re-checks every skill, metric, year and entity against
+  # your base resume, and a tailoring that invents anything is rejected.
+  #
+  # SET TO anthropic DELIBERATELY, 2026-09-15, after measuring the difference.
+  # qwen3.5:9b tailored a real DevSecOps posting and the guard rejected it for
+  # ten invented claims — STIG, SRG, ACAS, RMF, CUI, DAST — every one of them
+  # present in the JOB DESCRIPTION and absent from the resume. The model lifted
+  # defence-compliance vocabulary out of the posting and wrote it in as lived
+  # experience. The guard caught it, which is the system working; but a model
+  # that has to be caught on the first attempt is not the one to write the
+  # document you send to employers. Local stays available and free for anyone
+  # who prefers it (set provider: ollama) — it is not the default.
+  # ---------------------------------------------------------------------
+  provider: anthropic
+
+  ollama:
+    host: "http://localhost:11434"
+    # `ollama list` shows what is installed. Bigger follows instructions
+    # better; smaller answers faster.
+    model: "qwen3.5:9b"
+    # A resume plus a job description plus the reply runs well past Ollama's
+    # 4k default, and an overlong prompt is truncated from the START — which
+    # is where the resume is. Too small does not fail loudly; it quietly
+    # tailors against half a resume.
+    num_ctx: 16384
+    # First call after a reboot spends minutes loading weights from disk.
+    timeout_seconds: 900
+
+  anthropic:
+    model: "claude-opus-5"
+
+  # ---------------------------------------------------------------------
+  # Cost control. Applies to the `anthropic` provider only — a local model
+  # has nothing to meter.
+  #
+  # Hard ceiling for ONE `tailor` run, in USD. The projected cost of each
+  # call is checked BEFORE it is sent, and the run stops cleanly when the
+  # next call would breach the cap — a cap discovered by exceeding it is not
+  # a cap. 0 disables, which is how this ran before the cap existed.
+  #
+  # See what a run would cost without sending anything:
+  #     python main.py tailor --estimate
+  # ---------------------------------------------------------------------
+  max_spend_per_run_usd: 2.00
+
+  # USD per MILLION tokens. A snapshot, kept here rather than hardcoded so a
+  # stale price cannot silently produce a wrong estimate. Check current
+  # pricing at https://www.anthropic.com/pricing before a large run.
+  pricing:
+    claude-opus-5:
+      input: 5.00
+      output: 25.00
+    claude-sonnet-5:
+      input: 3.00
+      output: 15.00
+
+# ---------------------------------------------------------------------------
+# Politeness. See README.md §C5 — do not weaken these to go faster.
+# ---------------------------------------------------------------------------
+http:
+  # Honest, contactable UA. {contact} is filled from SCRAPER_CONTACT_EMAIL.
+  user_agent: "JobApplierAgent/0.1 (personal job search; contact: {contact})"
+  respect_robots: true
+  timeout_seconds: 20
+  # Minimum seconds between requests to the SAME host, plus random jitter.
+  min_delay_seconds: 1.5
+  jitter_seconds: 0.75
+  max_retries: 3
+  backoff_base_seconds: 2.0
+  # A 401/403 on robots.txt means the file is UNAVAILABLE, not that everything
+  # is forbidden — RFC 9309 §2.3.1.3 says a crawler may then proceed, and
+  # Google's crawler documents the same reading. Set true for the stricter
+  # interpretation, which will silently exclude hosts that do permit crawling
+  # (e.g. api.ashbyhq.com, whose public job-board API sits behind a 401 on
+  # robots.txt). A real "Disallow" directive is always honoured either way.
+  strict_robots_on_4xx: false
+
+# ---------------------------------------------------------------------------
+# Which ATS platforms to scrape. Adding a company is a config/DB change only.
+# ---------------------------------------------------------------------------
+portals:
+  greenhouse:
+    enabled: true
+  lever:
+    enabled: true
+  ashby:
+    enabled: true
+  workday:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Companies to scrape.
+#
+# `seed_companies` is a starter list of known Greenhouse/Lever boards, used to
+# prove the pipeline works end to end. The real breadth comes from running
+# `python main.py discover` against a name list — discovered companies are
+# stored in the DB and scraped automatically alongside these.
+#
+# `slug` is the company's identifier on that ATS, i.e. the last path segment of
+#   https://job-boards.greenhouse.io/<slug>   or   https://jobs.lever.co/<slug>
+# ---------------------------------------------------------------------------
+companies:
+  scrape_discovered: true      # also scrape companies found by `discover`
+  # All slugs below verified live on 2026-08-31.
+  seed_companies:
+    - { name: "Stripe",     slug: "stripe",     source: "greenhouse" }
+    - { name: "Databricks", slug: "databricks", source: "greenhouse" }
+    - { name: "Figma",      slug: "figma",      source: "greenhouse" }
+    - { name: "Anthropic",  slug: "anthropic",  source: "greenhouse" }
+    - { name: "Brex",       slug: "brex",       source: "greenhouse" }
+    - { name: "Coinbase",   slug: "coinbase",   source: "greenhouse" }
+    - { name: "Instacart",  slug: "instacart",  source: "greenhouse" }
+    - { name: "Palantir",   slug: "palantir",   source: "lever" }
+
+# ---------------------------------------------------------------------------
+# Role filters. A job is kept if its title matches any `title_keywords`
+# (case-insensitive substring), and is dropped if it matches any exclude rule.
+# Broad software-engineering default — narrow this to your actual targets.
+# ---------------------------------------------------------------------------
+filters:
+  title_keywords:
+    - "software engineer"
+    - "backend engineer"
+    - "back end engineer"
+    - "full stack"
+    - "fullstack"
+    - "platform engineer"
+    - "data engineer"
+    - "machine learning engineer"
+    - "ml engineer"
+    - "python"
+
+  # Dropped if the TITLE contains any of these.
+  exclude_title_keywords:
+    - "intern"
+    - "principal"
+    - "staff"
+    - "director"
+    - "vp "
+    - "manager"
+    - "sales"
+    - "recruiter"
+
+  # Optional: keep only jobs whose location matches one of these. Matching is
+  # word-boundary, so "us" matches "US-Remote" but not "Aarhus" or "Vilnius".
+  # Leave empty to accept every location.
+  location_keywords:
+    - "remote"
+    - "united states"
+    - "usa"
+    - "us"
+
+  # Dropped even if location_keywords matched. Exclusion wins — this is what
+  # separates "Remote - USA" from "Remote - India", which both match "remote".
+  exclude_location_keywords:
+    - "india"
+    - "brazil"
+    - "canada"
+    - "united kingdom"
+    - "ireland"
+    - "germany"
+    - "poland"
+    - "australia"
+    - "singapore"
+    - "japan"
+    - "emea"
+    - "apac"
+    - "latam"
+
+  # Optional: require at least one of these in the JD body. Empty = no check.
+  description_required_keywords: []
+
+# ---------------------------------------------------------------------------
+# Pacing / limits (application caps are enforced in Phase 4)
+# ---------------------------------------------------------------------------
+limits:
+  # How many HOSTS to walk at once. Not how many requests to send a host: that
+  # is still one at a time with min_delay_seconds between them, enforced per
+  # host inside PoliteClient.
+  #
+  # The delay was always per-host and the loop never was, so four different
+  # hosts spent an hour and forty minutes taking turns waiting on each other.
+  # Workday was the worst of it -- seventy boards on seventy DIFFERENT hosts,
+  # walked one at a time for thirty-five minutes.
+  #
+  # Raising this does not make the tool ruder to anybody; it stops it being
+  # needlessly slow to itself.
+  scrape_workers: 6
+
+  max_companies_per_run: 0        # 0 = no cap
+  max_applications_per_day: 15    # Phase 4
+  # Stop scraping a company after this many consecutive failures (dead slug,
+  # company left the ATS). 0 disables. Re-enable by setting active=1 in the DB.
+  deactivate_after_failures: 5
+
+  # Posting lifecycle. A job that vanishes from a board is closed so it stops
+  # being ranked and tailored for. Only a SUCCESSFUL fetch ever closes
+  # anything — an outage must never look like a mass hiring freeze.
+  #
+  # A board that returns ZERO postings is the ambiguous case: an empty 200 is
+  # indistinguishable from a board that broke, and being wrong closes every job
+  # for that company. Default is to close nothing and log a warning. Set true
+  # only if you know a company genuinely empties its board.
+  close_on_empty_board: false
+
+  # Warn (in `stats`) when an active company has not been successfully scraped
+  # in this many days. Silence is the real failure mode: an unscraped company
+  # keeps its jobs marked open forever, because closure needs a live fetch.
+  # 0 disables.
+  stale_company_warn_days: 7
+
+# ---------------------------------------------------------------------------
+# Company discovery (name -> ATS slug probing). See README.md §C3.
+# ---------------------------------------------------------------------------
+discovery:
+  # Workable is fourth because it is the broadest: the other three are a
+  # tech-sector habit, and Workable's customers are smaller and cover the
+  # manufacturers and distributors the first three barely reach.
+  # One name variant (not two) for systems where every company shares one
+  # host: each guess waits out that host's delay, and the second variant found
+  # only 2.6% of boards. Roughly doubles the probe's speed.
+  single_variant_sources: ["greenhouse", "lever", "ashby", "workable", "jobvite"]
+  probe_sources: ["greenhouse", "lever", "ashby", "workable", "recruitee", "teamtailor", "bamboohr", "breezy", "jazzhr", "jobvite"]
+  # Suffixes stripped when deriving a slug from a company name.
+  strip_suffixes: ["inc", "inc.", "corp", "corp.", "corporation", "llc",
+                   "ltd", "ltd.", "co", "co.", "plc", "group", "holdings",
+                   "the", "company"]
+
+logging:
+  level: "INFO"
+  file: "logs/agent.log"
+
+# Adzuna's job index (data_engineering/scraper/adzuna.py). Runs in the daily
+# job only when ADZUNA_APP_ID and ADZUNA_APP_KEY are in .env. The free tier
+# allows ~250 calls a day; one run uses at most max_calls.
+adzuna:
+  max_titles: 14          # search titles, taken from your derived profile
+  pages_per_title: 2      # 50 postings a page
+  max_days_old: 3         # only fresh postings
+  max_calls: 40
+  close_after_days: 21    # retire a posting not seen for this long
+
+# Job feeds (data_engineering/scraper/feeds/): searched daily after the board
+# scrape. Keyless ones always run; keyed ones run once their key is in .env.
+feeds:
+  max_days_old: 3
+  max_calls_per_feed: 30      # keyed APIs only; public feeds are paced per host
+  close_after_days: 21
+  disabled: []                # e.g. [hn-hiring] to switch one off
+  usajobs:   {max_titles: 8, days: 30}   # federal postings stay open for weeks
+  jooble:    {max_titles: 8}
+  careerjet: {max_titles: 8}
+  findwork:  {max_titles: 8}
+  themuse:   {pages: 5, categories: ["Computer and IT"]}   # exact Muse names; an unknown one is ignored
+  remotive:  {categories: ["devops", "software-development", "information-technology"]}   # slugs from /api/remote-jobs/categories
+  remoteok:  {tags: ["devops", "sre", "cloud"]}
+  himalayas: {pages: 5}
+  jobicy:    {max_titles: 5}
+  weworkremotely: {categories: [remote-devops-sysadmin-jobs, remote-back-end-programming-jobs]}

@@ -1,0 +1,302 @@
+:root{
+  --ground:#EFF3F5; --surface:#FFFFFF; --sunk:#E4EAED; --raised:#F7FAFB;
+  --ink:#0E1A20; --ink-2:#3A4A53; --muted:#66767F; --faint:#94A3AA;
+  --line:#D8E0E4; --hair:#E8EDEF;
+  --signal:#0B6E77; --signal-soft:#DFEFF0; --signal-ink:#075860;
+  --good:#2C7049; --warn:#8A5A12; --crit:#A63D2C;
+  --gh:#2C7049; --lv:#3E5C8C; --ab:#7A4A86; --wd:#B06A1F;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0B1317; --surface:#141F25; --sunk:#101A1F; --raised:#18242B;
+  --ink:#E7EEF1; --ink-2:#B6C5CC; --muted:#849098; --faint:#5D6C74;
+  --line:#223037; --hair:#1A262C;
+  --signal:#4FB3BC; --signal-soft:#0F3034; --signal-ink:#7FCCD3;
+  --good:#5FAF7E; --warn:#C89440; --crit:#D4705C;
+  --gh:#5FAF7E; --lv:#7E9FD4; --ab:#B486C0; --wd:#D19A55;
+}}
+:root[data-theme="dark"]{
+  --ground:#0B1317; --surface:#141F25; --sunk:#101A1F; --raised:#18242B;
+  --ink:#E7EEF1; --ink-2:#B6C5CC; --muted:#849098; --faint:#5D6C74;
+  --line:#223037; --hair:#1A262C; --signal:#4FB3BC; --signal-soft:#0F3034;
+  --signal-ink:#7FCCD3; --good:#5FAF7E; --warn:#C89440; --crit:#D4705C;
+  --gh:#5FAF7E; --lv:#7E9FD4; --ab:#B486C0; --wd:#D19A55;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:14.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:var(--signal-ink)}
+.wrap{max-width:1240px;margin:0 auto;padding-block:26px 64px;padding-left:20px;padding-right:20px}
+h1{font-family:var(--cond);font-size:25px;font-weight:700;margin:0;letter-spacing:-.01em}
+h2{font-family:var(--cond);font-size:17px;font-weight:600;margin:0 0 10px}
+.sub{color:var(--muted);font-size:13.5px;margin-top:3px}
+.top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;padding-bottom:14px;border-bottom:2px solid var(--ink)}
+
+/* resume strip — the one input the whole search depends on */
+.resume{margin-top:16px;background:var(--surface);border:1px solid var(--line);
+  border-radius:7px;padding:13px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.resume .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--faint)}
+.resume .name{font-weight:600}
+.resume.none{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 7%,var(--surface))}
+
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-top:14px}
+.stat{background:var(--surface);padding:12px 15px}
+.stat .k{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--faint);display:block}
+.stat .v{font-family:var(--cond);font-size:28px;font-weight:700;line-height:1.05;
+  font-variant-numeric:tabular-nums;display:block;margin-top:4px}
+.stat.lead .v{color:var(--signal)}
+/* A count means little without its denominator: 413 matches reads very
+   differently beside 59,284 postings scanned. */
+.stat .note{display:block;margin-top:5px;font-size:11px;line-height:1.35;color:var(--faint)}
+@media(max-width:1000px){.stats{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+.bar{position:sticky;top:0;z-index:5;margin-top:20px;background:var(--ground);
+  padding-block:10px;border-bottom:1px solid var(--line);
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input[type=search],select,textarea{font-family:var(--sans);font-size:13.5px;padding:7px 10px;
+  border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+input[type=search]{min-width:180px;flex:1 1 180px}
+textarea{width:100%;min-height:150px;font-family:var(--mono);font-size:12.5px}
+.chip,.btn{font-family:var(--sans);font-size:12.5px;padding:6px 12px;border-radius:999px;
+  cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink-2)}
+.chip[aria-pressed="true"]{background:var(--signal-soft);border-color:var(--signal);
+  color:var(--signal-ink);font-weight:500}
+.btn{border-radius:6px}
+.btn.primary{background:var(--signal);border-color:var(--signal);color:#fff;font-weight:500}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+.count{font-family:var(--mono);font-size:12px;color:var(--muted);margin-left:auto;
+  font-variant-numeric:tabular-nums}
+
+.tw{overflow-x:auto;border:1px solid var(--line);border-top:0;border-radius:0 0 7px 7px;
+  background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:900px}
+thead th{font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--faint);text-align:left;padding:10px 12px;background:var(--sunk);
+  border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{padding:9px 12px;border-bottom:1px solid var(--hair);vertical-align:middle}
+tbody tr:hover{background:var(--raised)}
+.sc{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums;
+  display:inline-block;width:30px}
+.sc-hot{color:var(--signal)} .sc-warm{color:var(--warn)} .sc-cool{color:var(--muted)}
+td.num{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;
+  white-space:nowrap;color:var(--ink-2)}
+td.dim{color:var(--muted)}
+td.co{font-weight:600;white-space:nowrap}
+td.ti a{color:var(--ink);text-decoration:none;border-bottom:1px solid transparent}
+td.ti a:hover{border-bottom-color:var(--signal)}
+.b{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;border:1px solid currentColor}
+.b-greenhouse{color:var(--gh)} .b-lever{color:var(--lv)} .b-ashby{color:var(--ab)} .b-workday{color:var(--wd)}
+.pill{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:999px;
+  background:var(--sunk);color:var(--muted);white-space:nowrap}
+.pill.applied{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+.pill.review{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.stale{color:var(--crit)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  padding:16px 18px;margin-top:16px}
+.out{font-family:var(--mono);font-size:12px;white-space:pre-wrap;background:var(--sunk);
+  border-radius:6px;padding:10px 12px;margin-top:8px;max-height:230px;overflow:auto}
+.out.bad{background:color-mix(in srgb,var(--crit) 10%,var(--sunk));color:var(--crit)}
+.out.good{background:color-mix(in srgb,var(--good) 10%,var(--sunk))}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.meta{display:flex;gap:8px 20px;flex-wrap:wrap;font-size:13px;color:var(--ink-2);margin:8px 0 0}
+.meta b{font-family:var(--mono);font-size:12px;color:var(--ink)}
+.jd{white-space:pre-wrap;font-size:13.5px;color:var(--ink-2);max-height:420px;overflow:auto;
+  border-left:2px solid var(--line);padding-left:14px;margin-top:10px}
+footer{margin-top:26px;padding-top:14px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+thead th[data-k]{user-select:none}
+thead th[aria-sort]{color:var(--signal-ink)}
+thead th .ar{font-size:9px;opacity:.75}
+
+/* status box — says what is happening, or plainly that nothing is */
+/* Beside the buttons: the place you are already looking once you press one. */
+.statusbox{display:flex;gap:9px;align-items:flex-start;min-width:250px;
+  background:var(--surface);border:1px solid var(--line);border-radius:7px;
+  padding:8px 12px}
+.statusbox.idle{border-style:dashed;color:var(--muted)}
+.sb-body{flex:1;min-width:0}
+.sb-line{display:flex;align-items:baseline;gap:10px}
+@media(max-width:720px){.statusbox{width:100%}}
+.sb-dot{margin-top:5px}
+.sb-dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+.sb-dot.on{background:var(--signal)}
+.sb-dot.done{background:var(--good)}
+.sb-dot.bad{background:var(--crit)}
+@media (prefers-reduced-motion:no-preference){
+  .sb-dot.on{animation:sbpulse 1.8s ease-in-out infinite}
+  @keyframes sbpulse{0%,100%{opacity:1}50%{opacity:.35}}
+}
+.sb-title{font-weight:600;font-size:13.5px}
+.sb-eta{font-family:var(--mono);font-size:11px;color:var(--signal-ink);
+  font-variant-numeric:tabular-nums;margin-left:auto;white-space:nowrap}
+.sb-track{height:5px;background:var(--hair);border-radius:3px;overflow:hidden;margin-top:6px}
+.sb-track i{display:block;height:100%;background:var(--signal);border-radius:3px;width:0}
+@media (prefers-reduced-motion:no-preference){.sb-track i{transition:width .5s ease}}
+.sb-detail{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;
+  font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* prepare-the-application: a checklist, so what is left reads at a glance */
+.card-head{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
+.card-head h2{margin:0}
+.progress-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  margin-left:auto;font-variant-numeric:tabular-nums}
+
+/* How far through the four steps this application is. A bar rather than only
+   a count, because the point of the card is "what is left to do". */
+.card-progress{height:3px;border-radius:2px;background:var(--line);overflow:hidden;
+  margin:0 0 6px}
+.card-progress i{display:block;height:100%;width:0;background:var(--good);
+  transition:width .35s ease}
+
+/* The steps are a real sequence, not a menu: the folder has to exist before
+   anything can be written into it, and both documents have to exist before
+   there is anything to upload. So they are numbered, and a line joins them. */
+ol.steps{list-style:none;margin:0;padding:0}
+.step{display:grid;grid-template-columns:26px 1fr;gap:13px;align-items:start;
+  padding:15px 2px 15px 0;border-top:1px solid var(--hair);position:relative}
+.step:first-child{border-top:0}
+
+/* The joining line, drawn behind the markers. Stops at the last step so the
+   path does not trail off into nothing. */
+.step::before{content:"";position:absolute;left:12px;top:0;bottom:0;width:1px;
+  background:var(--hair)}
+.step:first-child::before{top:18px}
+.step:last-child::before{bottom:auto;height:18px}
+
+.tick{width:25px;height:25px;border-radius:50%;border:1.5px solid var(--line);
+  background:var(--surface);flex:none;position:relative;z-index:1;
+  display:grid;place-items:center;font-family:var(--mono);font-size:11px;
+  color:var(--faint);font-variant-numeric:tabular-nums}
+.tick::before{content:attr(data-n)}
+.step.done .tick{background:var(--good);border-color:var(--good);color:transparent}
+.step.done .tick::before{content:""}
+.step.done .tick::after{content:"";position:absolute;left:9px;top:5.5px;
+  width:5px;height:9px;border:solid #fff;border-width:0 1.8px 1.8px 0;
+  transform:rotate(45deg)}
+/* Waiting on an earlier step. Visible, legible, plainly not yet actionable. */
+.step.blocked{opacity:.55}
+.step.blocked .tick{border-style:dashed}
+
+.step-body{min-width:0}
+.step-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+.step-head b{font-size:14.5px;letter-spacing:-.01em}
+.hint{font-size:12px;color:var(--muted);line-height:1.45}
+.step.done .step-head b{color:var(--muted)}
+.step-tag{font-family:var(--mono);font-size:10px;letter-spacing:.07em;
+  text-transform:uppercase;padding:2px 7px;border-radius:20px;
+  background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good)}
+
+.fold{margin-top:10px;border-top:1px solid var(--hair);padding-top:9px}
+.fold summary{font-size:12.5px;color:var(--signal-ink);cursor:pointer;padding:3px 0}
+.fold summary:hover{text-decoration:underline}
+.fold textarea{margin-top:7px}
+.fold #prompt-resume,.fold #prompt-letter{min-height:90px;color:var(--muted)}
+
+/* Not scored yet — visibly different from a genuinely low score. */
+.sc-none{color:var(--faint)}
+/* Scored against a title alone, from a job alert with no description. Marked
+   with ~ and held back from the colour bands, because the number is not on the
+   same scale as the rest and colouring it "cool" would say something false. */
+.sc-part{color:var(--muted)}
+
+/* The board-search bar. A separate, quieter thing from the scrape status box:
+   it runs for weeks in the background and should read as ambient progress,
+   not as something demanding attention. */
+.probe{border:1px solid var(--line);border-radius:7px;background:var(--surface);
+  padding:11px 14px;margin-top:12px}
+.probe-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.probe-head strong{font-size:13px}
+.probe-dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.probe-dot.live{background:var(--signal);animation:probe-pulse 1.8s ease-in-out infinite}
+@keyframes probe-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.probe-dot.live{animation:none}}
+.probe-sub{font-family:var(--mono);font-size:11px;color:var(--faint);
+  font-variant-numeric:tabular-nums}
+.probe .btn.small{margin-left:auto;padding:3px 11px;font-size:11px}
+.probe-track{height:4px;border-radius:2px;background:var(--line);overflow:hidden;
+  margin-top:9px}
+.probe-track i{display:block;height:100%;background:var(--signal);
+  transition:width .6s ease}
+.probe-foot{margin-top:7px;font-size:11px;color:var(--faint)}
+
+/* The details form. Plain, close-set, and quick to fill: it is the one screen
+   standing between having the tool and being able to apply with it. */
+.fset{border:1px solid var(--line);border-radius:7px;padding:13px 15px 15px;
+  margin:0 0 14px}
+.fset legend{font-size:11px;font-family:var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--faint);padding:0 6px}
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:11px 14px}
+@media(max-width:620px){.grid2{grid-template-columns:1fr}}
+.fset label{display:grid;gap:4px;font-size:12.5px;color:var(--ink-2)}
+.fset input[type=text],.fset input[type=email],.fset input:not([type]){width:100%}
+
+/* The two questions that have no default. Marked so they read as different
+   from a phone number, because they are. */
+.declare{border-color:color-mix(in srgb,var(--warn) 42%,var(--line))}
+.ask{display:grid;gap:6px;margin-top:11px}
+.ask>span{font-size:13px}
+.radio{display:inline-flex;align-items:center;gap:6px;font-size:13px;
+  color:var(--ink);cursor:pointer}
+.radio input{margin:0}
+
+/* An employer reposting the same role. Folded into one row and counted, so
+   one company cannot fill the screen while nothing is hidden. */
+.rep{margin-left:6px;font-family:var(--mono);font-size:10px;color:var(--faint);
+  border:1px solid var(--line);border-radius:10px;padding:1px 5px}
+
+/* A resume that derived no search is the one failure that looks like success:
+   the page is otherwise identical to a working one. */
+.sub.warn{color:var(--warn);font-weight:600}
+.sub.dim{color:var(--muted);font-size:.85em}
+
+/* Settings page: one field per box, with its own "set / not set" verdict. */
+.pill.good{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+.fset input[type=password]{width:100%}
+.fset label.wide{display:block}
+.fset label.check{display:flex;align-items:center;gap:7px;margin-top:9px;
+  font-size:12px;color:var(--muted)}
+.fset label.check input{width:auto}
+.getlink{display:inline-block;margin-bottom:9px;font-size:12px;
+  color:var(--signal);text-decoration:none;border-bottom:1px solid transparent}
+.getlink:hover{border-bottom-color:currentColor}
+.caution{display:block;margin-top:5px;color:var(--warn);font-size:11.5px}
+
+/* Writing-model chooser: the free option reads as a real choice, not a downgrade. */
+.picks{display:grid;gap:8px}
+.pick{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;
+  border:1px solid var(--line);border-radius:7px;cursor:pointer}
+.pick:hover{border-color:var(--signal)}
+.pick.on{border-color:var(--signal);background:color-mix(in srgb,var(--signal) 6%,transparent)}
+.pick input{margin-top:3px;width:auto}
+.pick-body{display:grid;gap:3px}
+.pick-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px}
+
+/* -- readable wrapping and the result box (Sep 2026) ----------------------
+   Explanations ran the full card width (1100px+, ~170 characters a line);
+   ~72 characters is where a line stops being tiring to follow. */
+.hint{max-width:72ch}
+a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.docs .lbl{font-size:12px;color:var(--muted);margin-right:2px}
+.btn.file{background:var(--sunk);border-color:var(--line)}
+/* The result box: a sentence first, the raw log folded away underneath. */
+.out{overflow-wrap:anywhere}
+.out .say{font-family:var(--sans);font-size:13px;white-space:normal;margin:0}
+.out details{margin-top:6px;color:var(--muted)}
+.out details summary{cursor:pointer;font-family:var(--sans);font-size:12px}
+.out details pre{margin:6px 0 0;white-space:pre-wrap;font-size:11.5px}
+
+/* Sign-up guides on the Settings page */
+.guide{margin:6px 0 10px;font-size:12.5px;max-width:78ch}
+.guide summary{cursor:pointer;color:var(--signal);font-weight:500}
+.guide table{border-collapse:collapse;margin-top:8px;width:100%}
+.guide th,.guide td{text-align:left;vertical-align:top;padding:5px 8px;border-bottom:1px solid var(--line)}
+.guide th{width:34%;font-weight:500;color:var(--ink-2)}
+.guide ol{margin:8px 0 0 18px;padding:0}

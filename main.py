@@ -16,11 +16,11 @@ import argparse
 import logging
 import sys
 
-from config.loader import load_config, setup_logging
-from db.models import SYSTEM_STATUSES, Company, Job, ScrapeLog
-from db.session import get_session, init_engine
-from jobage import age_label
-from jobfields import (UNSTATED, experience_label,
+from backend.config.loader import load_config, setup_logging
+from data_engineering.db.models import SYSTEM_STATUSES, Company, Job, ScrapeLog
+from data_engineering.db.session import get_session, init_engine
+from backend.core.jobage import age_label
+from backend.core.jobfields import (UNSTATED, experience_label,
                        salary_label, workplace_label)
 
 log = logging.getLogger("main")
@@ -28,7 +28,7 @@ log = logging.getLogger("main")
 
 def cmd_init_db(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from scraper.runner import sync_seed_companies
+    from data_engineering.scraper.runner import sync_seed_companies
 
     count = sync_seed_companies(cfg)
     print(f"Database ready at {cfg.database_url}")
@@ -38,7 +38,7 @@ def cmd_init_db(cfg, args) -> int:
 
 def cmd_scrape(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from scraper.runner import run_scrape, sync_seed_companies
+    from data_engineering.scraper.runner import run_scrape, sync_seed_companies
 
     sync_seed_companies(cfg)
     summary = run_scrape(cfg)
@@ -63,9 +63,9 @@ def cmd_scrape(cfg, args) -> int:
 
 def cmd_discover(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from scraper.discovery import CompanyDiscoverer, load_names_from_file
-    from scraper.http_client import HttpSettings, PoliteClient
-    from scraper.runner import build_scrapers
+    from data_engineering.scraper.discovery import CompanyDiscoverer, load_names_from_file
+    from data_engineering.scraper.http_client import HttpSettings, PoliteClient
+    from data_engineering.scraper.runner import build_scrapers
 
     names = load_names_from_file(args.names)
     if args.limit:
@@ -157,7 +157,7 @@ def cmd_scan_mail(cfg, args) -> int:
     import os
     from pathlib import Path
 
-    from scraper.mailbox import scan_imap, scan_mbox, write_findings
+    from data_engineering.scraper.mailbox import scan_imap, scan_mbox, write_findings
 
     if args.mbox:
         print(f"Scanning {args.mbox} — offline, nothing leaves this machine.\n")
@@ -232,8 +232,8 @@ def cmd_scan_mail(cfg, args) -> int:
 
     if findings.ats_slugs and not args.no_save_boards:
         init_engine(cfg.database_url)
-        from scraper.discovery import record_probe, upsert_company
-        from scraper.runner import SCRAPER_TYPES
+        from data_engineering.scraper.discovery import record_probe, upsert_company
+        from data_engineering.scraper.runner import SCRAPER_TYPES
 
         added = 0
         for slug, source in findings.ats_slugs.items():
@@ -251,7 +251,7 @@ def cmd_scan_mail(cfg, args) -> int:
 
 def cmd_import_names(cfg, args) -> int:
     """Turn a big company export into a filtered discovery list."""
-    from scraper.company_import import read_spreadsheet, write_names_file
+    from data_engineering.scraper.company_import import read_spreadsheet, write_names_file
 
     records = read_spreadsheet(
         args.file,
@@ -279,7 +279,7 @@ def cmd_import_names(cfg, args) -> int:
 
 def cmd_import_csv(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from scraper.discovery import import_inventory_csv
+    from data_engineering.scraper.discovery import import_inventory_csv
 
     count = import_inventory_csv(args.file)
     print(f"Imported {count} companies from {args.file}")
@@ -288,7 +288,7 @@ def cmd_import_csv(cfg, args) -> int:
 
 def cmd_export(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from excel.tracker import export_jobs
+    from data_engineering.excel.tracker import export_jobs
 
     appended, updated, total = export_jobs(cfg, only_new=not args.all)
     path = cfg.get("excel.path", "data/job_tracker.xlsx")
@@ -308,8 +308,8 @@ def cmd_reparse(cfg, args) -> int:
     the source, so nothing needs re-scraping.
     """
     init_engine(cfg.database_url)
-    from jobfields import derive
-    from scraper.base import extract_requirements
+    from backend.core.jobfields import derive
+    from data_engineering.scraper.base import extract_requirements
 
     changed = 0
     filled = {"workplace": 0, "experience": 0, "salary": 0}
@@ -361,8 +361,8 @@ def cmd_prune(cfg, args) -> int:
     get recommended. That is the same rot Phase 5 fixed for closed postings.
     """
     init_engine(cfg.database_url)
-    from scraper.base import RawJob
-    from scraper.filters import resolve_filter
+    from data_engineering.scraper.base import RawJob
+    from data_engineering.scraper.filters import resolve_filter
 
     job_filter = resolve_filter(cfg)
     stale: list[tuple[Job, str]] = []
@@ -409,7 +409,7 @@ def cmd_prune(cfg, args) -> int:
                   "acted on (Applied, Rejected, ...) are never touched.")
             return 0
 
-        from excel.tracker import ExcelTracker, job_key
+        from data_engineering.excel.tracker import ExcelTracker, job_key
 
         # Take the keys before deleting — the objects are unusable afterwards.
         keys = {job_key(job) for job, _ in stale}
@@ -428,9 +428,9 @@ def cmd_prune(cfg, args) -> int:
 
 def cmd_profile(cfg, args) -> int:
     """Derive the job search from the resume — no keywords to hand-write."""
-    from config.loader import PROJECT_ROOT
-    from resume.pipeline import load_base_resume
-    from resume.profile import PROFILE_FILENAME, derive_search_profile, save_profile
+    from backend.config.loader import PROJECT_ROOT
+    from ml.resume.pipeline import load_base_resume
+    from ml.resume.profile import PROFILE_FILENAME, derive_search_profile, save_profile
 
     path = PROJECT_ROOT / cfg.get("filters.profile_path", PROFILE_FILENAME)
     if path.exists() and not args.force and not args.show:
@@ -468,7 +468,7 @@ def cmd_profile(cfg, args) -> int:
 
 def cmd_score(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from resume.pipeline import score_jobs
+    from ml.resume.pipeline import score_jobs
 
     max_age = args.max_age if args.max_age is not None else float(
         cfg.get("limits.max_posting_age_days", 0)
@@ -509,7 +509,7 @@ def cmd_score(cfg, args) -> int:
 
 def cmd_tailor(cfg, args) -> int:
     init_engine(cfg.database_url)
-    from resume.pipeline import estimate_tailoring, tailor_jobs
+    from ml.resume.pipeline import estimate_tailoring, tailor_jobs
 
     job_ids = [int(i) for i in args.job_id] if args.job_id else None
 
@@ -563,7 +563,7 @@ def cmd_tailor(cfg, args) -> int:
 def cmd_brief(cfg, args) -> int:
     """Write a paste-anywhere tailoring prompt. No API key, no cost."""
     init_engine(cfg.database_url)
-    from resume.pipeline import brief_job
+    from ml.resume.pipeline import brief_job
 
     try:
         path, company, title = brief_job(cfg, int(args.job_id))
@@ -586,7 +586,7 @@ def cmd_brief(cfg, args) -> int:
 def cmd_letter(cfg, args) -> int:
     """Write a paste-anywhere cover-letter prompt. No API key, no cost."""
     init_engine(cfg.database_url)
-    from resume.pipeline import letter_brief
+    from ml.resume.pipeline import letter_brief
 
     try:
         path, company, title = letter_brief(cfg, int(args.job_id))
@@ -610,8 +610,8 @@ def cmd_letter(cfg, args) -> int:
 def cmd_packet(cfg, args) -> int:
     """Gather everything needed to apply to one job into a single folder."""
     init_engine(cfg.database_url)
-    from db.models import Job
-    from resume.packet import build_packet
+    from data_engineering.db.models import Job
+    from ml.resume.packet import build_packet
 
     with get_session() as session:
         job = session.get(Job, int(args.job_id))
@@ -639,17 +639,81 @@ def cmd_packet(cfg, args) -> int:
     return 0
 
 
+def cmd_apply(cfg, args) -> int:
+    """Fill Greenhouse applications in a visible browser, freshest first."""
+    init_engine(cfg.database_url)
+    from backend.apply.runner import NotReady, run
+
+    try:
+        outcomes = run(cfg, limit=args.limit, job_id=args.job_id,
+                       tailor=not args.no_tailor, wait_minutes=args.wait)
+    except NotReady as exc:
+        print(f"Can't apply yet. {exc}")
+        return 2
+    # A run that sent nothing is not a failure: skipping is a real answer.
+    return 1 if any(o.result == "not-filled" for o in outcomes) and \
+        not any(o.result == "submitted" for o in outcomes) else 0
+
+
+def cmd_adzuna(cfg, args) -> int:
+    """Search Adzuna for postings from employers no board scraper reaches."""
+    init_engine(cfg.database_url)
+    from data_engineering.scraper.adzuna import run
+
+    s = run(cfg, dry_run=args.dry_run)
+    if s.skipped:
+        print(f"Adzuna skipped: {s.skipped}. Free keys: https://developer.adzuna.com")
+        return 0
+    print(f"Adzuna: {s.searched} titles, {s.calls} API calls, {s.matched} matched your search")
+    if args.dry_run:
+        print("--dry-run: nothing stored.")
+    else:
+        print(f"  {s.new} new · {s.seen} already had · {s.duplicates} skipped "
+              f"(already found on a board) · {s.retired} aged out")
+        if s.new:
+            print("Next: python main.py score")
+    return 0
+
+
+def cmd_feeds(cfg, args) -> int:
+    """Search the job feeds: public job APIs, and keyed ones whose keys are set."""
+    init_engine(cfg.database_url)
+    from data_engineering.scraper.feeds import run_feeds
+
+    only = [n.strip() for n in args.only.split(",")] if args.only else None
+    summaries = run_feeds(cfg, only=only, dry_run=args.dry_run)
+    for s in summaries:
+        print(s.line())
+    new = sum(s.new for s in summaries)
+    print(("--dry-run: nothing stored." if args.dry_run else
+           f"\n{new} new postings." + (" Next: python main.py score" if new else "")))
+    return 0
+
+
+def cmd_signup_keys(cfg, args) -> int:
+    """Open each job-feed sign-up page, prefilled; pick up and save the key."""
+    import os
+
+    from backend.config.envfile import read_env
+    from backend.core.key_signup import ENV_PATH, run
+
+    os.environ.update({k: v for k, v in read_env(ENV_PATH).items() if v})
+    only = [n.strip() for n in args.only.split(",")] if args.only else None
+    results = run(only=only, force=args.force, wait_minutes=args.wait)
+    return 0 if all(r in ("saved", "skipped") for r in results.values()) else 1
+
+
 def cmd_accept(cfg, args) -> int:
     """Take a pasted model reply, guard it, and write the resume."""
     init_engine(cfg.database_url)
     from pathlib import Path
 
-    from resume.pipeline import accept_reply
+    from ml.resume.pipeline import accept_reply
 
     text = Path(args.file).read_text(encoding="utf-8")
     try:
         if getattr(args, "letter", False):
-            from resume.pipeline import accept_letter
+            from ml.resume.pipeline import accept_letter
             outcome = accept_letter(cfg, int(args.job_id), text)
         else:
             outcome = accept_reply(cfg, int(args.job_id), text)
@@ -682,8 +746,8 @@ def cmd_daily(cfg, args) -> int:
     init_engine(cfg.database_url)
     from pathlib import Path
 
-    from config.loader import PROJECT_ROOT
-    from daily import render_digest, run_daily
+    from backend.config.loader import PROJECT_ROOT
+    from backend.core.daily import render_digest, run_daily
 
     report = run_daily(cfg, skip_scrape=args.no_scrape, since_hours=args.since_hours)
     digest = render_digest(report, cfg, top=args.top)
@@ -708,7 +772,7 @@ def cmd_daily(cfg, args) -> int:
 def cmd_status(cfg, args) -> int:
     """Live progress of the long-running background jobs."""
     init_engine(cfg.database_url)
-    import status as status_mod
+    from backend.core import status as status_mod
 
     if args.watch:
         return status_mod.watch(cfg, interval=args.interval)
@@ -726,8 +790,8 @@ def cmd_stats(cfg, args) -> int:
     init_engine(cfg.database_url)
     from statistics import median
 
-    from db.models import utcnow
-    from scraper.lifecycle import as_utc, stale_companies
+    from data_engineering.db.models import utcnow
+    from data_engineering.scraper.lifecycle import as_utc, stale_companies
 
     with get_session() as session:
         companies = session.query(Company).count()
@@ -921,6 +985,32 @@ def build_parser() -> argparse.ArgumentParser:
         "packet", help="Gather resume, letter and job summary into one folder")
     p_packet.add_argument("job_id")
 
+    p_apply = sub.add_parser(
+        "apply", help="Fill Greenhouse applications in a browser; you press Submit")
+    p_apply.add_argument("--limit", type=int, default=10,
+                         help="At most this many (today's cap still applies)")
+    p_apply.add_argument("--job-id", type=int, default=None,
+                         help="Apply to this one job only")
+    p_apply.add_argument("--no-tailor", action="store_true",
+                         help="Never tailor during the run; use what exists or the base resume")
+    p_apply.add_argument("--wait", type=float, default=None,
+                         help="Minutes to wait for you on each form (default 15)")
+
+    p_adzuna = sub.add_parser(
+        "adzuna", help="Search Adzuna's job index (free API key) for more postings")
+    p_adzuna.add_argument("--dry-run", action="store_true", help="Search, store nothing")
+
+    p_feeds = sub.add_parser(
+        "feeds", help="Search job feeds (Remotive, The Muse, USAJOBS, Jooble, ...)")
+    p_feeds.add_argument("--only", default="", help="Comma-separated feed names")
+    p_feeds.add_argument("--dry-run", action="store_true", help="Search, store nothing")
+
+    p_signup = sub.add_parser(
+        "signup-keys", help="Guided sign-up for job-feed API keys (you sign up; it saves the key)")
+    p_signup.add_argument("--only", default="", help="Comma-separated: usajobs,jooble,adzuna,findwork,careerjet")
+    p_signup.add_argument("--force", action="store_true", help="Redo providers that already have a key")
+    p_signup.add_argument("--wait", type=float, default=20, help="Minutes to wait per provider")
+
     p_accept = sub.add_parser(
         "accept", help="Read a model's reply back in, guard it, and write the resume"
     )
@@ -972,6 +1062,10 @@ COMMANDS = {
     "letter": cmd_letter,
     "packet": cmd_packet,
     "accept": cmd_accept,
+    "adzuna": cmd_adzuna,
+    "feeds": cmd_feeds,
+    "signup-keys": cmd_signup_keys,
+    "apply": cmd_apply,
     "stats": cmd_stats,
     "failures": cmd_failures,
 }
@@ -982,7 +1076,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(args.config) if args.config else load_config()
     setup_logging(cfg)
 
-    from scraper.filters import UndeterminedSearch
+    from data_engineering.scraper.filters import UndeterminedSearch
 
     try:
         return COMMANDS[args.command](cfg, args)
