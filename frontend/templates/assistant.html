@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Assistant{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Assistant</h1>
+    <div class="sub">Ask about your jobs, resumes and applications. It runs on your
+      Claude Code sign-in — no API key. It can look things up and <b>propose</b>
+      changes; nothing happens until you press Confirm.</div>
+  </div>
+  <div class="row">
+    <button class="btn" id="new-chat" title="Start a fresh conversation">New conversation</button>
+    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+  </div>
+</header>
+
+{% if not installed %}
+<section class="card"><p>Claude Code is not installed on this Mac, so the assistant
+  cannot run. Install it, run <code>claude</code> once in a terminal to sign in, then
+  reload this page.</p></section>
+{% endif %}
+
+<section class="card chat">
+  <div id="log" class="chat-log" aria-live="polite">
+    {% if not pending %}
+    <div class="chat-hint">Try: <button class="chip" data-say="Which of my strong matches were posted this week?">Strong matches this week</button>
+      <button class="chip" data-say="How is the job search going — what is running and how far along?">What is running</button>
+      <button class="chip" data-say="Show my best Workday matches and tell me which to apply to first.">Best Workday matches</button></div>
+    {% endif %}
+  </div>
+  <div id="waiting">
+    {% for a in pending %}
+    <div class="act" data-id="{{ a.id }}"><div class="act-say">{{ a.summary }}</div>
+      <div class="row"><button class="btn primary" data-do="confirm">Confirm</button>
+      <button class="btn" data-do="cancel">Cancel</button></div></div>
+    {% endfor %}
+  </div>
+  <form id="ask" class="chat-ask">
+    <textarea id="msg" rows="2" placeholder="Ask anything about your job search…" {{ 'disabled' if not installed }}></textarea>
+    <button class="btn primary" id="send" {{ 'disabled' if not installed }}>Send</button>
+  </form>
+</section>
+
+<script>
+const log = document.getElementById('log'), msg = document.getElementById('msg'),
+      send = document.getElementById('send');
+
+function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function inline(s) {
+  return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+               .replace(/#(\d{2,6})\b/g, '<a href="/job/$1">#$1</a>');
+}
+// Enough Markdown for what the assistant writes: tables, bullets, code, bold.
+function md(text) {
+  const out = []; const lines = text.split('\n'); let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => inline(c.trim()));
+      let html = '<table><tr>' + cells(line).map(c => `<th>${c}</th>`).join('') + '</tr>';
+      i += 2;
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        html += '<tr>' + cells(lines[i]).map(c => `<td>${c}</td>`).join('') + '</tr>'; i++;
+      }
+      out.push(html + '</table>'); continue;
+    }
+    if (/^```/.test(line)) {
+      const body = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]);
+      i++; out.push(`<pre>${esc(body.join('\n'))}</pre>`); continue;
+    }
+    if (/^\s*[-*] /.test(line)) {
+      let html = '<ul>';
+      while (i < lines.length && /^\s*[-*] /.test(lines[i])) html += `<li>${inline(lines[i++].replace(/^\s*[-*] /, ''))}</li>`;
+      out.push(html + '</ul>'); continue;
+    }
+    if (/^\s*\d+\. /.test(line)) {
+      let html = '<ol>';
+      while (i < lines.length && /^\s*\d+\. /.test(lines[i])) html += `<li>${inline(lines[i++].replace(/^\s*\d+\. /, ''))}</li>`;
+      out.push(html + '</ol>'); continue;
+    }
+    if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+    i++;
+  }
+  return out.join('');
+}
+
+function bubble(cls, html) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.innerHTML = html;
+  log.appendChild(d); d.scrollIntoView({block: 'end', behavior: 'smooth'}); return d;
+}
+
+const TOOL_WORDS = {search_jobs: 'searching your jobs', job_detail: 'reading the posting',
+  tailoring_review: 'reading the tailoring review', pipeline_status: 'checking the runs',
+  recent_applications: 'reading your applications'};
+
+function actionCard(id, summary) {
+  const d = document.createElement('div'); d.className = 'act'; d.dataset.id = id;
+  d.innerHTML = `<div class="act-say">${esc(summary)}</div><div class="row">
+    <button class="btn primary" data-do="confirm">Confirm</button>
+    <button class="btn" data-do="cancel">Cancel</button></div>`;
+  log.appendChild(d); d.scrollIntoView({block: 'end', behavior: 'smooth'});
+}
+
+async function watchTask(task, line) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 4000));
+    const s = await (await fetch(`/run/${task}/status`)).json();
+    const said = s.progress || (s.tail || '').split('\n').pop() || '';
+    line.textContent = said.slice(0, 200);
+    if (!s.running) { line.textContent = (s.exit === 0 || s.exit == null ? 'Finished. ' : 'Stopped with an error. ') + said.slice(0, 160); return; }
+  }
+}
+
+document.addEventListener('click', async e => {
+  const chip = e.target.closest('[data-say]');
+  if (chip) { msg.value = chip.dataset.say; ask(); return; }
+  const b = e.target.closest('[data-do]');
+  if (!b) return;
+  const card = b.closest('.act'); card.querySelectorAll('button').forEach(x => x.disabled = true);
+  const r = await (await fetch(`/assistant/action/${card.dataset.id}/${b.dataset.do}`, {method: 'POST'})).json();
+  const note = document.createElement('div'); note.className = 'act-done ' + (r.ok ? '' : 'bad');
+  note.textContent = r.ok ? r.said : r.error; card.appendChild(note);
+  card.querySelector('.row').remove();
+  if (!r.ok && /again|already/.test(r.error || '')) {
+    card.insertAdjacentHTML('beforeend', `<div class="row"><button class="btn primary" data-do="confirm">Confirm</button>
+      <button class="btn" data-do="cancel">Cancel</button></div>`);
+  }
+  if (r.ok && r.task) { const p = document.createElement('div'); p.className = 'act-progress'; card.appendChild(p); watchTask(r.task, p); }
+});
+
+async function ask() {
+  const text = msg.value.trim(); if (!text) return;
+  document.querySelector('.chat-hint')?.remove();
+  bubble('me', `<p>${esc(text)}</p>`); msg.value = ''; send.disabled = true;
+  const status = bubble('them working', '<p class="thinking">Thinking…</p>');
+  const r = await (await fetch('/assistant/send', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                   body: JSON.stringify({message: text})})).json();
+  if (!r.ok) { status.innerHTML = `<p class="bad">${esc(r.error)}</p>`; send.disabled = false; return; }
+  let since = 0, texts = [];
+  for (;;) {
+    await new Promise(res => setTimeout(res, 900));
+    const p = await (await fetch(`/assistant/poll/${r.turn}?since=${since}`)).json();
+    since = p.next ?? since;
+    for (const ev of p.events || []) {
+      if (ev.type === 'tool') status.querySelector('.thinking').textContent = (TOOL_WORDS[ev.name] || 'working') + '…';
+      if (ev.type === 'text') { texts.push(ev.text); status.innerHTML = md(texts.join('\n\n')) + '<p class="thinking"></p>'; }
+      if (ev.type === 'action') actionCard(ev.id, ev.summary);
+    }
+    if (p.done) {
+      status.classList.remove('working'); status.querySelector('.thinking')?.remove();
+      if (p.error) status.insertAdjacentHTML('beforeend', `<p class="bad">${esc(p.error)}</p>`);
+      if (!texts.length && !p.error) status.innerHTML = '<p class="muted">(no answer)</p>';
+      break;
+    }
+  }
+  send.disabled = false; msg.focus();
+}
+
+document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); ask(); });
+msg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); } });
+document.getElementById('new-chat').addEventListener('click', async () => {
+  await fetch('/assistant/new', {method: 'POST'}); log.innerHTML = ''; msg.focus();
+});
+</script>
+{% endblock %}

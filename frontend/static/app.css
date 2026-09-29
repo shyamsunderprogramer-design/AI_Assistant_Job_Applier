@@ -300,3 +300,44 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 .guide th,.guide td{text-align:left;vertical-align:top;padding:5px 8px;border-bottom:1px solid var(--line)}
 .guide th{width:34%;font-weight:500;color:var(--ink-2)}
 .guide ol{margin:8px 0 0 18px;padding:0}
+
+
+/* -- assistant ------------------------------------------------------------ */
+.chat{display:flex;flex-direction:column;gap:12px}
+.chat-log{display:flex;flex-direction:column;gap:10px;min-height:240px;max-height:62vh;overflow-y:auto;padding:4px}
+.chat-hint{color:var(--muted);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{font:inherit;font-size:.9em;border:1px solid var(--line);background:var(--raised);color:var(--ink-2);
+  border-radius:999px;padding:4px 12px;cursor:pointer}
+.chip:hover{border-color:var(--signal);color:var(--signal-ink)}
+.msg{max-width:min(78ch,100%);padding:10px 14px;border-radius:10px;line-height:1.5;overflow-x:auto}
+.msg p{margin:.3em 0}
+.msg.me{align-self:flex-end;background:var(--signal-soft);color:var(--ink)}
+.msg.them{align-self:flex-start;background:var(--raised);border:1px solid var(--hair)}
+.msg table{border-collapse:collapse;margin:.5em 0;font-size:.92em}
+.msg th,.msg td{border-bottom:1px solid var(--line);padding:4px 10px;text-align:left}
+.msg pre{background:var(--sunk);padding:8px;border-radius:6px;overflow-x:auto}
+.thinking{color:var(--muted);font-style:italic}
+.act{align-self:flex-start;border:1px solid var(--signal);border-left-width:4px;background:var(--surface);
+  border-radius:8px;padding:10px 14px;max-width:min(78ch,100%)}
+.act-say{margin-bottom:8px}
+.act-done{color:var(--good);margin-top:6px}
+.act-done.bad,.msg .bad{color:var(--crit)}
+.act-progress{color:var(--muted);font-family:var(--mono);font-size:.85em;margin-top:6px}
+.chat-ask{display:flex;gap:8px;align-items:flex-end}
+.chat-ask textarea{flex:1;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--surface);color:var(--ink);resize:vertical}
+@media (max-width:600px){.chat-ask{flex-direction:column;align-items:stretch}.msg,.act{max-width:100%}}
+
+
+/* -- ATS match ---------------------------------------------------------------- */
+.ats{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
+.ats-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px}
+.ats-nums{color:var(--muted)}
+.ats-nums b{color:var(--ink)}
+.ats-bar{height:6px;background:var(--sunk);border-radius:3px;margin:8px 0;overflow:hidden}
+.ats-bar span{display:block;height:100%}
+.ats-bar .good{background:var(--good)} .ats-bar .ok{background:var(--warn)} .ats-bar .low{background:var(--crit)}
+.ats-list{margin-top:6px;line-height:1.6;overflow-wrap:anywhere}
+.ats-list .btn{margin-left:6px}
+
+.ats-say{margin-top:6px;font-weight:500}

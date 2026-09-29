@@ -214,8 +214,11 @@ def _choose(page, element, answer: str, *, settle_ms: int = 700) -> bool:
 
 def fill(page, job_id: int, url: str, applicant: Applicant,
          resume_path: Path | None = None, letter_path: Path | None = None,
-         *, submit: bool = False) -> FillResult:
+         *, submit: bool = False, evidence: Path | None = None) -> FillResult:
     """Fill one Greenhouse form. Does not submit unless explicitly told to.
+
+    `evidence` is the folder the caller already keeps the resume in; the
+    screenshot goes beside it, so one run is one folder.
 
     `page` is a Playwright page, passed in so a caller can reuse one browser
     across fifty applications and so this is testable with a fake.
@@ -338,7 +341,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
 
     # -- keep the evidence -------------------------------------------------
     try:
-        shot = _evidence_dir(job_id) / "form.png"
+        shot = (evidence or _evidence_dir(job_id)) / "form.png"
         page.screenshot(path=str(shot), full_page=True)
         result.screenshot = str(shot)
     except Exception as exc:

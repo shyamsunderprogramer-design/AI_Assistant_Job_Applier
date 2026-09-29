@@ -108,7 +108,7 @@ def over_page_limit(cfg, target: Path) -> bool:
         return False
 
 
-def _fit(cfg, resume, result, job) -> None:
+def _fit(cfg, resume, result, job, focus_terms=None) -> None:
     """Select from the master resume for this posting, down to the page limit.
 
     Only an accepted result is fitted: a rejected one writes nothing anyway.
@@ -124,11 +124,108 @@ def _fit(cfg, resume, result, job) -> None:
     try:
         pages = fit_to_pages(resume, result, job.description or job.title,
                              requirements=job.requirements, company=job.company,
-                             max_pages=limit)
+                             max_pages=limit, focus_terms=focus_terms)
         log.info("Fitted to %d page(s) for %s — %s", pages, job.company, job.title)
     except Exception as exc:        # never lose a tailoring over a length check
         log.warning("Could not fit to %d pages (%s: %s) — writing it untrimmed",
                     limit, type(exc).__name__, exc)
+
+def tailor_to_target(cfg, job_id: int, *, again: bool = False) -> tuple[list[JobOutcome], dict | None]:
+    """Tailor one job until its ATS match reaches `resume.ats_target` (80%).
+
+    Each round after the first rewrites again, bringing back posting terms
+    the resume has and framing its own tools in the posting's words; a round
+    that does worse is thrown away, so the file only ever improves. It stops
+    at the target, after `resume.max_attempts` rounds, or as soon as nothing
+    honest is left to gain -- no term the resume has is missing and no kind
+    of work is left to frame. What remains then is what the resume does not
+    show, and the note says so instead of the resume pretending otherwise.
+
+    `again` is the "Rewrite again" button: start from the current resume
+    rather than from scratch.
+    """
+    from ml.resume.ats import check
+
+    target = int(cfg.get("resume.ats_target", 80) or 80)
+    rounds = max(1, int(cfg.get("resume.max_attempts", 3) or 3))
+    outcomes: list[JobOutcome] = []
+    ats = None
+    scores: list[int] = []
+    for attempt in range(rounds):
+        done = tailor_jobs(cfg, [job_id], align=again or attempt > 0)
+        outcomes += done
+        if not done or done[-1].status not in ("tailored", "kept-previous"):
+            break
+        with get_session() as session:
+            job = session.get(Job, job_id)
+            session.expunge(job)
+        ats = check(cfg, job)
+        scores.append(ats["after"] or 0)
+        log.info("Round %d for %s — %s: ATS match %s%%", attempt + 1, job.company, job.title,
+                 ats["after"])
+        if (ats["after"] or 0) >= target:
+            break
+        if not ats["fixable"] and not ats["concepts"]:
+            break                      # nothing left that the resume can honestly show
+        if len(scores) >= 2 and scores[-1] <= max(scores[:-1]):
+            break                      # a round that did not help; another will not either
+    if ats is not None:
+        ats["target"] = target
+        ats["rounds"] = len(scores)
+    return outcomes, ats
+
+
+def target_summary(ats: dict | None) -> str:
+    """One line for the person: reached, or the honest ceiling and why."""
+    if not ats or ats.get("after") is None:
+        return ""
+    head = (f"ATS match: your resume {ats['before']}% → tailored {ats['after']}% "
+            f"({ats.get('rounds', 1)} round(s))")
+    if ats["after"] >= ats.get("target", 80):
+        return head + f" — reached the {ats.get('target', 80)}% target."
+    missing = ats.get("tools", []) + ats.get("concepts", [])
+    why = (f" This posting asks for {', '.join(missing[:6])}, which your resume does not show."
+           if missing else " What is left is the posting's general wording, not skills your "
+           "resume lacks — this resume is ready to send.")
+    return (head + f" — {ats['after']}% is the best honest match for this job." + why
+            + " Add real experience to your master resume to go higher, or press Rewrite again.")
+
+
+def _snapshot(target: Path) -> dict:
+    """The current tailored files and their ATS match, to put back if a rewrite is worse."""
+    import json
+    files = [target, target.with_suffix(".pdf"), target.with_name(target.stem + "_review.txt"),
+             target.with_name(target.stem + "_ats.json")]
+    saved = {f: f.read_bytes() for f in files if f.exists()}
+    try:
+        after = json.loads(saved[files[3]])["after"] if files[3] in saved else None
+    except (ValueError, KeyError):
+        after = None
+    return {"files": saved, "after": after if target.with_suffix(".pdf") in saved else None}
+
+
+def _restore(previous: dict) -> None:
+    for path, data in previous["files"].items():
+        path.write_bytes(data)
+
+
+def _note_framing(note_path: Path, result, frame) -> None:
+    """Name every line given one of the posting's words it did not have.
+
+    Framing is honest only when the line's own tools do that work, and that
+    is the person's call to confirm, so each one is put in front of them.
+    """
+    framed = []
+    for bullet in result.bullets:
+        before, after = (bullet.get("original") or "").lower(), (bullet.get("tailored") or "").lower()
+        for term in frame or []:
+            if term in after and term not in before:
+                framed.append(f"  {term}  <-  {bullet.get('tailored', '')[:150]}")
+    if framed:
+        with note_path.open("a", encoding="utf-8") as note:
+            note.write("\nFRAMED IN THE POSTING'S WORDS (check each is true of that work):\n"
+                       + "\n".join(framed) + "\n")
+
 
 def _write_both(resume, result, target: Path) -> None:
     """Write the .docx, and the PDF beside it.
@@ -364,6 +461,7 @@ def tailor_jobs(
     job_ids: list[int] | None = None,
     limit: int = 0,
     include_closed: bool = False,
+    align: bool = False,
 ) -> list[JobOutcome]:
     """Tailor the resume for open jobs at or above the score threshold.
 
@@ -393,7 +491,9 @@ def tailor_jobs(
             filename = output_filename(job.company, job.title, job.external_id)
             target = out_dir / filename
 
-            if (target.exists() and not cfg.get("resume.overwrite", False)
+            # A job asked for by id is a person pressing "write it" -- they
+            # want it written again, not told it exists. Only a batch skips.
+            if (target.exists() and not job_ids and not cfg.get("resume.overwrite", False)
                     and not over_page_limit(cfg, target)):
                 outcomes.append(
                     JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0,
@@ -424,6 +524,15 @@ def tailor_jobs(
                 )
                 break
 
+            from ml.resume.ats import compare as ats_compare
+            frame = ats_compare(resume.text(), None, job.description or job.title,
+                                job.requirements, job.company)["concepts"] or None
+            focus = None
+            if align:
+                from ml.resume.ats import check
+                focus = check(cfg, job, resume.text())["fixable"] or None
+                log.info("Aligning %s — %s: bringing back %s", job.company, job.title,
+                         ", ".join(focus or ["nothing (none missing)"]))
             try:
                 result = tailor_resume(
                     resume=resume,
@@ -432,6 +541,8 @@ def tailor_jobs(
                     jd_text=job.description or "",
                     ledger=ledger,
                     cfg=cfg,
+                    focus_terms=focus,
+                    frame_terms=frame,
                 )
             except Exception as exc:
                 log.error("Tailoring failed for job %s: %s", job.id, exc)
@@ -442,10 +553,22 @@ def tailor_jobs(
                 continue
 
             note_path = out_dir / (target.stem + "_review.txt")
-            _fit(cfg, resume, result, job)
+            previous = _snapshot(target)
+            _fit(cfg, resume, result, job, focus)
             write_review_note(result, note_path)
+            _note_framing(note_path, result, frame)
 
             if not result.accepted:
+                if previous["after"] is not None:
+                    # A rewrite of a resume that already exists: the guard
+                    # turned the new one down, so the good one stays -- review
+                    # note included, which the lines above just overwrote.
+                    _restore(previous)
+                    outcomes.append(JobOutcome(
+                        job.id, job.company, job.title, job.ats_match_score or 0.0,
+                        "kept-previous", "the rewrite claimed something your resume does not "
+                        "show, so the previous version was kept", target))
+                    continue
                 job.status = "Manual Review"
                 outcomes.append(
                     JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0,
@@ -454,6 +577,27 @@ def tailor_jobs(
                 continue
 
             _write_both(resume, result, target)
+            from ml.resume.ats import check, summary
+            ats = check(cfg, job, resume.text())
+            # A rewrite is kept only if it matches the posting at least as
+            # well. Model output varies run to run -- one Netflix rewrite
+            # framed a new term and lost two others, 77% -> 74%.
+            if previous["after"] is not None and (ats["after"] or 0) < previous["after"]:
+                _restore(previous)
+                log.info("Kept the previous version: it matches the posting %s%%, this "
+                         "rewrite only %s%%", previous["after"], ats["after"])
+                outcomes.append(JobOutcome(
+                    job.id, job.company, job.title, job.ats_match_score or 0.0, "kept-previous",
+                    f"kept the previous resume ({previous['after']}% ATS match) — this "
+                    f"rewrite matched {ats['after']}%", target))
+                continue
+            log.info(summary(ats))
+            with note_path.open("a", encoding="utf-8") as note:
+                note.write("\n" + summary(ats) + "\n")
+                if ats["fixable"]:
+                    note.write("  In your resume, not in this version: " + ", ".join(ats["fixable"]) + "\n")
+                if ats["gaps"]:
+                    note.write("  Not in your resume at all: " + ", ".join(ats["gaps"]) + "\n")
 
             # Re-score against the tailored text so the sheet reflects reality.
             rescored = score_resume(
@@ -514,6 +658,42 @@ def letter_brief(cfg, job_id: int, out_dir: Path | None = None) -> tuple[Path, s
         encoding="utf-8",
     )
     return path, company, title
+
+
+def write_letter(cfg, job_id: int) -> JobOutcome:
+    """Have the chosen model write the letter, then guard it like a pasted one.
+
+    The same prompt the copy button hands over and the same checks after, so
+    one click and four steps cannot produce different letters.
+    """
+    from ml.resume.letter import SYSTEM_PROMPT, build_prompt, result_from_reply
+    from ml.resume.llm import complete
+
+    resume = load_base_resume(cfg)
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise LookupError(f"No job with id {job_id}.")
+        jd_text = job.description or job.title
+        prompt = build_prompt(resume, job.title, job.company, jd_text)
+    reply = complete(SYSTEM_PROMPT, prompt, cfg, max_tokens=4000).text
+
+    # Once more, naming what was rejected -- as tailoring does. Claude wrote
+    # "Andhra Pradesh" for a resume that says "AP": true, and still a name the
+    # resume does not contain. Told which words, a model drops them.
+    first = result_from_reply(resume, jd_text, reply)
+    if not first.accepted and first.guard is not None and first.guard.violations:
+        named = list(dict.fromkeys(v.value for v in first.guard.violations))
+        log.info("Letter for job %s: retrying without %s", job_id, ", ".join(named))
+        retry = complete(SYSTEM_PROMPT, prompt + (
+            "\n\n# Your previous letter was rejected\n"
+            "It used these words, and the resume above does not contain them:\n"
+            + "\n".join(f"  - {w}" for w in named)
+            + "\nWrite it again without them. Use only names as the resume writes them."),
+            cfg, max_tokens=4000).text
+        if result_from_reply(resume, jd_text, retry).accepted:
+            reply = retry
+    return accept_letter(cfg, job_id, reply)
 
 
 def accept_letter(cfg, job_id: int, reply_text: str) -> JobOutcome:

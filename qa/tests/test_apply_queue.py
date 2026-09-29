@@ -102,9 +102,10 @@ def test_a_closed_posting_is_not_queued():
 
 
 def test_a_board_with_no_filler_is_not_queued():
-    """Queuing a Workday job while only Greenhouse can be filled would promise
-    an application that cannot be made."""
-    assert build_queue([FakeJob(source="workday")], limit=10, now=NOW) == []
+    """Queuing a Lever job while only Greenhouse and Workday can be filled would
+    promise an application that cannot be made."""
+    assert build_queue([FakeJob(source="lever")], limit=10, now=NOW) == []
+    assert len(build_queue([FakeJob(source="workday")], limit=10, now=NOW)) == 1
 
 
 def test_a_posting_with_nowhere_to_apply_is_not_queued():

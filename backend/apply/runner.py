@@ -228,7 +228,7 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
         say("Today's application limit is reached — nothing more until tomorrow.")
         return []
     if not queue:
-        say("Nothing to apply to right now: no open Greenhouse posting above your "
+        say("Nothing to apply to right now: no open Greenhouse or Workday posting above your "
             "score threshold that you haven't applied to or marked yourself.")
         return []
 
@@ -241,9 +241,9 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
     if browser_factory is None:
         from playwright.sync_api import sync_playwright
         manager = sync_playwright().start()
-        browser = manager.chromium.launch(headless=False)
-        context = browser.new_context(user_agent=greenhouse.USER_AGENT,
-                                      viewport={"width": 1280, "height": 1400})
+        from backend.apply.helper import launch
+        browser, context = launch(manager, cfg, user_agent=greenhouse.USER_AGENT,
+                                  viewport={"width": 1280, "height": 1400})
     else:
         manager, browser, context = None, None, browser_factory()
 
@@ -298,9 +298,13 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
     shutil.copy2(resume, kept)                 # exactly what went out
     letter = cover_letter(cfg, job, evidence)
 
+    if job.source == "workday":
+        return _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter,
+                              resume_note, evidence, wait_s)
+
     url = greenhouse.form_url(job.company_slug, job.external_id)
     result = greenhouse.fill(page, job.id, url, applicant, kept, letter,
-                             submit=auto)
+                             submit=auto, evidence=evidence)
     if not result.ok:
         say(f"{head}: {result.summary()}")
         outcome.detail = result.error or ""
@@ -327,6 +331,31 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
         verdict, answers = greenhouse.watch_submission(page, wait_s)
         how = "you"
 
+    _settle(outcome, job, verdict, how, url, kept, resume_note, letter, result, evidence, answers)
+    return outcome
+
+
+def _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter, resume_note,
+                   evidence, wait_s) -> Outcome:
+    """Workday: sign-in and Submit are the person's; every step between is filled."""
+    from backend.apply import workday
+
+    say(f"{head}: opening Workday · {resume_note}")
+    # The sign-in wait comes out of the same budget, so allow for it.
+    verdict, result = workday.apply(page, job.id, job.application_url, applicant, kept,
+                                    evidence=evidence, wait_s=wait_s + 300, say=say)
+    if verdict == "not-filled":
+        say(f"{head}: {result.summary()}")
+        outcome.detail = result.error or ""
+        return outcome
+    _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter,
+            result, evidence, {})
+    return outcome
+
+
+def _settle(outcome, job, verdict, how, url, kept, resume_note, letter, result, evidence,
+            answers) -> None:
+    """Record and report how one application ended."""
     outcome.result, outcome.how = verdict, how
     if verdict == "submitted":
         record_application(job.id, {
@@ -345,6 +374,4 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
     elif verdict == "skipped":
         say("   Skipped (tab closed) — it stays in the queue for next time.")
     else:
-        say(f"   No submission after {round(wait_s / 60)} min — moving on; "
-            f"it stays in the queue.")
-    return outcome
+        say("   No submission in the time allowed — moving on; it stays in the queue.")

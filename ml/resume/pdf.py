@@ -28,6 +28,7 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, HRFlowable,
                                 PageTemplate, Paragraph, Spacer)
 
@@ -108,6 +109,26 @@ FONT, FONT_BOLD = _register_font()
 BULLET = "-" if FONT == "Helvetica" else "\u2022"
 
 
+def _bullet_width() -> float:
+    return stringWidth(BULLET + "  ", FONT, BODY)
+
+
+def _pack(items: list[str], width: float, size: float) -> list[str]:
+    """Whole contact items per line, as many as fit.
+
+    Left to wrap on its own, the line broke inside an item and left a "·"
+    hanging at a line's end, the LinkedIn URL alone below it.
+    """
+    lines: list[list[str]] = [[]]
+    for item in items:
+        trial = " \u00b7 ".join(lines[-1] + [item])
+        if lines[-1] and stringWidth(trial, FONT, size) > width:
+            lines.append([item])
+        else:
+            lines[-1].append(item)
+    return [" \u00b7 ".join(line) for line in lines if line]
+
+
 def _styles() -> dict[str, ParagraphStyle]:
     base = ParagraphStyle(
         "body", fontName=FONT, fontSize=BODY, leading=BODY * 1.30,
@@ -120,20 +141,23 @@ def _styles() -> dict[str, ParagraphStyle]:
         "contact": ParagraphStyle("contact", parent=base, fontSize=9.5,
                                   leading=12, alignment=TA_CENTER,
                                   textColor=MUTED, spaceAfter=1),
+        # keepWithNext: a heading, a group title or a role line is never
+        # left alone at the foot of a page with its lines on the next.
         "heading": ParagraphStyle("heading", parent=base, fontName=FONT_BOLD,
                                   fontSize=10.5, leading=13, spaceBefore=11,
-                                  spaceAfter=3),
-        "role": ParagraphStyle("role", parent=base, spaceBefore=7, spaceAfter=1),
+                                  spaceAfter=3, keepWithNext=1),
+        "role": ParagraphStyle("role", parent=base, spaceBefore=7, spaceAfter=1,
+                               keepWithNext=1),
         "subheading": ParagraphStyle("subheading", parent=base,
                                      fontName=FONT_BOLD, spaceBefore=5,
-                                     spaceAfter=1),
-        # The hanging indent: the text block starts past the bullet, and the
-        # first line steps back to where the bullet sits.
+                                     spaceAfter=1, keepWithNext=1),
+        # The hanging indent, measured: the bullet and its two spaces are part
+        # of the text, so wrapped lines start exactly where the first line's
+        # words do. A fixed 22pt hang put them 12pt further right than that --
+        # the ragged look that says a program laid this out.
         "bullet": ParagraphStyle("bullet", parent=base,
-                                 leftIndent=BULLET_INDENT + BULLET_HANG,
-                                 # the bullet is part of the text now, so the
-                                 # hang must clear it and its two spaces
-                                 firstLineIndent=-(BULLET_INDENT + BULLET_HANG)),
+                                 leftIndent=_bullet_width(),
+                                 firstLineIndent=-_bullet_width()),
         "text": base,
     }
 
@@ -172,6 +196,7 @@ class _Rule(HRFlowable):
     def __init__(self, width):
         super().__init__(width="100%", thickness=0.4, color=RULE,
                          spaceBefore=1, spaceAfter=4, lineCap="butt")
+        self.keepWithNext = 1           # the rule goes with its section's first line
 
 
 def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
@@ -194,7 +219,10 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
         if kind == "name":
             story.append(Paragraph(_escape(text), styles["name"]))
         elif kind == "contact":
-            story.append(Paragraph(_escape(_tidy_contact(text)), styles["contact"]))
+            items = [i for i in _tidy_contact(text).split(" \u00b7 ") if i]
+            packed = _pack(items, text_w, styles["contact"].fontSize)
+            story.append(Paragraph("<br/>".join(_escape(line) for line in packed),
+                                   styles["contact"]))
         elif kind == "heading":
             story.append(Paragraph(_escape(text.upper()), styles["heading"]))
             story.append(_Rule(text_w))

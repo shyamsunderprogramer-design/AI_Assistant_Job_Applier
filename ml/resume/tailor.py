@@ -99,6 +99,27 @@ candidate fits. Four rules, and they matter more than the rewrite being clever:
              forecasts to set purchasing priorities.
              (same tense, shorter, and the JD's own words replaced synonyms)
 
+6. WRITE LIKE THE PERSON, NOT LIKE A MODEL. Recruiters now spot model
+   prose on sight, and a resume that reads machine-written is set aside.
+   Use the plain verbs people use: built, ran, led, cut, moved, wrote,
+   fixed, set up, migrated. Never introduce: spearheaded, leveraged,
+   utilized, synergy, dynamic, results-driven, passionate, cutting-edge,
+   seamless, robust, holistic, delve, acumen, pivotal, meticulous,
+   transformative, elevate, empower, adept, "proven track record",
+   "fast-paced". If the original uses one, swapping it for a plain verb is
+   an allowed rewrite. No long dashes (—). Do not start two bullets in a
+   row with the same verb. The summary states years, what the person builds
+   and with what - no adjectives about the person ("dynamic", "seasoned").
+
+7. FRAME YOUR WORK IN THE POSTING'S WORDS -- NEVER ADD A TOOL. You may be
+   given the posting's names for kinds of work ("online data stores",
+   "data movement", "distributed systems"). Where a resume line already
+   shows that work with the tools it names, describe it with the posting's
+   term: "Ran DynamoDB and Redis" may become "Ran DynamoDB and Redis as
+   online data stores". Only on a line whose own tools do that work; if no
+   line does, leave the term out. Never add a tool, language or product the
+   line does not already name.
+
 Do not end several bullets with the same phrase. Repetition across bullets
 reads as a template and is worse than leaving them alone.
 
@@ -198,6 +219,8 @@ def tailor_resume(
     client=None,
     ledger: Ledger | None = None,
     cfg=None,
+    focus_terms: list[str] | None = None,
+    frame_terms: list[str] | None = None,
 ) -> TailorResult:
     """Tailor the resume with the configured model, then verify it invented nothing.
 
@@ -206,7 +229,23 @@ def tailor_resume(
     so that a daily run and a manual run can never disagree about it.
     """
     user_prompt = build_prompt(resume, job_title, company, jd_text)
-    result = _attempt(resume, user_prompt, cfg, ledger, job_title, company)
+    if frame_terms:
+        user_prompt += (
+            "\n\n# The posting's words for kinds of work (rule 7)\n"
+            "The resume never uses these words. For each, find a line whose own tools do "
+            "that work and describe it with the term; if none does, leave it out:\n  "
+            + ", ".join(frame_terms))
+    if focus_terms:
+        # "Align closer": terms the posting asks for that the resume HAS but
+        # the last tailored version lost. Named, so the model surfaces them
+        # where they are true -- never an invitation to add them elsewhere.
+        user_prompt += (
+            "\n\n# Bring these back\n"
+            "The posting asks for these, the resume above shows them, and the last "
+            "tailored version left them out:\n  " + ", ".join(focus_terms) + "\n"
+            "Keep and use the lines of the resume that show them, in the posting's "
+            "wording. Do not add any of them to a line that does not already show it.")
+    result = _attempt(resume, user_prompt, cfg, ledger, job_title, company, jd_text)
 
     # A rejected tailoring produces nothing the person can send, and the model
     # is usually wrong in a small, nameable way -- measured over five real
@@ -222,7 +261,7 @@ def tailor_resume(
         log.info("Retrying %s at %s without: %s", job_title, company,
                  ", ".join(_claims(result.guard)))
         retry = _attempt(resume, _retry_prompt(user_prompt, result.guard),
-                         cfg, ledger, job_title, company)
+                         cfg, ledger, job_title, company, jd_text)
         # Keep the retry only if it is genuinely cleaner. A second answer that
         # invented different things is not progress.
         if retry.guard.ok or len(retry.guard.violations) < len(result.guard.violations):
@@ -307,6 +346,45 @@ def _keep_metrics(bullets: list[dict]) -> int:
     return restored
 
 
+COPY_RUN = 7   # words in a row shared with the posting that make a rewrite a copy
+
+
+def _runs(text: str, n: int = COPY_RUN) -> set[tuple[str, ...]]:
+    words = re.findall(r"[a-z0-9+#./-]+", (text or "").lower())
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def _keep_own_words(bullets: list[dict], jd_text: str) -> int:
+    """Restore any bullet whose rewrite lifted a sentence from the posting.
+
+    A small local model, asked to tailor for SpaceX (27 Sep 2026), put the
+    posting's duty list in front of the person's bullets -- "Administer,
+    scale, and evolve CI/CD platforms, source control systems (e.g., GitHub,
+    GitLab, Bitbucket) ..." on three of them, "hundreds of on-premise
+    servers" on another. Each skill named was in the resume, so the
+    fabrication guard passed it; but it claims duties the person never
+    described, and a recruiter reading their own posting back knows it.
+
+    Seven words in a row from the posting that the original did not have
+    make a copy. The original is kept; the posting's words are the job's,
+    not the person's record.
+    """
+    posting = _runs(jd_text)
+    if not posting:
+        return 0
+    restored = 0
+    for bullet in bullets:
+        before = bullet.get("original") or ""
+        after = bullet.get("tailored") or ""
+        if not before or not after:
+            continue
+        if (_runs(after) - _runs(before)) & posting:
+            bullet["tailored"] = before
+            bullet["reason"] = "kept as written — the rewrite copied the job posting's own sentences"
+            restored += 1
+    return restored
+
+
 def _omissions(raw) -> list[dict]:
     """Normalise "omitted" to {original, reason} entries.
 
@@ -327,7 +405,7 @@ def _omissions(raw) -> list[dict]:
 
 
 def _attempt(resume: Resume, user_prompt: str, cfg, ledger: Ledger | None,
-             job_title: str, company: str) -> TailorResult:
+             job_title: str, company: str, jd_text: str = "") -> TailorResult:
     """One model call, parsed and guarded."""
     answer = complete(SYSTEM_PROMPT, user_prompt, cfg, max_tokens=16000)
 
@@ -356,6 +434,10 @@ def _attempt(resume: Resume, user_prompt: str, cfg, ledger: Ledger | None,
     if restored:
         log.info("Kept %d bullet(s) as written: the rewrite dropped a metric",
                  restored)
+    copied = _keep_own_words(result.bullets, jd_text)
+    if copied:
+        log.info("Kept %d bullet(s) as written: the rewrite copied the job posting",
+                 copied)
 
     result.guard = check_no_fabrication(resume.text(), result.tailored_text())
     return result

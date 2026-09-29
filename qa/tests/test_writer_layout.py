@@ -92,11 +92,19 @@ def test_a_heading_is_never_stranded_at_the_foot_of_a_page(written):
 
 # --- layout -------------------------------------------------------------
 
-def test_a_job_keeps_its_dates_on_the_right(written):
+def test_a_job_keeps_its_dates_on_its_line_without_a_tab(written):
+    """Viewers that ignore tab stops (Quick Look, Pages) put tabbed dates mid-line."""
     role = next(p for p in body(written) if "ACME CORP" in p.text)
-    assert "\t" in role.text
-    assert len(role.paragraph_format.tab_stops) == 1
+    assert "\t" not in role.text and "\u00a0\u00a0" in role.text
+    assert len(role.paragraph_format.tab_stops) == 0
     assert role.paragraph_format.keep_with_next, "a job must not split from its bullets"
+
+
+def test_wrapped_bullet_lines_start_under_the_first_word(written):
+    for para in bullets(written):
+        fmt = para.paragraph_format
+        assert "\t" not in para.text
+        assert fmt.first_line_indent == -fmt.left_indent and fmt.left_indent > 0
 
 
 def test_a_job_title_is_not_turned_into_a_bullet(written):

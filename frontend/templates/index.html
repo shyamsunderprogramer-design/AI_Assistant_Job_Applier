@@ -10,6 +10,7 @@
     <button class="btn" id="run-score">Re-score</button>
     <button class="btn" id="run-apply"
       title="Opens a browser, fills each Greenhouse form, and waits for you to press Submit">Apply to next 10</button>
+    <a class="btn" href="{{ url_for('assistant_page') }}" title="Ask about your jobs; it proposes, you confirm">Chat</a>
     <a class="btn" href="{{ url_for('setup_form') }}" title="Keys and settings kept out of the repo">Settings</a>
     <div class="statusbox idle" id="statusbox" aria-live="polite">
       <span class="sb-dot" id="sb-dot"></span>

@@ -42,9 +42,14 @@ add a skill, a number, a date, an employer or an achievement that is not in
 the resume — not even one the job description asks for. If the candidate does
 not have something the posting wants, leave it out; do not imply it.
 
-Write plainly. No "I am writing to express my interest", no "passionate", no
-"synergy", no "I would be thrilled". No "Furthermore", "Moreover",
-"Additionally" — start the next sentence instead. Contractions are fine.
+Write plainly, the way the candidate talks. No "I am writing to express my
+interest", no "passionate", no "synergy", no "I would be thrilled". No
+"Furthermore", "Moreover", "Additionally" - start the next sentence instead.
+Never these words, which mark a letter as machine-written: leverage, utilize,
+spearhead, seamless, robust, dynamic, cutting-edge, delve, pivotal,
+meticulous, transformative, elevate, empower, "proven track record",
+"fast-paced". No long dashes (—); use a comma or a full stop. Vary sentence
+length. Contractions are fine.
 Short sentences are better than long ones. Under 320 words in total — a
 letter a tired person reads at the end of a long day.
 
@@ -134,8 +139,11 @@ class LetterResult:
         return "\n".join([*self.body, self.why_this_company])
 
     def text(self) -> str:
-        parts = [self.greeting, "", *self.body, "", self.closing]
-        return "\n\n".join(p for p in parts if p is not None).strip() + "\n"
+        from ml.resume.typeset import typeset
+        # One blank line between paragraphs. Empty spacer parts joined with
+        # blank lines gave three in a row after the greeting.
+        parts = [self.greeting, *self.body, self.closing]
+        return "\n\n".join(typeset(p) for p in parts if p).strip() + "\n"
 
     def word_count(self) -> int:
         return len(" ".join(self.body).split())

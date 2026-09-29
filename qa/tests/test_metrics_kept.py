@@ -68,3 +68,26 @@ def test_the_prompt_says_it_too():
 
     assert "NEVER DELETE A NUMBER" in SYSTEM_PROMPT
     assert "99.95%" in SYSTEM_PROMPT or "38%" in SYSTEM_PROMPT
+
+
+# -- a rewrite must not lift the posting's own sentences --------------------
+
+POSTING = ("Administer, scale, and evolve CI/CD platforms, source control systems "
+           "(e.g., GitHub, GitLab, Bitbucket), and the supporting clusters.")
+
+
+def test_a_rewrite_that_copies_the_posting_is_put_back():
+    from ml.resume.tailor import _keep_own_words
+    original = "Enabled the first hybrid cloud deployment across on-prem VMware and Azure."
+    bullets = [{"original": original,
+                "tailored": "Administer, scale, and evolve CI/CD platforms, source control systems "
+                            "by enabling the first hybrid cloud deployment."}]
+    assert _keep_own_words(bullets, POSTING) == 1
+    assert bullets[0]["tailored"] == original
+
+
+def test_a_rewrite_that_uses_the_postings_words_is_fine():
+    from ml.resume.tailor import _keep_own_words
+    bullets = [{"original": "Ran Jenkins for 40 services.",
+                "tailored": "Scaled CI/CD platforms on Jenkins for 40 services, with GitHub source control."}]
+    assert _keep_own_words(bullets, POSTING) == 0

@@ -72,7 +72,8 @@ def run_command(*args: str) -> tuple[bool, str]:
     """
     result = subprocess.run(
         [sys.executable, "main.py", *args],
-        cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=900,
+        cwd=PROJECT_ROOT, capture_output=True, text=True,
+        timeout=1500,          # tailoring one job may take three rounds
     )
     output = (result.stdout or "") + (result.stderr or "")
     return result.returncode == 0, output.strip()
@@ -401,15 +402,29 @@ def writer_state() -> dict:
     if ready and local_url and "localhost" in local_url:
         ready = service_up(local_url)
 
+    model = model_name(cfg())
+    # Where it runs and how long it takes, as measured on one resume
+    # (27-28 Sep 2026): the page used to say "on this machine, about half a
+    # minute" of a cloud model that took two and a half.
+    if provider == "claude-code":
+        label, where, takes = "Or let Claude write it", "on your Claude plan", "about a minute"
+    elif provider == "ollama" and model.endswith(":cloud"):
+        label, where, takes = "Or let Ollama Cloud write it", "on Ollama Cloud", "two or three minutes"
+    elif provider == "ollama":
+        label, where, takes = "Or let this Mac write it", "on this Mac", "several minutes"
+    elif free:
+        label, where, takes = "Or write it here, free", "", "a minute or two"
+    else:
+        label, where, takes = "Or pay the API to do it", "", "a minute or two"
     return {
         "provider": provider,
         "needs_starting": bool(local_url) and not ready,
-        "model": model_name(cfg()),
+        "model": model or "Claude",
         "ready": ready,
         "free": free,
-        "label": ("Or let this Mac write it" if provider == "ollama"
-                  else "Or write it here, free" if free
-                  else "Or pay the API to do it"),
+        "label": label,
+        "where": where,
+        "takes": takes,
     }
 
 
@@ -1061,7 +1076,9 @@ def act(job_id: int, action: str):
         "packet": ["packet"],
         "brief": ["brief"],
         "letter": ["letter"],
+        "write-letter": ["letter", "--write"],
         "tailor": ["tailor", "--job-id"],
+        "align": ["tailor", "--align", "--job-id"],
     }
     if action not in commands:
         return jsonify(ok=False, error=f"Unknown action {action!r}"), 400
@@ -1099,6 +1116,21 @@ def job_documents(job_id: int) -> dict[str, Path | None]:
     ):
         found[key] = next((p for p in candidates if p.exists()), None)
     return found
+
+
+@app.get("/job/<int:job_id>/ats")
+def job_ats(job_id: int):
+    """ATS keyword match: the person's resume, and the tailored PDF, against the posting."""
+    from ml.resume.ats import check
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        session.expunge(job)
+    try:
+        return jsonify(ok=True, **check(cfg(), job))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
 
 
 @app.get("/job/<int:job_id>/files")
@@ -1291,7 +1323,16 @@ def run_task(task: str):
     """Start a pipeline command and return immediately."""
     if task not in TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
+    return start_task(task, TASKS[task])
 
+
+# Started only by a confirmed assistant action, never by URL: a bare
+# /run/tailor would tailor every job at once.
+ACTION_TASKS = {"tailor"}
+
+
+def start_task(task: str, args: list[str]):
+    """Run `main.py <args>` in the background as `task`, with its log and exit code."""
     if task_pid(task):
         return jsonify(ok=True, started=False, note="already running")
 
@@ -1324,7 +1365,7 @@ def run_task(task: str):
     # the answer and everything else is a guess, so write it to a file that
     # outlives the process -- this app cannot wait() on a detached child.
     command = " ".join(shlex.quote(part) for part in
-                       [sys.executable, "-u", "main.py", *TASKS[task]])
+                       [sys.executable, "-u", "main.py", *args])
     process = subprocess.Popen(
         ["/bin/sh", "-c", f"{command}; echo $? > {shlex.quote(str(exit_path))}"],
         cwd=PROJECT_ROOT, stdout=handle, stderr=subprocess.STDOUT,
@@ -1468,7 +1509,7 @@ def board_count() -> int:
 @app.get("/run/<task>/status")
 def run_status(task: str):
     """How far along, how much longer, and the last thing it said."""
-    if task not in TASKS:
+    if task not in TASKS and task not in ACTION_TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
 
     running = task_pid(task) is not None
@@ -1544,3 +1585,87 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# -- the assistant ---------------------------------------------------------------
+# Claude Code, headless, with the job tools only (backend/assistant/chat.py).
+# Its actions are proposals; these routes are where the person decides.
+
+@app.get("/assistant")
+def assistant_page():
+    from backend.assistant import chat, tools
+    return render_template("assistant.html", installed=chat.claude_path() is not None,
+                           pending=tools.pending_actions())
+
+
+@app.post("/assistant/send")
+def assistant_send():
+    from backend.assistant import chat
+    message = ((request.get_json(silent=True) or {}).get("message") or "").strip()
+    if not message:
+        return jsonify(ok=False, error="Type a message first."), 400
+    if len(message) > 4000:
+        return jsonify(ok=False, error="That message is too long."), 400
+    turn = chat.start(message, model=cfg().get("assistant.model") or None)
+    return jsonify(ok=True, turn=turn.id)
+
+
+@app.get("/assistant/poll/<turn_id>")
+def assistant_poll(turn_id: str):
+    from backend.assistant import chat
+    return jsonify(chat.poll(turn_id, int(request.args.get("since", 0))))
+
+
+@app.post("/assistant/new")
+def assistant_new():
+    from backend.assistant import chat
+    chat.new_conversation()
+    return jsonify(ok=True)
+
+
+@app.get("/assistant/pending")
+def assistant_pending():
+    from backend.assistant import tools
+    return jsonify(pending=tools.pending_actions())
+
+
+@app.post("/assistant/action/<action_id>/<decision>")
+def assistant_decide(action_id: str, decision: str):
+    """Confirm or cancel one proposed action. Each can be decided once."""
+    from backend.assistant import tools
+    if decision not in ("confirm", "cancel"):
+        return jsonify(ok=False, error="Confirm or cancel."), 400
+    action = tools.take(action_id, "confirmed" if decision == "confirm" else "cancelled")
+    if action is None:
+        return jsonify(ok=False, error="That action was already decided, or does not exist."), 409
+    if decision == "cancel":
+        return jsonify(ok=True, said="Cancelled — nothing was done.")
+
+    params = action["params"]
+    if action["kind"] == "tailor":
+        response = start_task("tailor", ["tailor", "--job-id", str(params["job_id"])])
+        return _action_started(response, "tailor", "Tailoring started — it takes a few minutes.",
+                               action_id)
+    if action["kind"] == "apply":
+        args = (["apply", "--job-id", str(params["job_id"])] if params.get("job_id")
+                else ["apply", "--limit", str(params.get("count", 1))])
+        response = start_task("apply", args)
+        return _action_started(response, "apply",
+                               "The browser is opening — sign in where asked, and press Submit yourself.",
+                               action_id)
+    try:
+        return jsonify(ok=True, said=tools.run_direct(action))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+
+
+def _action_started(response, task: str, said: str, action_id: str):
+    """What starting it said. When it could not start, the action waits again."""
+    from backend.assistant import tools
+    body, code = (response if isinstance(response, tuple) else (response, 200))
+    data = body.get_json()
+    if not data.get("ok") or data.get("started") is False:
+        tools.reopen(action_id)
+        error = data.get("error") or f"A {task} run is already going — confirm again when it finishes."
+        return jsonify(ok=False, error=error), code if code != 200 else 409
+    return jsonify(ok=True, said=said, task=task)

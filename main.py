@@ -531,9 +531,17 @@ def cmd_tailor(cfg, args) -> int:
             print("Run cap        : none (resume.max_spend_per_run_usd is 0)")
         print("\nEstimates assume a full-length response; real cost is usually lower.")
         return 0
-    outcomes = tailor_jobs(
-        cfg, job_ids=job_ids, limit=args.limit, include_closed=args.include_closed
-    )
+    ats_line = ""
+    if job_ids and len(job_ids) == 1:
+        # One job, asked for by a person: aim for the ATS target, not one shot.
+        from ml.resume.pipeline import tailor_to_target, target_summary
+        outcomes, ats = tailor_to_target(cfg, job_ids[0], again=getattr(args, "align", False))
+        ats_line = target_summary(ats)
+    else:
+        outcomes = tailor_jobs(
+            cfg, job_ids=job_ids, limit=args.limit, include_closed=args.include_closed,
+            align=getattr(args, "align", False)
+        )
     if not outcomes:
         print("No jobs eligible for tailoring. Run `score` first, or pass --job-id.")
         return 0
@@ -544,6 +552,9 @@ def cmd_tailor(cfg, args) -> int:
             print(f"                    {outcome.detail[:100]}")
         if outcome.resume_path:
             print(f"                    -> {outcome.resume_path}")
+
+    if ats_line:
+        print("\n" + ats_line)
 
     rejected = [o for o in outcomes if o.status == "rejected"]
     if rejected:
@@ -584,9 +595,24 @@ def cmd_brief(cfg, args) -> int:
 
 
 def cmd_letter(cfg, args) -> int:
-    """Write a paste-anywhere cover-letter prompt. No API key, no cost."""
+    """Write a paste-anywhere cover-letter prompt -- or, with --write, the letter."""
     init_engine(cfg.database_url)
     from ml.resume.pipeline import letter_brief
+
+    if getattr(args, "write", False):
+        from ml.resume.llm import ProviderUnavailable
+        from ml.resume.pipeline import write_letter
+        try:
+            outcome = write_letter(cfg, int(args.job_id))
+        except (LookupError, ProviderUnavailable) as exc:
+            print(exc)
+            return 1
+        if outcome.status == "letter":
+            print(f"Cover letter written for {outcome.company} — {outcome.title} ({outcome.detail})")
+            print(f"  {outcome.resume_path}")
+            return 0
+        print(f"The letter was REJECTED by the fabrication guard — nothing saved:\n{outcome.detail}")
+        return 1
 
     try:
         path, company, title = letter_brief(cfg, int(args.job_id))
@@ -636,6 +662,32 @@ def cmd_packet(cfg, args) -> int:
             print(f"  Tailor the resume : python main.py brief {args.job_id}")
         if not packet.has_letter:
             print(f"  Draft the letter  : python main.py letter {args.job_id}")
+    return 0
+
+
+def cmd_setup_helper(cfg, args) -> int:
+    """Open the apply browser with the helper extension; close it when done."""
+    from playwright.sync_api import sync_playwright
+
+    from backend.apply import greenhouse
+    from backend.apply.helper import launch
+
+    with sync_playwright() as manager:
+        _, context = launch(manager, cfg, user_agent=greenhouse.USER_AGENT,
+                            viewport={"width": 1280, "height": 1000})
+        if _ is not None:
+            print("No helper extension to set up: turn on apply.helper_extension in "
+                  "config.yaml and install it in Chrome first.")
+            context.close()
+            return 1
+        print("Set up the extension's profile in the browser that opened (click the "
+              "puzzle-piece icon, then the extension).\nClose the browser window when done.")
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto("https://docs.speedyapply.com/")
+        while context.pages:
+            context.pages[0].wait_for_event("close", timeout=0)
+        context.close()
+    print("Saved. Every apply run now opens with it.")
     return 0
 
 
@@ -964,6 +1016,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_tailor = sub.add_parser("tailor", help="Tailor the resume per job via the Claude API")
     p_tailor.add_argument("--job-id", action="append", help="Tailor specific job id(s)")
+    p_tailor.add_argument("--align", action="store_true",
+                          help="Rewrite again, bringing back posting terms your resume has "
+                               "that the last version lost")
     p_tailor.add_argument("--limit", type=int, default=0, help="Cap how many jobs to tailor")
     p_tailor.add_argument(
         "--include-closed", action="store_true", help="Also tailor for closed postings"
@@ -980,6 +1035,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_letter = sub.add_parser(
         "letter", help="Write a cover-letter prompt to paste into any model (free)")
     p_letter.add_argument("job_id")
+    p_letter.add_argument("--write", action="store_true",
+                          help="Have the chosen writing model write it now (Settings)")
 
     p_packet = sub.add_parser(
         "packet", help="Gather resume, letter and job summary into one folder")
@@ -995,6 +1052,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Never tailor during the run; use what exists or the base resume")
     p_apply.add_argument("--wait", type=float, default=None,
                          help="Minutes to wait for you on each form (default 15)")
+
+    sub.add_parser(
+        "setup-helper", help="Open the apply browser once to set up the autofill extension's profile")
 
     p_adzuna = sub.add_parser(
         "adzuna", help="Search Adzuna's job index (free API key) for more postings")
@@ -1066,6 +1126,7 @@ COMMANDS = {
     "feeds": cmd_feeds,
     "signup-keys": cmd_signup_keys,
     "apply": cmd_apply,
+    "setup-helper": cmd_setup_helper,
     "stats": cmd_stats,
     "failures": cmd_failures,
 }

@@ -52,6 +52,15 @@ PROVIDERS = {
         "note": "Free and private. Nothing leaves this machine, and it works "
                 "with no key and no network.",
     },
+    "claude-code": {
+        "label": "Claude, through Claude Code (your plan)",
+        "free": True,           # no per-call bill: it is the person's own plan
+        "env_key": None,
+        "default_model": "",    # "" = the plan's default; or sonnet, opus, haiku
+        "note": "Claude, signed in the way you already use Claude Code -- no "
+                "API key and no credit to buy. Each resume uses some of your "
+                "plan's usage. The resume and posting go to Anthropic.",
+    },
     "anthropic": {
         "label": "Anthropic API",
         "free": False,
@@ -199,17 +208,23 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
     try:
         return _dispatch(provider, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
     except ProviderBusy as exc:
-        if provider == "ollama" or not _setting(cfg, "resume.fallback_to_local", True):
+        if not _setting(cfg, "resume.fallback_to_local", True):
             raise
-        local = local_model(cfg)
-        if not local:
-            raise
-        log.warning("%s is busy (%s) — writing with %s on this Mac instead",
-                    provider, str(exc).split(":")[0][:80], local)
-        return _ollama(system, user, cfg, want_json=want_json, model=local)
+        failed = model_name(cfg) if provider == "ollama" else ""
+        last = exc
+        for backup in fallback_models(cfg, skip=failed):
+            log.warning("%s is busy (%s) — writing with %s instead",
+                        failed or provider, str(last).split(":")[0][:80], backup)
+            try:
+                return _ollama(system, user, cfg, want_json=want_json, model=backup)
+            except ProviderBusy as again:
+                failed, last = backup, again
+        raise last
 
 
 def _dispatch(provider, system, user, cfg, *, max_tokens, want_json) -> Completion:
+    if provider == "claude-code":
+        return _claude_code(system, user, cfg)
     if provider == "anthropic":
         return _anthropic(system, user, cfg, max_tokens=max_tokens)
     if provider == "ollama":
@@ -227,17 +242,32 @@ def _dispatch(provider, system, user, cfg, *, max_tokens, want_json) -> Completi
 LOCAL_PREFERENCE = ("gemma4:e4b", "qwen3.5:9b")
 
 
-def local_model(cfg=None) -> str | None:
-    """An installed Ollama model to fall back to, or None if Ollama is not up."""
+def fallback_models(cfg=None, skip: str = "") -> list[str]:
+    """Ollama models to try, in order, when the first choice is busy.
+
+    `resume.fallback_models` first -- a second cloud model belongs there, so
+    one cloud model's bad hour does not drop straight to the small model on
+    this Mac -- then the configured Ollama model, then what worked here
+    before. Only installed ones (a cloud model is "installed" once pulled),
+    never the one that just failed, and none at all if Ollama is not up.
+    """
     import requests
 
     host = str(_setting(cfg, "resume.ollama.host", DEFAULT_OLLAMA_HOST)).rstrip("/")
     try:
         installed = [m["name"] for m in requests.get(f"{host}/api/tags", timeout=3).json()["models"]]
     except Exception:
-        return None
-    wanted = [str(_setting(cfg, "resume.ollama.model", "")), *LOCAL_PREFERENCE]
-    return next((m for m in wanted if m and m in installed), None)
+        return []
+    listed = _setting(cfg, "resume.fallback_models", []) or []
+    wanted = [*[str(m) for m in listed], str(_setting(cfg, "resume.ollama.model", "")),
+              *LOCAL_PREFERENCE]
+    return [m for m in dict.fromkeys(wanted) if m and m != skip and m in installed]
+
+
+def local_model(cfg=None) -> str | None:
+    """An installed Ollama model to fall back to, or None if Ollama is not up."""
+    found = fallback_models(cfg)
+    return found[0] if found else None
 
 
 # -- local ------------------------------------------------------------------
@@ -266,9 +296,19 @@ def _ollama(system: str, user: str, cfg=None, *, want_json: bool = True,
     }
     if want_json:
         payload["format"] = "json"
+        # A thinking model (qwen3.5) asked for JSON spends the whole reply
+        # thinking and answers with an empty string -- the "returned nothing"
+        # that cost a SpaceX resume its tailoring on 27 Sep 2026. The answer is
+        # the JSON; the thinking is not wanted. Not for a cloud model: GLM
+        # told not to think writes its thinking into the answer instead,
+        # and with thinking on it keeps it apart, where it belongs.
+        if not model.endswith(":cloud"):
+            payload["think"] = False
 
     try:
         response = requests.post(f"{host}/api/chat", json=payload, timeout=timeout)
+    except requests.Timeout as exc:
+        raise ProviderBusy(f"{model} timed out after {timeout}s") from exc
     except requests.RequestException as exc:
         raise ProviderUnavailable(
             f"Could not reach Ollama at {host}: {exc}\n"
@@ -282,6 +322,9 @@ def _ollama(system: str, user: str, cfg=None, *, want_json: bool = True,
             f"  Pull it:  ollama pull {model}\n"
             f"  Or set resume.ollama.model in config.yaml to one you have."
         )
+    if response.status_code == 429 or response.status_code >= 500:
+        # A cloud model over its usage limit, or overloaded: another may answer.
+        raise ProviderBusy(f"{model} returned {response.status_code}: {response.text[:200]}")
     if not response.ok:
         raise ProviderUnavailable(
             f"Ollama returned {response.status_code}: {response.text[:200]}")
@@ -289,7 +332,7 @@ def _ollama(system: str, user: str, cfg=None, *, want_json: bool = True,
     body = response.json()
     text = ((body.get("message") or {}).get("content") or "").strip()
     if not text:
-        raise ProviderUnavailable(
+        raise ProviderBusy(
             f"{model} returned nothing. It may have run out of context — "
             f"try a smaller resume.ollama.num_ctx, or a different model."
         )
@@ -297,9 +340,94 @@ def _ollama(system: str, user: str, cfg=None, *, want_json: bool = True,
     if body.get("done_reason") == "length":
         log.warning("%s ran out of room (num_ctx %d) and its reply was cut off — "
                     "the complete part will be used", model, num_ctx)
-    log.info("Tailored with %s locally (%s prompt / %s response tokens, no cost)",
-             model, body.get("prompt_eval_count"), body.get("eval_count"))
+    log.info("Tailored with %s %s (%s prompt / %s response tokens, no cost)",
+             model, "on Ollama Cloud" if model.endswith(":cloud") else "locally",
+             body.get("prompt_eval_count"), body.get("eval_count"))
     return Completion(text=text, model=model, provider="ollama", usage=None)
+
+
+# -- Claude Code ---------------------------------------------------------------
+# Claude as a model, the way Ollama serves GLM: `claude -p`, the person's own
+# sign-in, one prompt in and text out. Boxed in to be a model and nothing else.
+
+# Claude Code bills an API key over the sign-in whenever it sees one, and the
+# app has .env loaded -- the chat met "Credit balance is too low" that way.
+CLAUDE_CODE_HIDDEN_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                          "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
+
+
+def claude_code_path() -> str | None:
+    import shutil
+    from pathlib import Path
+
+    found = shutil.which("claude")
+    if found:
+        return found
+    for p in (Path.home() / ".local/bin/claude", Path("/opt/homebrew/bin/claude"),
+              Path("/usr/local/bin/claude")):
+        if p.exists():
+            return str(p)
+    return None
+
+
+def claude_code_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in CLAUDE_CODE_HIDDEN_ENV}
+
+
+def claude_code_command(system: str, model: str = "") -> list[str]:
+    cmd = [claude_code_path() or "claude", "-p",
+           "--output-format", "json",
+           "--tools", "",                     # a model, not an agent: no shell, files, web
+           "--strict-mcp-config",             # and no MCP servers
+           "--no-session-persistence",
+           "--system-prompt", system]         # ours replaces Claude Code's own
+    if model:
+        cmd += ["--model", model]
+    return cmd
+
+
+def _claude_code(system: str, user: str, cfg=None) -> Completion:
+    import subprocess
+    from pathlib import Path
+
+    if claude_code_path() is None:
+        raise ProviderUnavailable(
+            "Claude Code is not installed (no `claude` command).\n"
+            "  Install it, run `claude` once to sign in, then try again.")
+    model = model_name(cfg)
+    timeout = int(_setting(cfg, "resume.claude-code.timeout_seconds", DEFAULT_TIMEOUT_S))
+    # Run away from this repository, so its CLAUDE.md and settings stay out.
+    workdir = Path(__file__).resolve().parents[2] / "data" / "claude-code"
+    workdir.mkdir(parents=True, exist_ok=True)
+    try:
+        done = subprocess.run(claude_code_command(system, model), input=user, text=True,
+                              capture_output=True, timeout=timeout, cwd=workdir,
+                              env=claude_code_env())
+    except subprocess.TimeoutExpired as exc:
+        raise ProviderBusy(f"Claude Code timed out after {timeout}s") from exc
+
+    try:
+        body = json.loads(done.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        body = {}
+    said = str(body.get("result") or "").strip()
+    if done.returncode or body.get("is_error") or not said:
+        problem = (said or done.stderr or f"exit {done.returncode}").strip()[:300]
+        low = problem.lower()
+        if "limit" in low or "overloaded" in low or "529" in low or "rate" in low:
+            raise ProviderBusy(f"Claude Code: {problem}")
+        if "log in" in low or "login" in low or "authenticat" in low or "credit balance" in low:
+            raise ProviderUnavailable(
+                f"Claude Code is not signed in to a plan ({problem}).\n"
+                f"  Run `claude` in a terminal and sign in, then try again.")
+        raise ProviderUnavailable(f"Claude Code: {problem}")
+
+    usage = body.get("usage") or {}
+    log.info("Tailored with Claude via Claude Code%s (%s prompt / %s response tokens, "
+             "on your plan)", f" ({model})" if model else "",
+             usage.get("input_tokens"), usage.get("output_tokens"))
+    return Completion(text=said, model=model or "claude (plan default)", provider="claude-code",
+                      usage=None)
 
 
 # -- remote -----------------------------------------------------------------

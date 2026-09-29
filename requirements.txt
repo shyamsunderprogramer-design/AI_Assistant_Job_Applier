@@ -18,3 +18,4 @@ python-docx>=1.1
 python-dotenv>=1.0
 reportlab
 requests>=2.32
+mcp>=2.2,<3            # the assistant's job tools, for Claude Code (backend/assistant)

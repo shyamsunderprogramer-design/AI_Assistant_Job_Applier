@@ -40,6 +40,9 @@ from ml.resume.writer import _is_role_line, _is_subheading, strip_bullet
 log = logging.getLogger(__name__)
 
 MIN_BULLETS_PER_ROLE = 2
+# What a term is worth the second time a kept line shows it, relative to the
+# first. Ranked alone, the fourth Jenkins bullet beat the only Splunk one.
+REPEAT = 0.35
 KEEP_SECTIONS = ("header", "summary", "objective", "profile", "education")
 _METRIC = re.compile(r"\d+(\.\d+)?\s?%|\d+\+|\$\s?\d|\d{2,}")
 TRIM_REASON = "left out to fit {pages} pages: less relevant to this posting than what was kept"
@@ -69,6 +72,49 @@ def _looks_like_title(line: str) -> bool:
     body = strip_bullet(stripped).rstrip(":")
     return (len(body.split()) <= 8 and not stripped.endswith(".")
             and not _METRIC.search(body) and not _is_list(body))
+
+
+def posting_terms(jd_text: str, requirements: str | None = None,
+                  company: str | None = None) -> dict[str, float]:
+    """Every term the posting uses, weighted — not only its top 60.
+
+    Selection with the scorer's top-60 list cut ten things a SpaceX posting
+    asked for and the master resume had (VMware vSphere, on-prem, Splunk,
+    disaster recovery, capacity planning, ...): two-word skills were not in it
+    at all, and single ones fell below the cut. Here every word and every
+    two-word phrase of the posting counts, by how often it appears, with
+    known skills weighted up as the scorer does.
+    """
+    import math
+    from collections import Counter
+
+    from ml.resume.scorer import SKILL_TERMS, content_terms
+
+    text = f"{jd_text}\n{requirements or ''}"
+    skip = set(content_terms(company or ""))
+    words = [w for w in content_terms(text) if len(w) >= 3 and w not in skip]
+    counts = Counter(words)
+    counts.update(f"{a} {b}" for a, b in zip(words, words[1:]))
+    weights = {term: 1 + math.log(n) for term, n in counts.items()}
+    for term in list(weights):
+        if term in SKILL_TERMS:
+            weights[term] *= 2.5
+        elif " " in term:
+            weights[term] *= 1.5          # a phrase match is stronger evidence than a word
+    # The scorer's own list keeps its extra weight on the terms it singles out.
+    for term, w in jd_keyword_weights(jd_text, requirements, company, top_n=60).items():
+        weights[term] = max(weights.get(term, 0.0), w)
+    # The terms an ATS match is measured on (ml/resume/ats.py) count most:
+    # the first line carrying each is worth keeping over any repeat, so the
+    # two-page cut does not lower the match the tailoring was meant to raise
+    # -- the Netflix resume came out 66% -> 63% before this.
+    from ml.resume.ats import requirements_only
+    top = max(weights.values() or [1.0])
+    for term in jd_keyword_weights(requirements_only(jd_text),
+                                   requirements_only(requirements) if requirements else None,
+                                   company, top_n=40):
+        weights[term] = max(weights.get(term, 0.0), top * 1.5)
+    return weights
 
 
 def _is_list(line: str) -> bool:
@@ -113,13 +159,56 @@ def candidates(base, result, weights: dict[str, float]) -> list[Line]:
         if line.children == []:
             line.children = None
             line.score = _score(strip_bullet(line.text), weights, line.role, rewritten=False)
+    _by_coverage(lines, weights, rewrites)
     return lines
 
 
-def _score(text: str, weights: dict[str, float], role: int | None, *, rewritten: bool) -> float:
+def _by_coverage(lines: list[Line], weights: dict[str, float], rewrites: dict[str, str]) -> None:
+    """Re-score each line by what it adds to the lines ranked above it.
+
+    Scored alone, every line about the posting's commonest skill outranks
+    the one line about a skill it asks for once, and a two-page resume says
+    "Jenkins" six times and "Splunk" never. Picked greedily instead, a line
+    is worth what it adds -- the posting's range comes through first.
+    Titles keep their own score; they go only with their lines.
+    """
+    pool = [l for l in lines if l.children is None]
+    shown = {id(l): rewrites.get(l.text.strip()) or rewrites.get(strip_bullet(l.text.strip()))
+             or strip_bullet(l.text) for l in pool}
+    rewritten = {id(l): shown[id(l)] != strip_bullet(l.text) for l in pool}
+    matched = {id(l): _matched(shown[id(l)], weights) for l in pool}
+    covered: dict[str, int] = {}
+    rank = len(pool)
+    while pool:
+        gains = [(_score(shown[id(l)], weights, l.role, rewritten=rewritten[id(l)],
+                         covered={t: covered.get(t, 0) for t in matched[id(l)]}), l) for l in pool]
+        gain, best = max(gains, key=lambda g: g[0])
+        # Order is what the trim reads; the rank keeps it strict even when
+        # two lines add the same, and the gain keeps the floor meaningful.
+        best.score = gain + rank * 1e-6
+        rank -= 1
+        pool.remove(best)
+        for term in matched[id(best)]:
+            covered[term] = covered.get(term, 0) + 1
+
+
+def _matched(text: str, weights: dict[str, float]) -> set[str]:
+    """The posting's terms this line carries."""
     terms = set(content_terms(text))
     lowered = text.lower()
-    hits = sum(w for t, w in weights.items() if (t in terms if " " not in t else t in lowered))
+    return {t for t in weights if (t in terms if " " not in t else t in lowered)}
+
+
+def _score(text: str, weights: dict[str, float], role: int | None, *, rewritten: bool,
+           covered: dict[str, int] | None = None) -> float:
+    """How much of the posting this line carries, per word.
+
+    `covered` counts how many better lines already carry each term; each
+    repeat is worth `REPEAT` of the one before, so a skill already shown
+    adds little and one not yet shown adds its full weight.
+    """
+    covered = covered or {}
+    hits = sum(weights[t] * REPEAT ** covered.get(t, 0) for t in _matched(text, weights))
     # The small constant lets the other signals rank lines this posting does
     # not mention at all: when a role must keep two lines, a measured result
     # beats a chore. It is well below one keyword's weight, so any real match
@@ -176,7 +265,7 @@ def count_pages(base, result) -> int:
 
 def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
                  company: str | None = None, max_pages: int = 2,
-                 pages=count_pages) -> int:
+                 pages=count_pages, focus_terms: list[str] | None = None) -> int:
     """Trim `result` in place so the rendered resume fits `max_pages`.
 
     Returns the page count it ends at (it may exceed the limit if the
@@ -184,7 +273,11 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     """
     if max_pages <= 0:
         return pages(base, result)
-    weights = jd_keyword_weights(jd_text or "", requirements, company, top_n=60)
+    weights = posting_terms(jd_text or "", requirements, company)
+    # Terms "Align closer" asked for outweigh everything else, so the line
+    # that shows each one is among the last to be cut.
+    for term in focus_terms or []:
+        weights[term.lower()] = max(weights.values() or [1.0]) * 3
     lines = candidates(base, result, weights)
     by_text = {l.text: l for l in lines}
 

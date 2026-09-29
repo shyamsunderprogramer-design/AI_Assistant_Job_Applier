@@ -79,9 +79,9 @@
           Copying is free and works with any chat — use it when you want the
           best writing and do not mind four steps.
           {% if writer.free %}
-            The second button runs <b>{{ writer.model }}</b> here and costs
-            nothing either, taking about half a minute — that is the one for
-            doing thirty in a day.
+            The second button runs <b>{{ writer.model }}</b> {{ writer.where }} at no
+            extra cost, taking {{ writer.takes }} — that is the one for doing
+            thirty in a day.
           {% else %}
             The second button uses <b>{{ writer.model }}</b> and <b>charges per
             letter</b>. A model on this machine does the same job for nothing —
@@ -97,6 +97,24 @@
              target="_blank" rel="noopener" {% if not docs.resume_pdf %}hidden{% endif %}>📄 View PDF</a>
           <a class="btn file" id="doc-resume_docx" href="/job/{{ job.id }}/file/resume_docx"
              {% if not docs.resume_docx %}hidden{% endif %}>⬇ Download .docx</a>
+        </div>
+        <div class="ats" id="ats" hidden>
+          <div class="ats-head"><b>ATS match with this posting</b>
+            <span class="ats-nums"><span id="ats-before"></span> your resume →
+              <b id="ats-after"></b> tailored</span></div>
+          <div class="ats-bar"><span id="ats-fill"></span></div>
+          <div class="ats-list" id="ats-fixable-row" hidden>In your resume, missing here:
+            <span id="ats-fixable"></span></div>
+          <div class="ats-list" id="ats-concepts-row" hidden>Kinds of work to frame with your own tools:
+            <span id="ats-concepts"></span></div>
+          <div class="ats-list muted" id="ats-gaps-row" hidden>Tools you have not listed (never added):
+            <span id="ats-gaps"></span></div>
+          <div class="ats-say" id="ats-say"></div>
+          <div class="row" id="align-row" style="margin-top:8px" hidden>
+            <button class="btn primary" id="align"
+              title="Write it again, aiming higher: brings back what your resume has and frames your own tools in the posting's words. Never adds a tool. The better version is kept.">Rewrite again</button>
+            <span class="hint">Not happy with it? Press again as often as you like — only your own tools and work, and the better version is always kept.</span>
+          </div>
         </div>
         <details class="fold" id="fold-resume">
           <summary>Prompt, and where the reply goes</summary>
@@ -121,6 +139,9 @@
           <button class="btn" data-brief="letter">
             {% if packet.has_letter %}Do it again{% else %}Copy the prompt{% endif %}
           </button>
+          {% if api_ready %}
+          <button class="btn" id="write-letter">{% if packet.has_letter %}Rewrite again{% else %}{{ writer.label }}{% endif %}</button>
+          {% endif %}
           <span class="hint" id="hint-letter" hidden>Copied — paste it into any
             chat, then bring the reply back below.</span>
         </div>
@@ -184,6 +205,8 @@ const JOB = {{ job.id }};
 const WRITER_LABEL = {{ writer.label|tojson }};
 const WRITER_MODEL = {{ writer.model|tojson }};
 const WRITER_FREE  = {{ writer.free|tojson }};
+const WRITER_WHERE = {{ writer.where|tojson }};
+const WRITER_TAKES = {{ writer.takes|tojson }};
 const $ = id => document.getElementById(id);
 // What a failure means, in words, for the failures that happen.
 const PLAIN = [
@@ -305,15 +328,33 @@ document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
     return;
   }
 
-  show('out-resume', WRITER_FREE
-       ? `Writing it with ${WRITER_MODEL} on this machine — about half a minute…`
-       : `Writing it with ${WRITER_MODEL} — this takes a minute…`);
-  const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 300000);
+  show('out-resume', `Writing it with ${WRITER_MODEL}${WRITER_FREE ? ' ' + WRITER_WHERE : ''}, aiming for an 80% match — up to three rounds, a few minutes…`);
+  const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 1500000);
   button.disabled = false;
   button.textContent = WRITER_LABEL;
   tailorConfirmed = false;
   show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok) { $('step-resume').classList.add('done'); countDone(); refreshDocs(); }
+});
+
+// The letter, written by the same model and checked by the same guard.
+let letterConfirmed = false;
+$('write-letter')?.addEventListener('click', async e => {
+  const button = e.currentTarget;
+  if (!WRITER_FREE && !letterConfirmed) {
+    show('out-letter', `This uses ${WRITER_MODEL} and is charged per letter. Press again to go ahead.`, 'good');
+    button.textContent = 'Yes, write it';
+    letterConfirmed = true;
+    return;
+  }
+  button.disabled = true;
+  show('out-letter', `Writing it with ${WRITER_MODEL}${WRITER_FREE ? ' ' + WRITER_WHERE : ''} — ${WRITER_TAKES}…`);
+  const d = await ask(`/job/${JOB}/write-letter`, {method: 'POST'}, 900000);
+  button.disabled = false;
+  button.textContent = d.ok ? 'Rewrite again' : WRITER_LABEL;
+  letterConfirmed = false;
+  show('out-letter', d.output || d.error, d.ok ? 'good' : 'bad');
+  if (d.ok) { $('step-letter').classList.add('done'); countDone(); refreshDocs(); }
 });
 
 $('reveal')?.addEventListener('click', async () => {
@@ -357,7 +398,49 @@ async function refreshDocs() {
   }
   $('docs-resume').hidden = !(d.resume_pdf || d.resume_docx);
   $('docs-letter').hidden = !d.letter;
+  refreshAts();
 }
+
+// How much of the posting's vocabulary the file that would be sent carries.
+async function refreshAts() {
+  const a = await ask(`/job/${JOB}/ats`);
+  if (!a.ok || a.after == null) { $('ats').hidden = true; return; }
+  $('ats').hidden = false;
+  $('ats-before').textContent = a.before + '%';
+  $('ats-after').textContent = a.after + '%';
+  $('ats-fill').style.width = a.after + '%';
+  $('ats-fill').className = a.after >= 75 ? 'good' : a.after >= 55 ? 'ok' : 'low';
+  $('ats-fixable-row').hidden = !a.fixable.length;
+  $('ats-fixable').textContent = a.fixable.slice(0, 15).join(', ');
+  $('ats-concepts-row').hidden = !(a.concepts || []).length;
+  $('ats-concepts').textContent = (a.concepts || []).join(', ');
+  $('ats-gaps-row').hidden = !(a.tools || []).length;
+  // Always offered once there is a resume: the person may want new wording
+  // even at 85%, and a worse rewrite is never kept anyway.
+  $('align-row').hidden = false;
+  const target = 80;
+  // What it asked for that the resume lacks: tools and kinds of work first,
+  // else the posting's other missing words, so the ceiling is never unexplained.
+  const more = [...(a.tools || []), ...(a.concepts || [])];
+  $('ats-say').textContent = a.after >= target
+    ? `Reached the ${target}% target.`
+    : (a.fixable.length || (a.concepts || []).length)
+      ? `Below the ${target}% target — Rewrite again can still raise it.`
+      : `${a.after}% is the best honest match for this job` + (more.length
+          ? ` — it asks for ${more.slice(0, 6).join(', ')}, which your resume does not show.`
+          : ` — what is left is the posting's general wording, not skills your resume lacks. This resume is ready to send.`);
+  $('ats-gaps').textContent = (a.tools || []).slice(0, 15).join(', ');
+}
+refreshAts();
+
+$('align')?.addEventListener('click', async e => {
+  const button = e.currentTarget; button.disabled = true;
+  show('out-resume', `Rewriting with ${WRITER_MODEL}, aiming for 80% — up to three rounds, a few minutes…`);
+  const d = await ask(`/job/${JOB}/align`, {method: 'POST'}, 1500000);
+  button.disabled = false;
+  show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
+  if (d.ok) refreshDocs();
+});
 
 function countDone() {
   const steps = document.querySelectorAll('.step');

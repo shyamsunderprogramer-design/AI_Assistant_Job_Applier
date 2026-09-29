@@ -128,3 +128,27 @@ def test_a_resume_that_already_fits_is_left_whole():
 def test_zero_pages_means_keep_everything():
     base, result, _ = fit(max_pages=0)
     assert result.omitted == []
+
+
+def test_a_skill_asked_for_once_beats_a_third_line_on_the_same_skill():
+    master = """JANE DOE
+jane@example.com
+
+EXPERIENCE
+PLATFORM ENGINEER, ACME, USA     Jan 2022 – Present
+- Built Jenkins pipelines for Terraform releases across AWS accounts.
+- Ran Jenkins pipelines applying Terraform plans to AWS environments.
+- Kept Jenkins pipelines for Terraform modules green on AWS.
+- Ran Splunk dashboards for Linux fleets.
+
+EDUCATION
+BS Computer Science, State University     2010 – 2014
+"""
+    jd = ("Jenkins pipelines, Terraform and AWS every day: Jenkins, Terraform, AWS. "
+          "Also Splunk on Linux.")
+    base, result = parse_text(master), TailorResult(summary=None)
+    budget = words_in(base, result) - 6                  # room for all but one bullet
+    fit_to_pages(base, result, jd, max_pages=1, pages=pages_of(budget))
+    text = text_of(base, result)
+    assert "Splunk" in text                               # the only line with it stays
+    assert text.count("Jenkins") == 2                     # a repeat goes instead

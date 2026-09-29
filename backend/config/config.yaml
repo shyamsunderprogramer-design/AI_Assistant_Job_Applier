@@ -86,11 +86,27 @@ resume:
   # ---------------------------------------------------------------------
   provider: anthropic
 
+  # Tried in order when the chosen model is busy (Claude Code's plan limit,
+  # a cloud model's usage limit), timed out or answered with nothing. Ollama
+  # models; the one that just failed is skipped.
+  fallback_models: ["glm-5.3-flash:cloud", "minimax-m3:cloud", "gemma4:e4b"]
+
+  # Tailoring one job aims for this ATS match (ml/resume/ats.py), rewriting up
+  # to max_attempts times and keeping the best. It stops early when nothing
+  # honest is left to gain: the rest is what the resume does not show.
+  ats_target: 80
+  max_attempts: 3
+
   ollama:
     host: "http://localhost:11434"
     # `ollama list` shows what is installed. Bigger follows instructions
-    # better; smaller answers faster.
-    model: "qwen3.5:9b"
+    # better; smaller answers faster. A ":cloud" model (after `ollama signin`
+    # and `ollama pull <name>:cloud`) runs on Ollama's servers: the resume and
+    # posting are sent there, and the free plan has a usage limit. Measured on
+    # one posting (27 Sep 2026): glm-5.3-flash:cloud 2.6 min, nothing copied
+    # from the posting, 9 rewrites kept; qwen3.5:9b on this Mac 15 min, every
+    # rewrite a copy of the posting.
+    model: "glm-5.3-flash:cloud"
     # A resume plus a job description plus the reply runs well past Ollama's
     # 4k default, and an overlong prompt is truncated from the START — which
     # is where the resume is. Too small does not fail loudly; it quietly
@@ -330,3 +346,14 @@ feeds:
   himalayas: {pages: 5}
   jobicy:    {max_titles: 5}
   weworkremotely: {categories: [remote-devops-sysadmin-jobs, remote-back-end-programming-jobs]}
+
+# -- applying ------------------------------------------------------------------
+apply:
+  # An autofill browser extension loaded into the apply browser, for the person
+  # to press when a form waits for them -- it fills portals our filler does not
+  # know (Workday). Copied from your own Chrome, where you install it; set up
+  # its profile once with `python main.py setup-helper`. Nothing clicks it for
+  # you. The default id is SpeedyApply.
+  helper_extension:
+    enabled: true
+    id: mbgjopdedgonlbpikjfibkccpmhjbnag

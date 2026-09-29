@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 # Only sources with a form filler. Adding one here without writing its filler
 # would queue applications that cannot be submitted.
-FILLABLE = ("greenhouse",)
+FILLABLE = ("greenhouse", "workday")
 
 # A status the user has touched is theirs. Never re-apply, never overwrite.
 APPLIABLE_STATUSES = ("Not Applied", "Manual Review")

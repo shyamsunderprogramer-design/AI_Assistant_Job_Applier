@@ -44,7 +44,10 @@ from ml.resume.tailor import TailorResult
 
 log = logging.getLogger(__name__)
 
-FONT = "Calibri"          # widely parsed; no exotic glyphs
+# Arial, as the PDF uses: on every Mac and PC. Calibri is not on a Mac
+# without Office, and Pages, Quick Look and many recruiters' previews
+# silently set the whole resume in Times instead.
+FONT = "Arial"
 BODY_SIZE = Pt(10.5)
 HEADING_SIZE = Pt(10.5)
 NAME_SIZE = Pt(19)
@@ -171,14 +174,16 @@ def _add_role(document: Document, text: str) -> None:
     fmt.space_before = Pt(7)
     fmt.space_after = Pt(1)
     fmt.keep_with_next = True        # never split a job from its first bullet
-    fmt.tab_stops.add_tab_stop(Inches(TEXT_WIDTH_IN), WD_TAB_ALIGNMENT.RIGHT)
 
     run = para.add_run(title)
     run.bold = True
     run.font.name = FONT
     run.font.size = BODY_SIZE
     if dates:
-        tail = para.add_run("\t" + dates)
+        # After the title, in grey, as the PDF sets it. A right tab put them
+        # at the margin in Word and mid-line in every viewer that ignores
+        # tab stops, which is most of the ones a recruiter might preview in.
+        tail = para.add_run("\u00a0\u00a0\u00a0" + dates)
         tail.font.name = FONT
         tail.font.size = BODY_SIZE
         tail.font.color.rgb = MUTED
@@ -193,6 +198,17 @@ def _add_subheading(document: Document, text: str) -> None:
     return para
 
 
+def _bullet_width_pt() -> float:
+    """Width of "•" and two spaces in the body font, in points."""
+    try:
+        from ml.resume.pdf import BULLET, FONT as PDF_FONT, _bullet_width
+        if BULLET == "\u2022" and PDF_FONT == FONT:
+            return _bullet_width()
+    except Exception:
+        pass
+    return 0.62 * BODY_SIZE.pt           # Arial: bullet 0.35em + two spaces 0.28em each
+
+
 def _add_bullet(document: Document, text: str) -> None:
     """A bullet with a hanging indent, so wrapped text aligns under text.
 
@@ -202,10 +218,15 @@ def _add_bullet(document: Document, text: str) -> None:
     """
     para = document.add_paragraph()
     fmt = para.paragraph_format
-    fmt.left_indent = BULLET_INDENT + BULLET_HANG
-    fmt.first_line_indent = -BULLET_HANG     # the hanging part
+    # No tab: Quick Look, Pages and Google Docs ignore tab stops and jump to
+    # their own half-inch one, so the first line started far right of the
+    # lines under it. The bullet and two no-break spaces, measured in the
+    # font, make the hang -- the way the PDF does it, the same everywhere.
+    hang = Pt(_bullet_width_pt())
+    fmt.left_indent = hang
+    fmt.first_line_indent = -hang
     fmt.space_after = Pt(2.5)
-    run = para.add_run(f"\u2022\t{strip_bullet(text)}")
+    run = para.add_run(f"\u2022\u00a0\u00a0{strip_bullet(text)}")
     run.font.name = FONT
     run.font.size = BODY_SIZE
 
@@ -388,7 +409,11 @@ def plan_document(base: Resume, result: TailorResult,
                 blocks.append(("bullet", replacement or body))
             else:
                 blocks.append(("text", body))
-    return _without_empty_titles(blocks, trimmed)
+    from ml.resume.typeset import typeset
+    # Not a role line: its title and dates are told apart by the run of
+    # spaces between them, which the tidy would close up.
+    return [(kind, text if kind in ("name", "role") else typeset(text))
+            for kind, text in _without_empty_titles(blocks, trimmed)]
 
 
 _TITLE_METRIC = re.compile(r"\d+\s?%|\d+\+")
@@ -569,6 +594,12 @@ def write_review_note(result: TailorResult, path: Path | str, job_desc: str = ""
         "GAPS (what this JD wants that your resume does not evidence):",
     ]
     lines.extend(f"  - {g}" for g in result.gaps or ["(none reported)"])
+    from ml.resume.typeset import tells_in
+    tells = sorted({t for b in result.bullets for t in tells_in(b.get("tailored") or "")}
+                   | set(tells_in(result.summary or "")))
+    if tells:
+        lines += ["", "READS MACHINE-WRITTEN (swap for a plain word before sending):",
+                  f"  {', '.join(tells)}"]
     lines += ["", "REWRITTEN BULLETS:"]
     for bullet in result.bullets:
         lines += [
