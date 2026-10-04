@@ -18,8 +18,8 @@
       <label class="t-label" for="resume">Resume</label>
       <div class="t-file">
         <input type="file" id="resume" accept="{{ accepted }}" hidden>
-        <button class="btn" type="button" id="pick-resume">Choose .docx or .pdf</button>
-        <span class="t-name" id="resume-name">No file chosen</span>
+        <button class="btn" type="button" id="pick-resume">{% if saved %}Use another{% else %}Choose .docx or .pdf{% endif %}</button>
+        <span class="t-name" id="resume-name">{% if saved %}Your saved resume ({{ saved }}){% else %}No file chosen{% endif %}</span>
       </div>
       <div class="t-error" id="error-resume" hidden></div>
     </div>
@@ -36,7 +36,7 @@
   </div>
   <div class="row" style="margin-top:14px">
     <button class="btn primary" id="create">Create tailored resume</button>
-    <span class="hint" id="create-hint">Takes two to four minutes.</span>
+    <span class="hint" id="create-hint">Takes about five to ten minutes: Claude reads the posting, judges the evidence and writes the draft.</span>
   </div>
 </section>
 
@@ -101,12 +101,13 @@ const STATUS = {direct: ['Direct match', 'good'], related: ['Related match', 're
 let RUN = null, RESULT = null, VIEW = 'docx';
 
 // -- inputs ----------------------------------------------------------------------
+const SAVED = {{ 'true' if saved else 'false' }};
 $('pick-resume').onclick = () => $('resume').click();
 $('pick-jd').onclick = () => $('jd-file').click();
 $('resume').onchange = () => {
   const f = $('resume').files[0];
-  $('resume-name').textContent = f ? f.name : 'No file chosen';
-  $('pick-resume').textContent = f ? 'Replace' : 'Choose .docx or .pdf';
+  $('resume-name').textContent = f ? f.name : (SAVED ? 'Your saved resume ({{ saved }})' : 'No file chosen');
+  $('pick-resume').textContent = f ? 'Replace' : (SAVED ? 'Use another' : 'Choose .docx or .pdf');
   clearError('resume');
 };
 $('jd-file').onchange = () => {
@@ -135,6 +136,7 @@ $('create').onclick = async () => {
   ['resume', 'job'].forEach(clearError); $('error-run').hidden = true;
   const form = new FormData();
   if ($('resume').files[0]) form.append('resume', $('resume').files[0]);
+  else if (SAVED) form.append('use_saved', '1');
   if ($('jd-file').files[0]) form.append('jd_file', $('jd-file').files[0]);
   form.append('jd_text', $('jd-text').value);
   $('create').disabled = true;
@@ -291,5 +293,9 @@ $('save-edits').onclick = async () => {
 // Opened as /tailor?run=<id>: show that run (its progress, or its results).
 const opened = new URLSearchParams(location.search).get('run');
 if (opened) { RUN = opened; $('progress').hidden = false; follow(); }
+
+// Opened with "Tailor ↗" from a job page: the posting and the saved resume
+// are both here, so the run starts without another press.
+if ({{ 'true' if autostart else 'false' }} && !new URLSearchParams(location.search).get('run')) $('create').click();
 </script>
 {% endblock %}

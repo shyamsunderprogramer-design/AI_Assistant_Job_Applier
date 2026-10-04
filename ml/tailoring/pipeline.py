@@ -133,13 +133,24 @@ def save_inputs(folder: Path, resume_upload, jd_upload=None) -> tuple[Path, Path
     """Copy the uploaded files into the run; the originals are never touched again."""
     inputs = folder / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
-    resume = inputs / ("resume" + Path(resume_upload.filename or "resume.docx").suffix.lower())
-    resume_upload.save(resume)
+    resume = None
+    if resume_upload is not None:
+        resume = inputs / ("resume" + Path(resume_upload.filename or "resume.docx").suffix.lower())
+        resume_upload.save(resume)
     jd = None
     if jd_upload is not None and jd_upload.filename:
         jd = inputs / ("job" + Path(jd_upload.filename).suffix.lower())
         jd_upload.save(jd)
     return resume, jd
+
+
+def save_saved_resume(folder: Path, source: Path) -> Path:
+    """A copy of the person's saved resume, for a run started from a job page."""
+    inputs = folder / "inputs"
+    inputs.mkdir(parents=True, exist_ok=True)
+    resume = inputs / ("resume" + source.suffix.lower())
+    shutil.copy2(source, resume)
+    return resume
 
 
 # -- runs the page drives ------------------------------------------------------------
@@ -163,8 +174,13 @@ def _progress(folder: Path, **state) -> None:
     path.write_text(json.dumps(current))
 
 
-def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, cfg) -> None:
-    """Run in the background; the page follows progress.json."""
+def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, cfg,
+          after=None) -> None:
+    """Run in the background; the page follows progress.json.
+
+    `after(result)` runs once the files are made and before the run reads as
+    done, so a job page finds its resume in place when the bar reaches 100%.
+    """
     import threading
 
     def follow(stage, note=""):
@@ -172,7 +188,9 @@ def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, c
 
     def work():
         try:
-            run(folder, resume_file, jd_text, jd_file, cfg, progress=follow)
+            result = run(folder, resume_file, jd_text, jd_file, cfg, progress=follow)
+            if after is not None:
+                after(result)
             _progress(folder, stage=len(STAGES), done=True, note="")
         except StageError as exc:
             _progress(folder, done=True, error={"stage": exc.stage, "message": str(exc), "file": exc.file})
@@ -269,3 +287,36 @@ def job_score(job_id: int, resume_file: Path, jd_text: str, cfg=None, use_model:
     SCORES.mkdir(parents=True, exist_ok=True)
     saved.write_text(json.dumps(out, indent=1))
     return out
+
+
+# -- a run for one saved job ----------------------------------------------------------
+
+JOBS = PROJECT_ROOT / "data" / "tailoring" / "jobs"
+
+
+def place_for_job(folder: Path, target_docx: Path) -> None:
+    """The run's files become the job's tailored resume, where the job page,
+    its keyword check and the application packet look for them."""
+    target_docx.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(folder / "tailored-resume.docx", target_docx)
+    shutil.copy2(folder / "tailored-resume.pdf", target_docx.with_suffix(".pdf"))
+
+
+def remember_job_run(job_id: int, folder: Path, target_docx: Path) -> None:
+    JOBS.mkdir(parents=True, exist_ok=True)
+    (JOBS / f"{job_id}.json").write_text(json.dumps({"run": folder.name}))
+    (folder / "job.json").write_text(json.dumps({"job_id": job_id, "docx": str(target_docx)}))
+
+
+def job_run(job_id: int) -> str | None:
+    try:
+        return json.loads((JOBS / f"{job_id}.json").read_text())["run"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def job_of_run(folder: Path) -> dict | None:
+    try:
+        return json.loads((folder / "job.json").read_text())
+    except (OSError, ValueError):
+        return None

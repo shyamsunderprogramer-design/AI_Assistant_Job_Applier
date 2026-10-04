@@ -399,18 +399,28 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 /* Rewrite progress: a grey track, a moving rainbow fill, a glowing dot at its edge. */
 .pbar{margin:10px 0 6px}
 .pbar-track{height:8px;border-radius:99px;background:var(--hair);border:1px solid var(--line);overflow:hidden}
-.pbar-fill{position:relative;height:100%;width:0;border-radius:99px;transition:width .2s linear;
-  background:linear-gradient(90deg,#ff5f6d,#ffc371,#47e891,#3ec7e0,#7a6cff,#e06cff,#ff5f6d);
-  background-size:300% 100%;animation:pbar-flow 2.4s linear infinite}
+.pbar-fill{position:relative;height:100%;width:0;border-radius:99px;transition:width .2s linear;overflow:hidden;
+  /* The whole rainbow at any width, its colours cycling: sized to the fill,
+     not three times wider, which showed only the red end of a half bar. */
+  background:linear-gradient(90deg,#ff5f6d,#ffc371,#47e891,#3ec7e0,#7a6cff,#e06cff);
+  animation:pbar-hue 3s linear infinite}
+.pbar-fill::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);
+  transform:translateX(-100%);animation:pbar-shine 1.6s ease-in-out infinite}
 .pbar-dot{position:absolute;right:-1px;top:50%;width:10px;height:10px;margin-top:-5px;border-radius:50%;
   background:#fff;box-shadow:0 0 0 2px rgba(122,108,255,.55),0 0 10px 3px rgba(62,199,224,.8);
   animation:pbar-pulse 1s ease-in-out infinite}
 .pbar-label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-2);margin-top:5px}
 .pbar.done .pbar-fill{animation:none;background:#2e9e6a}
+.pbar.done .pbar-fill::after,.pbar.failed .pbar-fill::after{display:none}
 .pbar.done .pbar-dot,.pbar.failed .pbar-dot{display:none}
 .pbar.failed .pbar-fill{animation:none;background:#c0504d}
-@keyframes pbar-flow{from{background-position:0 0}to{background-position:300% 0}}
+@keyframes pbar-hue{from{filter:hue-rotate(0)}to{filter:hue-rotate(360deg)}}
+@keyframes pbar-shine{to{transform:translateX(100%)}}
 @keyframes pbar-pulse{0%,100%{transform:scale(.8);opacity:.8}50%{transform:scale(1.15);opacity:1}}
-@media (prefers-reduced-motion:reduce){.pbar-fill,.pbar-dot{animation:none}}
+@media (prefers-reduced-motion:reduce){.pbar-fill,.pbar-dot,.pbar-fill::after{animation:none}}
 .teaser{border-color:#e0b04a}
 .teaser textarea{width:100%;margin:8px 0;font:inherit}
+/* The requirement match, shown under the button the way the keyword match is. */
+.req-result{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
+.ats-list.bad{color:var(--crit)}

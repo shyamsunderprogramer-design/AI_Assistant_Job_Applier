@@ -145,3 +145,25 @@ def test_a_job_score_is_saved_and_reused(tmp_path, monkeypatch):
 
 def test_the_tailor_page_takes_a_job(client):
     assert client.get("/tailor?job=abc").status_code == 200
+
+
+def test_a_run_from_a_job_page_uses_the_saved_resume(client, monkeypatch, tmp_path):
+    saved = sample_resume(tmp_path / "base_resume.docx")
+    monkeypatch.setattr("ml.resume.pipeline.base_resume_path", lambda cfg: saved)
+    reply = client.post("/tailor/start", data={"jd_text": JD, "use_saved": "1"},
+                        content_type="multipart/form-data")
+    assert reply.get_json()["ok"], reply.get_json()
+    folder, resume_path = client.started[0][0], client.started[0][1]
+    assert resume_path.read_bytes() == saved.read_bytes() and resume_path.parent == folder / "inputs"
+
+
+def test_a_job_run_puts_its_files_where_the_job_page_looks(tmp_path, no_word, no_network, monkeypatch):
+    monkeypatch.setattr("ml.resume.tailor.complete", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pipeline, "JOBS", tmp_path / "jobs")
+    folder = tmp_path / "run"; folder.mkdir()
+    target = tmp_path / "output" / "acme_platform-engineer.docx"
+    pipeline.remember_job_run(42, folder, target)
+    pipeline.run(folder, sample_resume(tmp_path / "r.docx"), JD, None, None, use_model=False)
+    pipeline.place_for_job(folder, target)
+    assert target.exists() and target.with_suffix(".pdf").exists()
+    assert pipeline.job_run(42) == "run" and pipeline.job_of_run(folder)["job_id"] == 42

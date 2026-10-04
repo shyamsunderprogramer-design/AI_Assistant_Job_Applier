@@ -16,7 +16,7 @@
     {%- elif job.basis == 'title' %}<b title="This came from a job alert, which carries no job description. The score is measured against the title alone.">~{{ job.score }}% on title only</b>
     {%- else %}Fit <b>{{ job.score }}%</b>{% endif %}</span>
   <span id="req-score" hidden>Requirements met <b id="req-num"></b>
-    <a href="/tailor?job={{ job.id }}" title="Open Resume Tailoring with this posting filled in: full match report, gaps and a tailored resume">Tailor ↗</a></span>
+    <a href="/tailor?job={{ job.id }}&start=1" title="Open Resume Tailoring with this posting filled in: full match report, gaps and a tailored resume">Tailor ↗</a></span>
   <span>Posted <b>{{ job.age }}</b></span>
   {% if job.workplace %}<span>Workplace <b>{{ job.workplace }}</b></span>{% endif %}
   {% if job.experience %}<span>Wants <b>{{ job.experience }}</b></span>{% endif %}
@@ -113,11 +113,12 @@
           best writing and do not mind four steps.
           {% if writer.free %}
             The second button runs <b>{{ writer.model }}</b> {{ writer.where }} at no
-            extra cost, taking {{ writer.takes }} — that is the one for doing
-            thirty in a day.
+            extra cost: it matches every requirement in the posting to your resume,
+            writes the tailored resume, checks its pages and lists the gaps —
+            about five to ten minutes.
           {% else %}
-            The second button uses <b>{{ writer.model }}</b> and <b>charges per
-            letter</b>. A model on this machine does the same job for nothing —
+            The second button uses <b>{{ writer.model }}</b> and <b>is charged per
+            call</b> — a few calls per resume. A model on this machine does the same job for nothing —
             <a href="{{ url_for('setup_form') }}">choose one in Settings</a>.
           {% endif %}
           Both go through the same guard.
@@ -154,11 +155,6 @@
               <span class="hint" id="used-say"></span></div>
           </div>
           <div class="ats-say" id="ats-say"></div>
-          <div class="row" id="align-row" style="margin-top:8px" hidden>
-            <button class="btn primary" id="align"
-              title="Write it again, aiming higher: brings back what your resume has and frames your own tools in the posting's words. Never adds a tool. The better version is kept.">Rewrite again</button>
-            <span class="hint">Not happy with it? Press again as often as you like — only your own tools and work, and the better version is always kept.</span>
-          </div>
         </div>
         <details class="fold" id="fold-resume">
           <summary>Prompt, and where the reply goes</summary>
@@ -170,6 +166,7 @@
           <div class="pbar-track"><div class="pbar-fill" id="bar-resume-fill"><i class="pbar-dot"></i></div></div>
           <div class="pbar-label"><span id="bar-resume-label">Starting…</span><b id="bar-resume-pct">0%</b></div>
         </div>
+        <div class="req-result" id="req-result" hidden></div>
         <div class="out" id="out-resume" hidden></div>
       </div>
     </li>
@@ -352,29 +349,89 @@ document.querySelectorAll('[data-brief]').forEach(b => b.addEventListener('click
 let tailorConfirmed = false;
 document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
   const button = e.currentTarget;
-  button.disabled = true;
-
   if (!WRITER_FREE && !tailorConfirmed) {
-    show('out-resume', 'Checking what this would cost…');
-    const est = await ask(`/job/${JOB}/tailor?estimate=1`, {method: 'POST'});
-    button.disabled = false;
-    show('out-resume', (est.output || est.error || '')
-         + '\n\nPress again to go ahead.', 'good');
-    button.textContent = 'Yes, write it';
+    show('out-resume', `This uses ${WRITER_MODEL}, which is charged per call — a few calls for one resume. Press again to go ahead.`, 'good');
+    button.textContent = 'Yes, tailor it';
     tailorConfirmed = true;
     return;
   }
-
-  show('out-resume', `Writing it with ${WRITER_MODEL}${WRITER_FREE ? ' ' + WRITER_WHERE : ''}, aiming for an 80% match — up to three rounds, a few minutes…`);
-  const stopBar = followBar();
-  const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 1500000);
-  stopBar(d.ok);
-  button.disabled = false;
-  button.textContent = WRITER_LABEL;
   tailorConfirmed = false;
-  show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
-  if (d.ok) { $('step-resume').classList.add('done'); countDone(); refreshDocs(); }
+  button.disabled = true;
+  $('out-resume').hidden = true; $('req-result').hidden = true;
+  const r = await ask(`/job/${JOB}/tailor-full`, {method: 'POST'});
+  if (!r.ok) {
+    button.disabled = false; button.textContent = WRITER_LABEL;
+    show('out-resume', r.error, 'bad');
+    return;
+  }
+  followRun(r.run, button);
 });
+
+// Follow a tailoring run with the bar, then show what it found.
+function followRun(run, button) {
+  const STAGES = 6;
+  let status = null;
+  if (button) button.disabled = true;
+  const stopBar = followBar(async () => {
+    status = await ask(`/tailor/${run}/status`);
+    if (!status.ok) return null;
+    const stage = Math.min(status.stage || 0, STAGES - 1);
+    const name = (status.stages || [])[stage] || 'working';
+    return {pct: stage / STAGES * 100, upto: (stage + 1) / STAGES * 100 - 0.5,
+            label: `Step ${stage + 1} of ${STAGES}: ${name}${status.note ? ' — ' + status.note : ''}`,
+            done: status.done};
+  }, async finished => {
+    if (button) { button.disabled = false; button.textContent = WRITER_LABEL; }
+    if (status && status.error) {
+      show('out-resume', status.error.message, 'bad');
+      return false;
+    }
+    await showRun(run);
+    $('step-resume').classList.add('done'); countDone(); refreshDocs();
+    return true;
+  });
+}
+
+async function showRun(run) {
+  const d = await ask(`/tailor/${run}/result`);
+  if (!d.ok) return;
+  const m = d.report.matches || [];
+  const count = s => m.filter(x => x.status === s).length;
+  const missing = m.filter(x => x.requirement.priority === 'required' && (x.status === 'not_found' || x.status === 'unclear'))
+                   .map(x => x.requirement.original);
+  const problems = (d.checks || []).filter(c => c.severity === 'problem');
+  $('req-result').innerHTML = `
+    <div class="ats-head"><b>Requirements met</b><span class="ats-nums"><b>${Math.round(d.score)}%</b></span></div>
+    <div class="ats-bar"><span class="${d.score >= 75 ? 'good' : d.score >= 55 ? 'ok' : 'low'}" style="width:${d.score}%"></span></div>
+    <div class="ats-list">${count('direct')} shown directly · ${count('related')} related · ${count('unclear')} unclear · ${count('not_found')} not found</div>
+    ${missing.length ? `<div class="ats-list muted">Required, not shown in your resume: ${missing.slice(0, 8).map(short).map(esc).join(' · ')}${missing.length > 8 ? ` · and ${missing.length - 8} more` : ''}</div>` : ''}
+    ${d.draft_note ? `<div class="ats-list muted">${esc(d.draft_note)}</div>` : ''}
+    ${problems.length ? `<div class="ats-list bad">Page check: ${problems.length} problem(s) — see the full report.</div>` : ''}
+    <div class="row" style="margin-top:6px"><a class="btn" href="/tailor?run=${run}" target="_blank" rel="noopener">Full report, gaps and editing ↗</a>
+      <span class="hint" title="${esc(d.score_note)}">An estimate: required items weigh 3, preferred 1.</span></div>`;
+  $('req-result').hidden = false;
+}
+
+// A requirement as a short phrase: the posting's sentence can run to forty
+// words, and the full one is in the report.
+function short(s) {
+  const words = String(s || '').replace(/''/g, "'").replace(/[.;:,]+$/, '').split(/\s+/);
+  return words.length > 8 ? words.slice(0, 8).join(' ') + '…' : words.join(' ');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+// A run already made or still going for this job: show it, or pick it up.
+(async () => {
+  const j = await ask(`/job/${JOB}/tailored`);
+  if (!j.ok || !j.run) return;
+  const s = await ask(`/tailor/${j.run}/status`);
+  if (!s.ok) return;
+  if (!s.done) followRun(j.run, document.querySelector('[data-tailor]'));
+  else if (!s.error) showRun(j.run);
+})();
 
 // The letter, written by the same model and checked by the same guard.
 let letterConfirmed = false;
@@ -454,9 +511,6 @@ async function refreshAts() {
   $('ats-concepts-row').hidden = !(a.concepts || []).length;
   chips('ats-concepts', a.concepts || []);
   $('ats-gaps-row').hidden = !(a.tools || []).length;
-  // Always offered once there is a resume: the person may want new wording
-  // even at 85%, and a worse rewrite is never kept anyway.
-  $('align-row').hidden = false;
   const target = 80;
   // What it asked for that the resume lacks: tools and kinds of work first,
   // else the posting's other missing words, so the ceiling is never unexplained.
@@ -464,7 +518,7 @@ async function refreshAts() {
   $('ats-say').textContent = a.after >= target
     ? `Reached the ${target}% target.`
     : (a.fixable.length || (a.concepts || []).length)
-      ? `Below the ${target}% target — Rewrite again can still raise it.`
+      ? `Below the ${target}% keyword target — the requirement match below is the fuller measure.`
       : `${a.after}% is the best honest match for this job` + (more.length
           ? ` — it asks for ${more.slice(0, 6).join(', ')}, which your resume does not show.`
           : ` — what is left is the posting's general wording, not skills your resume lacks. This resume is ready to send.`);
@@ -507,16 +561,6 @@ $('used-save').addEventListener('click', async () => {
   if (r.ok) { setTimeout(() => { $('used-form').hidden = true; }, 4000); refreshAts(); }
 });
 
-$('align')?.addEventListener('click', async e => {
-  const button = e.currentTarget; button.disabled = true;
-  show('out-resume', `Rewriting with ${WRITER_MODEL}, aiming for 80% — up to three rounds, a few minutes…`);
-  const stopBar = followBar();
-  const d = await ask(`/job/${JOB}/align`, {method: 'POST'}, 1500000);
-  stopBar(d.ok);
-  button.disabled = false;
-  show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
-  if (d.ok) refreshDocs();
-});
 
 function countDone() {
   const steps = document.querySelectorAll('.step');
@@ -555,9 +599,8 @@ countDone();
 // The progress bar: follows the rewrite's own steps (written by the command
 // as it goes), and eases toward the next step while a slow one runs, so it
 // never sits still and never runs ahead of the work.
-function followBar() {
+function followBar(read, finish) {
   const bar = $('bar-resume'), fill = $('bar-resume-fill');
-  const since = Date.now() / 1000 - 2;
   let shown = 0, target = 2, ceiling = 8, label = 'Starting…', stopped = false;
   bar.hidden = false; bar.classList.remove('done', 'failed');
   const draw = () => {
@@ -566,26 +609,33 @@ function followBar() {
     $('bar-resume-label').textContent = label;
     bar.setAttribute('aria-valuenow', Math.floor(shown));
   };
-  const poll = setInterval(async () => {
-    const p = await ask(`/job/${JOB}/progress`).catch(() => null);
-    if (p && p.ok && p.at >= since && !p.done) {
-      target = Math.max(target, p.pct); ceiling = Math.max(ceiling, p.upto - 0.5); label = p.label;
-    }
-  }, 1500);
-  const tick = setInterval(() => {
-    if (stopped) return;
-    if (shown < target) shown += Math.max(0.4, (target - shown) * 0.25);
-    else if (shown < ceiling) shown += (ceiling - shown) * 0.012;     // creep, never past the step
-    draw();
-  }, 200);
-  draw();
-  return ok => {
+  const end = ok => {
     stopped = true; clearInterval(poll); clearInterval(tick);
     if (ok) { shown = 100; label = 'Done'; bar.classList.add('done'); }
     else { label = 'Stopped — see the message below'; bar.classList.add('failed'); }
     draw();
     setTimeout(() => { bar.hidden = true; }, ok ? 4000 : 15000);
   };
+  let busy = false;
+  const poll = setInterval(async () => {
+    if (busy || stopped) return;
+    busy = true;
+    const p = await read().catch(() => null);
+    busy = false;
+    if (!p) return;
+    target = Math.max(target, p.pct); ceiling = Math.max(ceiling, p.upto); label = p.label;
+    if (p.done) { clearInterval(poll); end(await finish(true)); }
+  }, 1500);
+  // Creep toward the next step, never past it, paced for the slowest one:
+  // a model step takes minutes, and a bar that reaches the edge and sits
+  // there reads as stuck.
+  const tick = setInterval(() => {
+    if (stopped) return;
+    if (shown < target) shown += Math.max(0.4, (target - shown) * 0.25);
+    else if (shown < ceiling) shown += (ceiling - shown) * 0.0035;
+    draw();
+  }, 200);
+  draw();
 }
 
 // A teaser from an aggregator: the person pastes the real posting over it.

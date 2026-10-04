@@ -1188,6 +1188,8 @@ def job_posting(job_id: int):
     from ml.resume.pipeline import score_jobs
     from ml.resume.scorer import score_basis
     text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
+    # Text copied out of some pages carries apostrophes doubled ("You''ll").
+    text = text.replace("''", "'")
     if score_basis(text) != "full":
         return jsonify(ok=False, error="That is still too short to be the full posting — paste the "
                                        "whole job description, responsibilities and requirements included."), 400
@@ -1204,6 +1206,47 @@ def job_posting(job_id: int):
     except Exception as exc:
         return jsonify(ok=True, said=f"Saved. Scoring failed ({type(exc).__name__}); press Re-score later.")
     return jsonify(ok=True, said="Saved and scored against the full posting.")
+
+
+@app.post("/job/<int:job_id>/tailor-full")
+def job_tailor_full(job_id: int):
+    """Resume Tailoring for this job: the saved resume against its posting.
+
+    Runs in the background like the Tailor page; when the files are made they
+    become this job's tailored resume, so View PDF and the keyword check use them.
+    """
+    from ml.resume.pipeline import base_resume_path
+    from ml.resume.writer import output_filename
+    from ml.resume.packet import packet_root
+    from ml.tailoring.pipeline import (new_run, place_for_job, remember_job_run, save_saved_resume,
+                                       start)
+    teaser = _teaser_words(job_id)
+    if teaser is not None:
+        return jsonify(ok=False, error=(
+            f"This posting is only a {teaser}-word teaser from the job board, so there is nothing "
+            f"to tailor to. Paste the full posting in the box at the top of this page first.")), 400
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        jd = f"{job.title}\n\n{job.description or ''}"
+        target = packet_root(cfg()) / output_filename(job.company, job.title, job.external_id or "")
+    try:
+        saved = base_resume_path(cfg())
+    except FileNotFoundError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    folder = new_run()
+    resume = save_saved_resume(folder, saved)
+    remember_job_run(job_id, folder, target)
+    start(folder, resume, jd, None, cfg(), after=lambda result: place_for_job(folder, target))
+    return jsonify(ok=True, run=folder.name)
+
+
+@app.get("/job/<int:job_id>/tailored")
+def job_tailored(job_id: int):
+    """This job's last tailoring run, so the page can show it or follow it."""
+    from ml.tailoring.pipeline import job_run
+    return jsonify(ok=True, run=job_run(job_id))
 
 
 @app.get("/job/<int:job_id>/progress")
@@ -1782,7 +1825,16 @@ def tailor_page():
         with get_session() as session:
             job = session.get(Job, int(request.args["job"]))
             jd = (f"{job.title}\n\n{job.description or ''}") if job else ""
-    return render_template("tailor.html", accepted=",".join(TAILOR_TYPES), jd=jd)
+    # From a job page the person's saved resume is used, so one press starts it.
+    saved = ""
+    if jd:
+        try:
+            from ml.resume.pipeline import base_resume_path
+            saved = base_resume_path(cfg()).name
+        except Exception:
+            saved = ""
+    return render_template("tailor.html", accepted=",".join(TAILOR_TYPES), jd=jd, saved=saved,
+                           autostart=bool(jd and saved and request.args.get("start")))
 
 
 @app.post("/tailor/start")
@@ -1791,9 +1843,12 @@ def tailor_start():
     resume = request.files.get("resume")
     jd_file = request.files.get("jd_file")
     jd_text = (request.form.get("jd_text") or "").strip()
-    if resume is None or not resume.filename:
+    use_saved = (resume is None or not resume.filename) and request.form.get("use_saved") == "1"
+    if use_saved:
+        resume = None
+    elif resume is None or not resume.filename:
         return jsonify(ok=False, file="resume", error="Choose your resume (.docx or .pdf) first."), 400
-    if Path(resume.filename).suffix.lower() not in TAILOR_TYPES:
+    if resume is not None and Path(resume.filename).suffix.lower() not in TAILOR_TYPES:
         return jsonify(ok=False, file="resume",
                        error=f"{resume.filename}: use a .docx or .pdf resume."), 400
     has_jd_file = jd_file is not None and bool(jd_file.filename)
@@ -1803,7 +1858,17 @@ def tailor_start():
         return jsonify(ok=False, file="job",
                        error=f"{jd_file.filename}: use a .docx, .pdf or .txt job description."), 400
     folder = new_run()
-    resume_path, jd_path = save_inputs(folder, resume, jd_file if has_jd_file else None)
+    if use_saved:
+        from ml.resume.pipeline import base_resume_path
+        from ml.tailoring.pipeline import save_saved_resume
+        try:
+            saved = base_resume_path(cfg())
+        except FileNotFoundError as exc:
+            return jsonify(ok=False, file="resume", error=str(exc)), 400
+        resume_path = save_saved_resume(folder, saved)
+        _, jd_path = save_inputs(folder, None, jd_file if has_jd_file else None)
+    else:
+        resume_path, jd_path = save_inputs(folder, resume, jd_file if has_jd_file else None)
     start(folder, resume_path, jd_text, jd_path, cfg())
     return jsonify(ok=True, run=folder.name)
 
@@ -1884,5 +1949,10 @@ def tailor_edit(run_id):
         data = apply_edits(folder, edits)
     except Exception as exc:
         return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+    # A run made for a saved job: its edited files are that job's resume too.
+    from ml.tailoring.pipeline import job_of_run, place_for_job
+    owner = job_of_run(folder)
+    if owner:
+        place_for_job(folder, Path(owner["docx"]))
     data.pop("folder", None)
     return jsonify(ok=True, **data)
