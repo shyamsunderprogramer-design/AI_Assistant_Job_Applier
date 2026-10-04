@@ -154,6 +154,9 @@ http:
   # Minimum seconds between requests to the SAME host, plus random jitter.
   min_delay_seconds: 1.5
   jitter_seconds: 0.75
+  # Hosts that need a longer gap. Workable refused 56 boards in one run at 1.5s.
+  host_delays:
+    apply.workable.com: 4.0
   max_retries: 3
   backoff_base_seconds: 2.0
   # A 401/403 on robots.txt means the file is UNAVAILABLE, not that everything
@@ -308,6 +311,15 @@ discovery:
   # One name variant (not two) for systems where every company shares one
   # host: each guess waits out that host's delay, and the second variant found
   # only 2.6% of boards. Roughly doubles the probe's speed.
+  # Seconds between board-finding probes to one host (the daily scrape keeps
+  # http.min_delay_seconds). A probe is one small request, and at 1.5s the
+  # shared hosts set the pace: about 1,800 names an hour, eight days for the
+  # list. A 429 still cools the host off for rate_limit_cooldown_seconds.
+  probe_delay_seconds: 0.5
+  probe_jitter_seconds: 0.25
+  # Names probed side by side. Each host keeps its own pacing, so this asks
+  # no host faster; it only stops one slow host holding up every other.
+  name_workers: 6
   single_variant_sources: ["greenhouse", "lever", "ashby", "workable", "jobvite"]
   probe_sources: ["greenhouse", "lever", "ashby", "workable", "recruitee", "teamtailor", "bamboohr", "breezy", "jazzhr", "jobvite"]
   # Suffixes stripped when deriving a slug from a company name.

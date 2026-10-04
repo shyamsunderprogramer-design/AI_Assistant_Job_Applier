@@ -1,0 +1,27 @@
+PRIYA NAIR
+Chicago, IL · priya.nair@example.com · (555) 010-0142 · linkedin.com/in/priya-nair-example
+
+OBJECTIVE
+Data analyst with 5 years turning messy operational data into decisions for retail and logistics teams.
+
+TECHNICAL SKILLS
+Languages: Python (pandas, NumPy), SQL, R
+BI & Visualisation: Tableau, Power BI, Looker
+Data: Snowflake, BigQuery, dbt, Airflow, Excel (Power Query)
+Methods: A/B testing, forecasting, regression, cohort analysis
+
+WORK HISTORY
+SENIOR DATA ANALYST, NORTHLINE LOGISTICS, CHICAGO, IL     Jan 2023 – Present
+- Built a Snowflake and dbt model of delivery times used by 30 regional managers, cutting late deliveries by 18%.
+- Designed Tableau dashboards for weekly operations reviews, replacing 14 manual Excel reports.
+- Ran A/B tests on routing rules that saved $1.2M a year in fuel costs.
+- Automated data refreshes with Airflow, reducing reporting delays from 2 days to 2 hours.
+DATA ANALYST, CORNER MARKET CO., EVANSTON, IL     Jun 2020 – Dec 2022
+- Forecast weekly demand for 400 stores in Python, improving forecast accuracy by 22%.
+- Built cohort analyses in SQL that showed loyalty members spend 35% more per visit.
+- Presented monthly findings to the VP of Merchandising.
+- Coordinated the holiday gift drive for the Evanston office.
+
+EDUCATION
+M.S. Business Analytics, University of Illinois Chicago     2018 – 2020
+B.A. Economics, University of Illinois Chicago     2014 – 2018

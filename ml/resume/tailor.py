@@ -185,6 +185,8 @@ class TailorResult:
     # Set by fit.fit_to_pages, which enforces a per-role floor of its own; the
     # writer's blunter per-section cap then stands aside.
     fitted: bool = False
+    # Lines the person edited in the preview: final text -> their text ("" removes it).
+    overrides: dict = field(default_factory=dict)
 
     @property
     def accepted(self) -> bool:
@@ -221,6 +223,7 @@ def tailor_resume(
     cfg=None,
     focus_terms: list[str] | None = None,
     frame_terms: list[str] | None = None,
+    guidance: str | None = None,
 ) -> TailorResult:
     """Tailor the resume with the configured model, then verify it invented nothing.
 
@@ -229,6 +232,10 @@ def tailor_resume(
     so that a daily run and a manual run can never disagree about it.
     """
     user_prompt = build_prompt(resume, job_title, company, jd_text)
+    if guidance:
+        # From Resume Tailoring: what the match report found, and its writing
+        # rules. It informs emphasis; the rules above still decide what is allowed.
+        user_prompt += "\n\n" + guidance.strip()
     if frame_terms:
         user_prompt += (
             "\n\n# The posting's words for kinds of work (rule 7)\n"

@@ -227,11 +227,19 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
     # discoverer holds an in-memory cache of (source, slug) pairs it has
     # already decided about, and rebuilding it every two hundred names would
     # throw that away.
-    client = PoliteClient(HttpSettings.from_config(cfg))
+    from dataclasses import replace
+    settings = HttpSettings.from_config(cfg)
+    settings = replace(
+        settings,
+        min_delay_seconds=float(cfg.get("discovery.probe_delay_seconds", settings.min_delay_seconds)),
+        jitter_seconds=float(cfg.get("discovery.probe_jitter_seconds", settings.jitter_seconds)),
+    )
+    client = PoliteClient(settings)
     discoverer = CompanyDiscoverer(
         scrapers=build_scrapers(cfg, client),
         strip_suffixes=cfg.get("discovery.strip_suffixes", []),
         single_variant=set(cfg.get("discovery.single_variant_sources", [])),
+        name_workers=int(cfg.get("discovery.name_workers", 1)),
     )
 
     for start in range(resume_at, total, batch):
@@ -339,6 +347,10 @@ def stop() -> int:
 
 
 def main(argv: list[str]) -> int:
+    # `kill -USR1 <pid>` writes every thread's stack to the log: a run that
+    # sits still for an hour can then say where, instead of being guessed at.
+    import faulthandler
+    faulthandler.register(signal.SIGUSR1, file=open(LOG, "a"), all_threads=True)
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--names", type=Path, default=NAMES)
     ap.add_argument("--batch", type=int, default=BATCH)

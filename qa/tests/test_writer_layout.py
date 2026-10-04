@@ -198,3 +198,31 @@ def test_a_section_never_gives_up_more_than_half():
                  lines=["SENIOR PLATFORM ENGINEER, ACME CORP\tFeb 2025 - Present", *body])
     kept = [t for k, t in plan if k == "bullet"]
     assert len(kept) >= 2, "the whole job was gutted"
+
+
+
+def test_the_linkedin_address_is_the_linked_word_linkedin():
+    from ml.resume.writer import contact_link
+    assert contact_link("linkedin.com/in/jordan-example") == ("LinkedIn", "https://linkedin.com/in/jordan-example")
+    assert contact_link("https://www.linkedin.com/in/x") == ("LinkedIn", "https://www.linkedin.com/in/x")
+    assert contact_link("jordan@example.com") == ("jordan@example.com", None)
+
+
+def test_body_text_is_justified_and_the_bullet_gap_fixed(tmp_path):
+    """Justified body text; a fixed en space after the bullet, which Word does not stretch."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from ml.resume.parser import parse_resume
+    from ml.resume.tailor import TailorResult
+    from ml.resume.writer import write_tailored_resume
+    src = tmp_path / "in.docx"
+    d = Document()
+    d.add_paragraph("Jordan Example")
+    d.add_paragraph("Experience")
+    d.add_paragraph("Engineer, Acme   2019 – 2023")
+    d.add_paragraph("• Built deployment pipelines for forty services across three regions.")
+    d.save(src)
+    out = write_tailored_resume(parse_resume(src), TailorResult(summary=None), tmp_path / "out.docx")
+    bullet = next(p for p in Document(str(out)).paragraphs if p.text.startswith("•"))
+    assert bullet.alignment == WD_ALIGN_PARAGRAPH.JUSTIFY
+    assert bullet.text.startswith("• ") and " " not in bullet.text

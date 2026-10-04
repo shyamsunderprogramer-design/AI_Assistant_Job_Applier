@@ -15,6 +15,7 @@ from backend.config.loader import PROJECT_ROOT
 from data_engineering.db.models import Job, utcnow
 from data_engineering.db.session import get_session
 from backend.core.jobage import age_days
+from ml.resume import progress
 from ml.resume.parser import Resume, find_base_resume, parse_resume
 from ml.resume.scorer import score_basis, score_resume
 from ml.resume.writer import output_filename, write_review_note, write_tailored_resume
@@ -71,6 +72,13 @@ class JobOutcome:
 
 
 def load_base_resume(cfg) -> Resume:
+    path = base_resume_path(cfg)
+    log.info("Base resume: %s", path)
+    from ml.resume.additions import apply
+    return apply(parse_resume(path))        # plus what the person added from job pages
+
+
+def base_resume_path(cfg) -> Path:
     configured = cfg.get("resume.base_path")
     path = Path(configured) if configured else None
     if path and not path.is_absolute():
@@ -83,8 +91,7 @@ def load_base_resume(cfg) -> Resume:
                 "or set resume.base_path in config.yaml."
             )
         path = found
-    log.info("Base resume: %s", path)
-    return parse_resume(path)
+    return path
 
 
 
@@ -151,7 +158,17 @@ def tailor_to_target(cfg, job_id: int, *, again: bool = False) -> tuple[list[Job
     outcomes: list[JobOutcome] = []
     ats = None
     scores: list[int] = []
+    progress.begin(job_id, rounds)
+    try:
+        return _rounds(cfg, job_id, again, rounds, target, outcomes, scores, check)
+    finally:
+        progress.finish()
+
+
+def _rounds(cfg, job_id, again, rounds, target, outcomes, scores, check):
+    ats = None
     for attempt in range(rounds):
+        progress.next_round(attempt)
         done = tailor_jobs(cfg, [job_id], align=again or attempt > 0)
         outcomes += done
         if not done or done[-1].status not in ("tailored", "kept-previous"):
@@ -159,6 +176,7 @@ def tailor_to_target(cfg, job_id: int, *, again: bool = False) -> tuple[list[Job
         with get_session() as session:
             job = session.get(Job, job_id)
             session.expunge(job)
+        progress.step("checking")
         ats = check(cfg, job)
         scores.append(ats["after"] or 0)
         log.info("Round %d for %s — %s: ATS match %s%%", attempt + 1, job.company, job.title,
@@ -187,15 +205,43 @@ def target_summary(ats: dict | None) -> str:
     why = (f" This posting asks for {', '.join(missing[:6])}, which your resume does not show."
            if missing else " What is left is the posting's general wording, not skills your "
            "resume lacks — this resume is ready to send.")
-    return (head + f" — {ats['after']}% is the best honest match for this job." + why
-            + " Add real experience to your master resume to go higher, or press Rewrite again.")
+    advice = (" Add real experience to your master resume to go higher, or press Rewrite again."
+              if missing else "")
+    return head + f" — {ats['after']}% is the best honest match for this job." + why + advice
+
+
+RESULT_FIELDS = ("summary", "bullets", "skills_order", "omitted", "gaps", "fitted")
+
+
+def _save_result(result, target: Path) -> None:
+    """What was written, as data, so a kept version can be drawn again later."""
+    import json
+    data = {f: getattr(result, f, None) for f in RESULT_FIELDS}
+    target.with_name(target.stem + "_result.json").write_text(json.dumps(data, indent=1))
+
+
+def _redraw(resume, target: Path) -> bool:
+    """Draw a kept resume again with today's layout. False if it predates saving."""
+    import json
+    from ml.resume.tailor import TailorResult
+    saved = target.with_name(target.stem + "_result.json")
+    try:
+        data = json.loads(saved.read_text())
+    except (OSError, ValueError):
+        return False
+    result = TailorResult(summary=data.get("summary"))
+    for f in RESULT_FIELDS[1:]:
+        if data.get(f) is not None:
+            setattr(result, f, data[f])
+    _write_both(resume, result, target)
+    return True
 
 
 def _snapshot(target: Path) -> dict:
     """The current tailored files and their ATS match, to put back if a rewrite is worse."""
     import json
     files = [target, target.with_suffix(".pdf"), target.with_name(target.stem + "_review.txt"),
-             target.with_name(target.stem + "_ats.json")]
+             target.with_name(target.stem + "_ats.json"), target.with_name(target.stem + "_result.json")]
     saved = {f: f.read_bytes() for f in files if f.exists()}
     try:
         after = json.loads(saved[files[3]])["after"] if files[3] in saved else None
@@ -239,6 +285,7 @@ def _write_both(resume, result, target: Path) -> None:
     already succeeded.
     """
     write_tailored_resume(resume, result, target)
+    _save_result(result, target)
     try:
         from ml.resume.pdf import write_pdf
 
@@ -251,7 +298,7 @@ def _write_both(resume, result, target: Path) -> None:
 def score_jobs(
     cfg, limit: int = 0, rescore: bool = False, include_closed: bool = False,
     max_age_days: float = 0, remote_only: bool = False,
-    min_salary: int = 0, max_experience: int = 0,
+    min_salary: int = 0, max_experience: int = 0, job_ids: list[int] | None = None,
 ) -> list[JobOutcome]:
     """Score every open job against the base resume. No API calls, no cost.
 
@@ -268,7 +315,9 @@ def score_jobs(
         query = session.query(Job)
         if not include_closed:
             query = query.filter(Job.is_open.is_(True))
-        if not rescore:
+        if job_ids:
+            query = query.filter(Job.id.in_(job_ids))      # these, scored again
+        elif not rescore:
             query = query.filter(Job.ats_match_score.is_(None))
         jobs = query.order_by(Job.found_at.desc()).all()
         if max_age_days:
@@ -443,15 +492,11 @@ def accept_reply(cfg, job_id: int, reply_text: str) -> JobOutcome:
                               "rejected", result.guard.report(), None)
 
         _write_both(resume, result, target)
-        rescored = score_resume(
-            resume.text() + "\n" + result.tailored_text(),
-            job.description or job.title,
-            requirements=job.requirements,
-            company=job.company,
-        )
-        job.ats_match_score = rescored.score
-        job.exported_to_excel = False
-        return JobOutcome(job.id, job.company, job.title, rescored.score, "tailored",
+        # Fit stays what ranked the job -- coverage AND whether it is the
+        # person's field. Overwriting it with a keyword-only score of the
+        # tailored text moved Netflix from 65% to 77% for no reason a reader
+        # could see. How the tailored file matches is the ATS panel's job.
+        return JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0, "tailored",
                           f"{len(result.bullets)} bullets rewritten; "
                           f"{len(result.gaps)} gap(s) noted", target)
 
@@ -534,6 +579,7 @@ def tailor_jobs(
                 log.info("Aligning %s — %s: bringing back %s", job.company, job.title,
                          ", ".join(focus or ["nothing (none missing)"]))
             try:
+                progress.step("writing")
                 result = tailor_resume(
                     resume=resume,
                     job_title=job.title,
@@ -554,6 +600,7 @@ def tailor_jobs(
 
             note_path = out_dir / (target.stem + "_review.txt")
             previous = _snapshot(target)
+            progress.step("fitting")
             _fit(cfg, resume, result, job, focus)
             write_review_note(result, note_path)
             _note_framing(note_path, result, frame)
@@ -564,6 +611,7 @@ def tailor_jobs(
                     # turned the new one down, so the good one stays -- review
                     # note included, which the lines above just overwrote.
                     _restore(previous)
+                    _redraw(resume, target)
                     outcomes.append(JobOutcome(
                         job.id, job.company, job.title, job.ats_match_score or 0.0,
                         "kept-previous", "the rewrite claimed something your resume does not "
@@ -576,6 +624,7 @@ def tailor_jobs(
                 )
                 continue
 
+            progress.step("saving")
             _write_both(resume, result, target)
             from ml.resume.ats import check, summary
             ats = check(cfg, job, resume.text())
@@ -584,6 +633,8 @@ def tailor_jobs(
             # framed a new term and lost two others, 77% -> 74%.
             if previous["after"] is not None and (ats["after"] or 0) < previous["after"]:
                 _restore(previous)
+                if _redraw(resume, target):      # the kept content, in today's layout
+                    check(cfg, job, resume.text())
                 log.info("Kept the previous version: it matches the posting %s%%, this "
                          "rewrite only %s%%", previous["after"], ats["after"])
                 outcomes.append(JobOutcome(
@@ -599,18 +650,10 @@ def tailor_jobs(
                 if ats["gaps"]:
                     note.write("  Not in your resume at all: " + ", ".join(ats["gaps"]) + "\n")
 
-            # Re-score against the tailored text so the sheet reflects reality.
-            rescored = score_resume(
-                resume.text() + "\n" + result.tailored_text(),
-                job.description or job.title,
-                requirements=job.requirements,
-                company=job.company,
-            )
-            job.ats_match_score = rescored.score
-            job.exported_to_excel = False
-
+            # Fit is left as it was: see accept_reply. The ATS panel says how
+            # the tailored file matches.
             outcomes.append(
-                JobOutcome(job.id, job.company, job.title, rescored.score, "tailored",
+                JobOutcome(job.id, job.company, job.title, job.ats_match_score or 0.0, "tailored",
                            f"{len(result.bullets)} bullets rewritten; "
                            f"{len(result.gaps)} gap(s) noted", target)
             )

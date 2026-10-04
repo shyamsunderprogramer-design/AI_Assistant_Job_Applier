@@ -31,7 +31,16 @@ def init_engine(database_url: str) -> Engine:
         path.parent.mkdir(parents=True, exist_ok=True)
         database_url = f"sqlite:///{path}"
 
-    _engine = create_engine(database_url, future=True)
+    if database_url.endswith(":memory:"):
+        # One shared connection, said outright: an in-memory database exists
+        # only on the connection that made it, and the scraper's worker
+        # threads must see the same one. SQLAlchemy 2.1 changed its default
+        # pool here, and two tests began finding no tables.
+        from sqlalchemy.pool import StaticPool
+        _engine = create_engine(database_url, future=True, poolclass=StaticPool,
+                                connect_args={"check_same_thread": False})
+    else:
+        _engine = create_engine(database_url, future=True)
     _SessionFactory = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     Base.metadata.create_all(_engine)
     # create_all won't add a column to a table that already exists, so an

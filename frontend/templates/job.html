@@ -15,6 +15,8 @@
   <span>{% if job.score is none %}<b>Not scored yet</b>
     {%- elif job.basis == 'title' %}<b title="This came from a job alert, which carries no job description. The score is measured against the title alone.">~{{ job.score }}% on title only</b>
     {%- else %}Fit <b>{{ job.score }}%</b>{% endif %}</span>
+  <span id="req-score" hidden>Requirements met <b id="req-num"></b>
+    <a href="/tailor?job={{ job.id }}" title="Open Resume Tailoring with this posting filled in: full match report, gaps and a tailored resume">Tailor ↗</a></span>
   <span>Posted <b>{{ job.age }}</b></span>
   {% if job.workplace %}<span>Workplace <b>{{ job.workplace }}</b></span>{% endif %}
   {% if job.experience %}<span>Wants <b>{{ job.experience }}</b></span>{% endif %}
@@ -22,6 +24,37 @@
   <span>Board <b>{{ job.board }}</b></span>
   {% if job.location %}<span>{{ job.location }}</span>{% endif %}
 </div>
+
+{% if job.basis == 'title' %}
+<section class="card teaser" id="teaser">
+  <h2>This is only a teaser from {{ job.board|capitalize }}</h2>
+  <p class="hint">{{ job.board|capitalize }} gave {{ (description or '').split()|length }} words, not the real posting.
+    Tailoring and the match score need the full text. Open the posting, copy the whole job description,
+    paste it here and save.</p>
+  <textarea id="posting-text" rows="6" placeholder="Paste the full job posting here…" aria-label="Full posting"></textarea>
+  <div class="row"><a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">Open the posting</a>
+    <button class="btn primary" id="posting-save">Save the full posting</button>
+    <span class="hint" id="posting-say"></span></div>
+</section>
+{% endif %}
+
+<!-- The job first: read what it asks for before preparing anything. -->
+{% if requirements %}
+<section class="card">
+  <h2>What they ask for</h2>
+  <div class="jd">{{ requirements }}</div>
+</section>
+{% endif %}
+
+<section class="card">
+  {% if requirements %}
+  <details class="fold"><summary><h2 style="display:inline">Full posting</h2></summary>
+    <div class="jd">{{ description }}</div></details>
+  {% else %}
+  <h2>The posting</h2>
+  <div class="jd">{{ description }}</div>
+  {% endif %}
+</section>
 
 <section class="card">
   <div class="card-head">
@@ -109,6 +142,17 @@
             <span id="ats-concepts"></span></div>
           <div class="ats-list muted" id="ats-gaps-row" hidden>Tools you have not listed (never added):
             <span id="ats-gaps"></span></div>
+          <div class="used-form" id="used-form" hidden>
+            <div><b>Where did you use <span id="used-tool"></span>?</b></div>
+            <select id="used-role" aria-label="Job"></select>
+            <textarea id="used-line" rows="2" aria-label="What you did"
+              placeholder="One line about what you did with it, e.g. Used … to …"></textarea>
+            <label class="used-check"><input type="checkbox" id="used-true">
+              I have used this in real work, and this line is true.</label>
+            <div class="row"><button class="btn primary" id="used-save">Add to my resume</button>
+              <button class="btn" id="used-cancel">Cancel</button>
+              <span class="hint" id="used-say"></span></div>
+          </div>
           <div class="ats-say" id="ats-say"></div>
           <div class="row" id="align-row" style="margin-top:8px" hidden>
             <button class="btn primary" id="align"
@@ -122,6 +166,10 @@
           <textarea id="reply-resume" placeholder="Paste the reply here" aria-label="Reply"></textarea>
           <div class="row"><button class="btn primary" data-accept="resume">Check it and save</button></div>
         </details>
+        <div class="pbar" id="bar-resume" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100">
+          <div class="pbar-track"><div class="pbar-fill" id="bar-resume-fill"><i class="pbar-dot"></i></div></div>
+          <div class="pbar-label"><span id="bar-resume-label">Starting…</span><b id="bar-resume-pct">0%</b></div>
+        </div>
         <div class="out" id="out-resume" hidden></div>
       </div>
     </li>
@@ -186,17 +234,6 @@
   </ol>
 </section>
 
-{% if requirements %}
-<section class="card">
-  <h2>What they ask for</h2>
-  <div class="jd">{{ requirements }}</div>
-</section>
-{% endif %}
-
-<section class="card">
-  <h2>Full posting</h2>
-  <div class="jd">{{ description }}</div>
-</section>
 
 <script>
 const JOB = {{ job.id }};
@@ -329,7 +366,9 @@ document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
   }
 
   show('out-resume', `Writing it with ${WRITER_MODEL}${WRITER_FREE ? ' ' + WRITER_WHERE : ''}, aiming for an 80% match — up to three rounds, a few minutes…`);
+  const stopBar = followBar();
   const d = await ask(`/job/${JOB}/tailor`, {method: 'POST'}, 1500000);
+  stopBar(d.ok);
   button.disabled = false;
   button.textContent = WRITER_LABEL;
   tailorConfirmed = false;
@@ -413,7 +452,7 @@ async function refreshAts() {
   $('ats-fixable-row').hidden = !a.fixable.length;
   $('ats-fixable').textContent = a.fixable.slice(0, 15).join(', ');
   $('ats-concepts-row').hidden = !(a.concepts || []).length;
-  $('ats-concepts').textContent = (a.concepts || []).join(', ');
+  chips('ats-concepts', a.concepts || []);
   $('ats-gaps-row').hidden = !(a.tools || []).length;
   // Always offered once there is a resume: the person may want new wording
   // even at 85%, and a worse rewrite is never kept anyway.
@@ -429,14 +468,51 @@ async function refreshAts() {
       : `${a.after}% is the best honest match for this job` + (more.length
           ? ` — it asks for ${more.slice(0, 6).join(', ')}, which your resume does not show.`
           : ` — what is left is the posting's general wording, not skills your resume lacks. This resume is ready to send.`);
-  $('ats-gaps').textContent = (a.tools || []).slice(0, 15).join(', ');
+  chips('ats-gaps', (a.tools || []).slice(0, 15));
 }
 refreshAts();
+
+// Each missing tool or kind of work, with "I've used this" beside it.
+function chips(id, items) {
+  const box = $(id); box.textContent = '';
+  for (const item of items) {
+    const chip = document.createElement('span'); chip.className = 'gap';
+    chip.append(item + ' ');
+    const b = document.createElement('button'); b.className = 'linkish'; b.type = 'button';
+    b.textContent = "I've used this"; b.dataset.used = item;
+    chip.append(b); box.append(chip);
+  }
+}
+
+let usedRoles = null;
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-used]');
+  if (!b) return;
+  if (!usedRoles) {
+    const r = await ask('/resume/roles');
+    usedRoles = r.roles || [];
+    $('used-role').innerHTML = usedRoles.map(x => `<option>${x.replace(/[<>&]/g, '')}</option>`).join('');
+  }
+  $('used-tool').textContent = b.dataset.used;
+  $('used-line').value = ''; $('used-true').checked = false; $('used-say').textContent = '';
+  $('used-form').hidden = false; $('used-line').focus();
+});
+$('used-cancel').addEventListener('click', () => { $('used-form').hidden = true; });
+$('used-save').addEventListener('click', async () => {
+  const r = await ask('/resume/additions', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tool: $('used-tool').textContent, role: $('used-role').value,
+                          line: $('used-line').value, confirmed: $('used-true').checked})});
+  $('used-say').textContent = r.ok ? r.said : r.error;
+  $('used-say').className = 'hint ' + (r.ok ? 'good' : 'bad');
+  if (r.ok) { setTimeout(() => { $('used-form').hidden = true; }, 4000); refreshAts(); }
+});
 
 $('align')?.addEventListener('click', async e => {
   const button = e.currentTarget; button.disabled = true;
   show('out-resume', `Rewriting with ${WRITER_MODEL}, aiming for 80% — up to three rounds, a few minutes…`);
+  const stopBar = followBar();
   const d = await ask(`/job/${JOB}/align`, {method: 'POST'}, 1500000);
+  stopBar(d.ok);
   button.disabled = false;
   show('out-resume', d.output || d.error, d.ok ? 'good' : 'bad');
   if (d.ok) refreshDocs();
@@ -466,5 +542,62 @@ function countDone() {
   }
 }
 countDone();
+
+// The requirement-based score: the Tailor page's estimate, saved per job.
+(async () => {
+  const s = await ask(`/job/${JOB}/score`);
+  if (!s.ok || s.score == null) return;
+  $('req-num').textContent = Math.round(s.score) + '%';
+  $('req-score').title = s.note + (s.gaps && s.gaps.length ? '\nRequired, not shown: ' + s.gaps.join('; ') : '');
+  $('req-score').hidden = false;
+})();
+
+// The progress bar: follows the rewrite's own steps (written by the command
+// as it goes), and eases toward the next step while a slow one runs, so it
+// never sits still and never runs ahead of the work.
+function followBar() {
+  const bar = $('bar-resume'), fill = $('bar-resume-fill');
+  const since = Date.now() / 1000 - 2;
+  let shown = 0, target = 2, ceiling = 8, label = 'Starting…', stopped = false;
+  bar.hidden = false; bar.classList.remove('done', 'failed');
+  const draw = () => {
+    fill.style.width = shown.toFixed(1) + '%';
+    $('bar-resume-pct').textContent = Math.floor(shown) + '%';
+    $('bar-resume-label').textContent = label;
+    bar.setAttribute('aria-valuenow', Math.floor(shown));
+  };
+  const poll = setInterval(async () => {
+    const p = await ask(`/job/${JOB}/progress`).catch(() => null);
+    if (p && p.ok && p.at >= since && !p.done) {
+      target = Math.max(target, p.pct); ceiling = Math.max(ceiling, p.upto - 0.5); label = p.label;
+    }
+  }, 1500);
+  const tick = setInterval(() => {
+    if (stopped) return;
+    if (shown < target) shown += Math.max(0.4, (target - shown) * 0.25);
+    else if (shown < ceiling) shown += (ceiling - shown) * 0.012;     // creep, never past the step
+    draw();
+  }, 200);
+  draw();
+  return ok => {
+    stopped = true; clearInterval(poll); clearInterval(tick);
+    if (ok) { shown = 100; label = 'Done'; bar.classList.add('done'); }
+    else { label = 'Stopped — see the message below'; bar.classList.add('failed'); }
+    draw();
+    setTimeout(() => { bar.hidden = true; }, ok ? 4000 : 15000);
+  };
+}
+
+// A teaser from an aggregator: the person pastes the real posting over it.
+$('posting-save')?.addEventListener('click', async e => {
+  const button = e.currentTarget; button.disabled = true;
+  $('posting-say').textContent = 'Saving and scoring…';
+  const r = await ask(`/job/${JOB}/posting`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({text: $('posting-text').value})});
+  button.disabled = false;
+  $('posting-say').textContent = r.ok ? r.said : r.error;
+  $('posting-say').className = 'hint ' + (r.ok ? 'good' : 'bad');
+  if (r.ok) setTimeout(() => location.reload(), 1200);
+});
 </script>
 {% endblock %}

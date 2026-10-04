@@ -341,3 +341,76 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 .ats-list .btn{margin-left:6px}
 
 .ats-say{margin-top:6px;font-weight:500}
+
+.gap{display:inline-flex;align-items:center;gap:4px;margin:0 8px 4px 0}
+.linkish{font:inherit;font-size:.85em;background:none;border:0;color:var(--signal-ink);text-decoration:underline;cursor:pointer;padding:0}
+.used-form{margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);display:flex;flex-direction:column;gap:8px}
+.used-form select,.used-form textarea{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.used-check{display:flex;gap:6px;align-items:flex-start}
+.hint.good{color:var(--good)} .hint.bad{color:var(--crit)}
+
+/* -- Resume Tailoring ---------------------------------------------------------- */
+.t-grid{display:grid;grid-template-columns:1fr 2fr;gap:18px}
+@media (max-width:760px){.t-grid{grid-template-columns:1fr}}
+.t-label{display:block;font-weight:600;margin-bottom:6px}
+.t-file{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px}
+.t-name{color:var(--ink-2);overflow-wrap:anywhere}
+.t-field textarea{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);resize:vertical}
+.t-field.t-bad textarea,.t-field.t-bad .t-file .btn{border-color:var(--crit)}
+.t-error{color:var(--crit);margin-top:6px}
+.t-stages{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+.t-stages li{display:flex;align-items:center;gap:10px;color:var(--muted)}
+.t-stages li.done{color:var(--ink)} .t-stages li.now{color:var(--ink);font-weight:600} .t-stages li.fail{color:var(--crit)}
+.t-dot{width:10px;height:10px;border-radius:50%;border:2px solid var(--line);flex:none}
+.t-stages li.done .t-dot{background:var(--good);border-color:var(--good)}
+.t-stages li.now .t-dot{border-color:var(--signal);animation:t-pulse 1s infinite alternate}
+.t-stages li.fail .t-dot{background:var(--crit);border-color:var(--crit)}
+@keyframes t-pulse{from{background:transparent}to{background:var(--signal)}}
+.t-scorebar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:12px}
+.t-score{font-family:var(--cond);font-size:40px;font-weight:700;line-height:1}
+.t-downloads{margin-left:auto}
+.t-warn{background:color-mix(in srgb,var(--warn) 10%,transparent);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:8px;padding:8px 12px;margin:8px 0;display:grid;gap:4px}
+.t-warn pre{white-space:pre-wrap;max-height:300px;overflow:auto;font-size:.85em}
+.t-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:8px 0 14px;overflow-x:auto}
+.t-tab{font:inherit;background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.t-tab.on{color:var(--ink);border-bottom-color:var(--signal);font-weight:600}
+.t-pages{display:grid;gap:16px;justify-items:center}
+.t-page{margin:0;text-align:center} .t-page img{max-width:100%;width:760px;border:1px solid var(--line);box-shadow:0 2px 10px rgba(0,0,0,.08);background:#fff}
+.t-page figcaption{color:var(--muted);font-size:.85em}
+.chip.on{border-color:var(--signal);color:var(--signal-ink)}
+.t-table-wrap{overflow-x:auto}
+.t-table{border-collapse:collapse;width:100%;font-size:.92em}
+.t-table th,.t-table td{border-bottom:1px solid var(--hair);padding:8px;text-align:left;vertical-align:top}
+.t-table .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+.t-table q{quotes:"“" "”"}
+.t-why{margin-top:4px;color:var(--ink-2)}
+.t-formula{font-family:var(--mono);font-size:.9em;margin-top:10px}
+.t-list{padding-left:18px;display:grid;gap:8px}
+.t-before{color:var(--muted);text-decoration:line-through;white-space:pre-wrap;margin-top:4px}
+.t-after{white-space:pre-wrap;margin-top:4px}
+.t-ed{width:100%;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);margin:3px 0;resize:vertical}
+.t-ed-head{font-weight:700;margin-top:12px}
+.pill.bad{background:color-mix(in srgb,var(--crit) 16%,transparent);color:var(--crit)}
+.pill.muted{background:var(--sunk);color:var(--muted)}
+
+/* The hidden attribute always wins over a display rule. */
+[hidden]{display:none!important}
+
+/* Rewrite progress: a grey track, a moving rainbow fill, a glowing dot at its edge. */
+.pbar{margin:10px 0 6px}
+.pbar-track{height:8px;border-radius:99px;background:var(--hair);border:1px solid var(--line);overflow:hidden}
+.pbar-fill{position:relative;height:100%;width:0;border-radius:99px;transition:width .2s linear;
+  background:linear-gradient(90deg,#ff5f6d,#ffc371,#47e891,#3ec7e0,#7a6cff,#e06cff,#ff5f6d);
+  background-size:300% 100%;animation:pbar-flow 2.4s linear infinite}
+.pbar-dot{position:absolute;right:-1px;top:50%;width:10px;height:10px;margin-top:-5px;border-radius:50%;
+  background:#fff;box-shadow:0 0 0 2px rgba(122,108,255,.55),0 0 10px 3px rgba(62,199,224,.8);
+  animation:pbar-pulse 1s ease-in-out infinite}
+.pbar-label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-2);margin-top:5px}
+.pbar.done .pbar-fill{animation:none;background:#2e9e6a}
+.pbar.done .pbar-dot,.pbar.failed .pbar-dot{display:none}
+.pbar.failed .pbar-fill{animation:none;background:#c0504d}
+@keyframes pbar-flow{from{background-position:0 0}to{background-position:300% 0}}
+@keyframes pbar-pulse{0%,100%{transform:scale(.8);opacity:.8}50%{transform:scale(1.15);opacity:1}}
+@media (prefers-reduced-motion:reduce){.pbar-fill,.pbar-dot{animation:none}}
+.teaser{border-color:#e0b04a}
+.teaser textarea{width:100%;margin:8px 0;font:inherit}

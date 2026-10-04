@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -437,6 +438,10 @@ def job_detail(job_id: int):
         row = job_row(job)
         description = job.description or ""
         requirements = job.requirements or ""
+    # Many boards give no separate requirements, and the field holds the
+    # whole posting again: shown twice, the page opened on a wall of text.
+    if " ".join(requirements.split()) == " ".join((description or "").split()):
+        requirements = ""
 
     import os
 
@@ -1084,6 +1089,14 @@ def act(job_id: int, action: str):
         return jsonify(ok=False, error=f"Unknown action {action!r}"), 400
 
     args = list(commands[action])
+    if action in ("tailor", "align", "write-letter"):
+        teaser = _teaser_words(job_id)
+        if teaser is not None:
+            return jsonify(ok=False, error=(
+                f"This posting is only a {teaser}-word teaser from the job board, not the real "
+                f"posting, so there is nothing to tailor to — a rewrite would stay where it is. "
+                f"Open the posting, copy the full text, and paste it in “Paste the full posting” "
+                f"at the top of this page. Then press this again.")), 400
     if action == "tailor" and request.args.get("estimate"):
         args.insert(1, "--estimate")
 
@@ -1118,6 +1131,32 @@ def job_documents(job_id: int) -> dict[str, Path | None]:
     return found
 
 
+@app.get("/resume/roles")
+def resume_roles():
+    """The job lines of the master resume, for "I've used this"."""
+    from ml.resume.additions import roles
+    from ml.resume.pipeline import load_base_resume
+    try:
+        return jsonify(ok=True, roles=roles(load_base_resume(cfg())))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+
+
+@app.post("/resume/additions")
+def resume_add():
+    """Add one line of the person's own experience under one of their jobs."""
+    from ml.resume.additions import NotAdded, add
+    from ml.resume.pipeline import load_base_resume
+    data = request.get_json(silent=True) or {}
+    try:
+        entry = add(load_base_resume(cfg()), str(data.get("role") or ""), str(data.get("line") or ""),
+                    str(data.get("tool") or ""), bool(data.get("confirmed")))
+    except NotAdded as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, said=f"Added under {entry['role'].split('  ')[0]}. Every resume from now on "
+                                 f"can use it — press Rewrite again to use it for this job.")
+
+
 @app.get("/job/<int:job_id>/ats")
 def job_ats(job_id: int):
     """ATS keyword match: the person's resume, and the tailored PDF, against the posting."""
@@ -1129,6 +1168,63 @@ def job_ats(job_id: int):
         session.expunge(job)
     try:
         return jsonify(ok=True, **check(cfg(), job))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+
+
+def _teaser_words(job_id: int) -> int | None:
+    """The word count when a job holds only a board's teaser, else None."""
+    from ml.resume.scorer import score_basis
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None or score_basis(job.description) == "full":
+            return None
+        return len((job.description or "").split())
+
+
+@app.post("/job/<int:job_id>/posting")
+def job_posting(job_id: int):
+    """The full posting, pasted by the person over a board's teaser, then scored again."""
+    from ml.resume.pipeline import score_jobs
+    from ml.resume.scorer import score_basis
+    text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
+    if score_basis(text) != "full":
+        return jsonify(ok=False, error="That is still too short to be the full posting — paste the "
+                                       "whole job description, responsibilities and requirements included."), 400
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        # The content hash is left as the board's: a re-scrape of the same
+        # teaser then changes nothing, and the pasted posting stays.
+        job.description = text
+        job.requirements = None
+    try:
+        score_jobs(cfg(), job_ids=[job_id], include_closed=True)
+    except Exception as exc:
+        return jsonify(ok=True, said=f"Saved. Scoring failed ({type(exc).__name__}); press Re-score later.")
+    return jsonify(ok=True, said="Saved and scored against the full posting.")
+
+
+@app.get("/job/<int:job_id>/progress")
+def job_progress(job_id: int):
+    """How far the resume rewrite has got, for the progress bar."""
+    from ml.resume import progress
+    return jsonify(ok=True, **(progress.read(job_id) or {}))
+
+
+@app.get("/job/<int:job_id>/score")
+def job_score(job_id: int):
+    """The requirement-based match score (the Tailor page's), saved per job."""
+    from ml.resume.pipeline import base_resume_path
+    from ml.tailoring.pipeline import job_score as score
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        description = job.description or ""
+    try:
+        return jsonify(ok=True, **score(job_id, base_resume_path(cfg()), description, cfg()))
     except Exception as exc:
         return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
 
@@ -1669,3 +1765,124 @@ def _action_started(response, task: str, said: str, action_id: str):
         error = data.get("error") or f"A {task} run is already going — confirm again when it finishes."
         return jsonify(ok=False, error=error), code if code != 200 else 409
     return jsonify(ok=True, said=said, task=task)
+
+
+# -- Resume Tailoring --------------------------------------------------------------
+# Upload a resume and a job description; ml/tailoring runs the six stages in the
+# background and this page follows them, then shows the results tabs.
+
+TAILOR_TYPES = (".docx", ".pdf")
+
+
+@app.get("/tailor")
+def tailor_page():
+    # From a job page: the posting is filled in for the person.
+    jd = ""
+    if request.args.get("job", "").isdigit():
+        with get_session() as session:
+            job = session.get(Job, int(request.args["job"]))
+            jd = (f"{job.title}\n\n{job.description or ''}") if job else ""
+    return render_template("tailor.html", accepted=",".join(TAILOR_TYPES), jd=jd)
+
+
+@app.post("/tailor/start")
+def tailor_start():
+    from ml.tailoring.pipeline import new_run, save_inputs, start
+    resume = request.files.get("resume")
+    jd_file = request.files.get("jd_file")
+    jd_text = (request.form.get("jd_text") or "").strip()
+    if resume is None or not resume.filename:
+        return jsonify(ok=False, file="resume", error="Choose your resume (.docx or .pdf) first."), 400
+    if Path(resume.filename).suffix.lower() not in TAILOR_TYPES:
+        return jsonify(ok=False, file="resume",
+                       error=f"{resume.filename}: use a .docx or .pdf resume."), 400
+    has_jd_file = jd_file is not None and bool(jd_file.filename)
+    if not jd_text and not has_jd_file:
+        return jsonify(ok=False, file="job", error="Paste the job description or upload it as a file."), 400
+    if has_jd_file and Path(jd_file.filename).suffix.lower() not in (".docx", ".pdf", ".txt", ".md"):
+        return jsonify(ok=False, file="job",
+                       error=f"{jd_file.filename}: use a .docx, .pdf or .txt job description."), 400
+    folder = new_run()
+    resume_path, jd_path = save_inputs(folder, resume, jd_file if has_jd_file else None)
+    start(folder, resume_path, jd_text, jd_path, cfg())
+    return jsonify(ok=True, run=folder.name)
+
+
+def _tailor_run(run_id):
+    from ml.tailoring.pipeline import folder_of
+    folder = folder_of(run_id)
+    if folder is None:
+        return None
+    return folder
+
+
+@app.get("/tailor/<run_id>/status")
+def tailor_status(run_id):
+    folder = _tailor_run(run_id)
+    if folder is None:
+        return jsonify(ok=False, error="No such run."), 404
+    try:
+        return jsonify(ok=True, **json.loads((folder / "progress.json").read_text()))
+    except (OSError, ValueError):
+        return jsonify(ok=True, stage=0, done=False, error=None, note="")
+
+
+@app.get("/tailor/<run_id>/result")
+def tailor_result(run_id):
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    data = json.loads((folder / "result.json").read_text())
+    data.pop("folder", None)
+    return jsonify(ok=True, **data)
+
+
+@app.get("/tailor/<run_id>/download/<kind>")
+def tailor_download(run_id, kind):
+    folder = _tailor_run(run_id)
+    if folder is None or kind not in ("docx", "pdf"):
+        return jsonify(ok=False, error="No such file."), 404
+    path = folder / f"tailored-resume.{kind}"
+    if not path.exists():
+        return jsonify(ok=False, error="No such file."), 404
+    title = re.sub(r"[^\w -]+", "", json.loads((folder / "result.json").read_text()).get("title", ""))[:50]
+    return send_file(path, as_attachment=True,
+                     download_name=f"Tailored resume - {title or 'job'}.{kind}")
+
+
+@app.get("/tailor/<run_id>/page/<name>")
+def tailor_page_image(run_id, name):
+    folder = _tailor_run(run_id)
+    if folder is None or not re.fullmatch(r"(pdf|docx)-page\d+\.png", name):
+        return jsonify(ok=False, error="No such page."), 404
+    path = folder / "pages" / name
+    if not path.exists():
+        return jsonify(ok=False, error="No such page."), 404
+    return send_file(path, mimetype="image/png", max_age=0)
+
+
+@app.get("/tailor/<run_id>/lines")
+def tailor_lines(run_id):
+    from ml.tailoring.pipeline import editable_lines
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    return jsonify(ok=True, lines=editable_lines(folder))
+
+
+@app.post("/tailor/<run_id>/edit")
+def tailor_edit(run_id):
+    from ml.tailoring.pipeline import apply_edits
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    edits = (request.get_json(silent=True) or {}).get("edits") or {}
+    edits = {str(k): str(v) for k, v in edits.items() if isinstance(k, str)}
+    if not edits:
+        return jsonify(ok=False, error="Nothing was changed."), 400
+    try:
+        data = apply_edits(folder, edits)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+    data.pop("folder", None)
+    return jsonify(ok=True, **data)

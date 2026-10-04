@@ -66,7 +66,11 @@ FILLER = {"next", "part", "bring", "come", "challenges", "large", "additional", 
           "culture", "people", "members", "partners", "world", "experience",
           "cutting-edge", "founder", "founders", "entrepreneurs", "autonomy", "upside",
           "equity", "ownership", "mindset", "exceptional", "elite", "world-class",
-          "complete", "maximum", "highlights", "launching", "initiatives"}
+          "complete", "maximum", "highlights", "launching", "initiatives",
+          # how a posting talks about itself and the reader, not skills
+          "excellence", "seeks", "seeking", "professional", "professionals",
+          "responsibilities", "responsibility", "requirements", "qualifications",
+          "experienced", "platforms", "critical", "operational", "readiness"}
 
 
 def as_phrases(terms: list[str], jd_text: str) -> list[str]:

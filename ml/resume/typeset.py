@@ -23,9 +23,44 @@ def typeset(text: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
+def state_codes(text: str) -> str:
+    """"Kakinada, Ap, India" -> "Kakinada, AP, India": a state code between commas."""
+    return re.sub(r"(?<=, )([A-Z][a-z])(?=, [A-Z])", lambda m: m.group(1).upper(), text or "")
+
+
+# Model-flavoured words and the plain ones a person writes instead. Verb forms
+# only, matched as whole words, so "CPU utilization" and "leverage ratio" in a
+# finance line are left alone. Swapping a verb never changes what was done.
+PLAIN = [
+    (r"\bspearheaded\b", "led"), (r"\bspearheading\b", "leading"), (r"\bspearheads\b", "leads"),
+    (r"\bspearhead\b", "lead"),
+    (r"\butilized\b", "used"), (r"\butilizing\b", "using"), (r"\butilizes\b", "uses"),
+    (r"\butilize\b", "use"),
+    (r"\bleveraged\b", "used"), (r"\bleveraging\b", "using"),
+    (r"\brobust\b", "reliable"), (r"\bseamlessly\b", "smoothly"), (r"\bseamless\b", "smooth"),
+    (r"\bcutting-edge\b", "modern"), (r"\bacumen\b", "skills"),
+    (r"\bmeticulously\b", "carefully"), (r"\bmeticulous\b", "careful"),
+    (r"\bDynamic (?=[A-Z])", ""),        # "Dynamic Senior Engineer" -> "Senior Engineer"
+]
+
+
+def plain_words(text: str) -> str:
+    """Swap model-flavoured words for plain ones, keeping a capital where there was one."""
+    def swap(pattern: str, plain: str, value: str) -> str:
+        def repl(m):
+            word = m.group(0)
+            if not plain:
+                return ""
+            return plain[:1].upper() + plain[1:] if word[:1].isupper() else plain
+        return re.sub(pattern, repl, value, flags=re.I if not pattern.startswith(r"\bDynamic") else 0)
+    for pattern, plain in PLAIN:
+        text = swap(pattern, plain, text)
+    return text
+
+
 # Words that mark text as model-written. The prompts forbid introducing them;
 # the review note names any that got through.
-TELLS = ("spearhead", "leverag", "utiliz", "synerg", "dynamic ", "results-driven",
+TELLS = ("spearhead", "leverag", "utilize", "utilizing", "synerg", "dynamic ", "results-driven",
          "passionate", "cutting-edge", "seamless", "robust", "holistic", "delve",
          "acumen", "pivotal", "meticulous", "transformative", "proven track record",
          "fast-paced", "tapestry", "elevate", "empower", "adept")

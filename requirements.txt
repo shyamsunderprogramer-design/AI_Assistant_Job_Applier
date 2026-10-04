@@ -5,17 +5,18 @@
 # Phase 3 (resume tailoring)
 # Phase 4 (submission) — browser automation, unused in Phase 1
 PyYAML>=6.0
-SQLAlchemy>=2.0
-anthropic>=0.40
+SQLAlchemy>=2.1
+anthropic>=1.11
 flask>=3.1
 openpyxl>=3.1
 pandas>=2.2
-playwright>=1.48
-pypdf
-pypdf>=5.0
+playwright>=1.63
+pypdf>=6.19
 pytest>=8.0
 python-docx>=1.1
 python-dotenv>=1.0
 reportlab
 requests>=2.32
 mcp>=2.2,<3            # the assistant's job tools, for Claude Code (backend/assistant)
+pypdfium2>=5.8           # page images and text boxes for the tailoring checks
+ocrmac>=1.0; sys_platform == "darwin"   # OCR for scanned resumes (macOS Vision)

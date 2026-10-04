@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 from reportlab.lib.colors import Color
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
@@ -34,7 +34,7 @@ from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, HRFlowable,
 
 from ml.resume.parser import Resume
 from ml.resume.tailor import TailorResult
-from ml.resume.writer import _tidy_contact, plan_document
+from ml.resume.writer import _tidy_contact, contact_link, plan_document
 
 log = logging.getLogger(__name__)
 
@@ -155,10 +155,12 @@ def _styles() -> dict[str, ParagraphStyle]:
         # of the text, so wrapped lines start exactly where the first line's
         # words do. A fixed 22pt hang put them 12pt further right than that --
         # the ragged look that says a program laid this out.
-        "bullet": ParagraphStyle("bullet", parent=base,
-                                 leftIndent=_bullet_width(),
-                                 firstLineIndent=-_bullet_width()),
-        "text": base,
+        "bullet": ParagraphStyle("bullet", parent=base, alignment=TA_JUSTIFY,
+                                 leftIndent=_bullet_width(), bulletIndent=0,
+                                 bulletFontName=FONT, bulletFontSize=BODY),
+        # Body text justified: straight right edges, the last line of each
+        # paragraph left as it falls.
+        "text": ParagraphStyle("text", parent=base, alignment=TA_JUSTIFY),
     }
 
 
@@ -219,9 +221,19 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
         if kind == "name":
             story.append(Paragraph(_escape(text), styles["name"]))
         elif kind == "contact":
-            items = [i for i in _tidy_contact(text).split(" \u00b7 ") if i]
-            packed = _pack(items, text_w, styles["contact"].fontSize)
-            story.append(Paragraph("<br/>".join(_escape(line) for line in packed),
+            items = [contact_link(i) for i in _tidy_contact(text).split(" \u00b7 ") if i]
+            shown = {s: u for s, u in items}
+            packed = _pack([s for s, _ in items], text_w, styles["contact"].fontSize)
+
+            def markup(line: str) -> str:
+                parts = []
+                for piece in line.split(" \u00b7 "):
+                    url = shown.get(piece)
+                    parts.append(f'<a href="{_escape(url)}" color="#1F4E79"><u>{_escape(piece)}</u></a>'
+                                 if url else _escape(piece))
+                return " \u00b7 ".join(parts)
+
+            story.append(Paragraph("<br/>".join(markup(line) for line in packed),
                                    styles["contact"]))
         elif kind == "heading":
             story.append(Paragraph(_escape(text.upper()), styles["heading"]))
@@ -231,8 +243,15 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
         elif kind == "subheading":
             story.append(Paragraph(f"<b>{_escape(text)}</b>", styles["subheading"]))
         elif kind == "bullet":
-            story.append(Paragraph(
-                f"{BULLET}&nbsp;&nbsp;{_escape(text)}", styles["bullet"]))
+            # The bullet as the paragraph's own mark, not text: justified,
+            # the spaces after a text bullet were stretched with the words.
+            story.append(Paragraph(_escape(text), styles["bullet"], bulletText=BULLET))
+        elif kind == "skill":
+            label, _, items = text.partition(": ")
+            # The bold face by name: <b> needs a registered font family, and
+            # without one the label silently came out in the regular weight.
+            story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {_escape(items)}',
+                                   styles["text"]))
         else:
             story.append(Paragraph(_escape(text), styles["text"]))
 

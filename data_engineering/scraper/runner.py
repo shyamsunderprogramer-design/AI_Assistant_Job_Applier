@@ -29,7 +29,7 @@ from data_engineering.scraper.jobvite import JobviteScraper
 from data_engineering.scraper.workday import WorkdayScraper
 from data_engineering.scraper.filters import JobFilter, resolve_filter
 from data_engineering.scraper.greenhouse import GreenhouseScraper
-from data_engineering.scraper.http_client import HttpSettings, PoliteClient, RobotsDisallowed
+from data_engineering.scraper.http_client import HttpSettings, PoliteClient, RateLimited, RobotsDisallowed
 from data_engineering.scraper.lever import LeverScraper
 from data_engineering.scraper.lifecycle import reconcile_board
 
@@ -62,6 +62,8 @@ class RunSummary:
     jobs_closed: int = 0
     jobs_reopened: int = 0
     failures: list[tuple[str, str, str]] = field(default_factory=list)  # (source, slug, error)
+    # Boards a host turned away with 429s, tried again once it has cooled off.
+    deferred: list = field(default_factory=list)
 
 
 def build_scrapers(cfg, client: PoliteClient) -> dict[str, PortalScraper]:
@@ -170,7 +172,34 @@ def run_scrape(cfg) -> RunSummary:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(walk, by_host.values()))
 
+    _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty, workers)
     return summary
+
+
+def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty,
+                    workers, max_wait: float = 20 * 60) -> None:
+    """Ask the boards a host turned away once more, after its cool-off ends."""
+    if not summary.deferred:
+        return
+    again, summary.deferred = summary.deferred, []
+    hosts: dict[str, list] = {}
+    for company in again:
+        hosts.setdefault(_host_of(scrapers[company.source], company), []).append(company)
+    wait = min(max_wait, max(client.cooling_left(h) for h in hosts))
+    log.info("%d board(s) were rate-limited; asking again in %.0f min", len(again), wait / 60)
+    time.sleep(wait)
+
+    def walk(host_companies: list) -> None:
+        for company in host_companies:
+            _scrape_one(company, scrapers, job_filter, summary, lock,
+                        deactivate_after, close_on_empty, retrying=True)
+
+    if workers <= 1:
+        for group in hosts.values():
+            walk(group)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(walk, hosts.values()))
 
 
 def _is_in_memory() -> bool:
@@ -200,7 +229,7 @@ def _host_of(scraper, company) -> str:
 
 
 def _scrape_one(company, scrapers, job_filter, summary, lock,
-                deactivate_after, close_on_empty) -> None:
+                deactivate_after, close_on_empty, retrying: bool = False) -> None:
     """One board, start to finish. Runs on a worker thread."""
     scraper = scrapers.get(company.source)
     if scraper is None:
@@ -216,6 +245,15 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
         with lock:
             _log_failure(summary, company, "RobotsDisallowed", str(exc), started,
                          deactivate_after)
+        return
+    except RateLimited as exc:
+        with lock:
+            if not retrying:
+                # Not a failure yet: asked again once the host has cooled off.
+                summary.companies_attempted -= 1
+                summary.deferred.append(company)
+            else:
+                _log_failure(summary, company, "RateLimited", str(exc), started, deactivate_after)
         return
     except Exception as exc:
         with lock:
@@ -398,7 +436,9 @@ def _log_failure(
             )
         )
         row = session.query(Company).filter_by(source=company.source, slug=company.slug).one_or_none()
-        if row is not None:
+        # A host refusing us says nothing about the board: it is not counted
+        # toward retiring it, or one busy afternoon retires healthy boards.
+        if row is not None and error_type != "RateLimited":
             row.consecutive_failures += 1
             # A dead slug shouldn't be re-probed forever once the list is large.
             if deactivate_after and row.consecutive_failures >= deactivate_after:

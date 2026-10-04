@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
+
 from data_engineering.db.models import Company, ProbeLog, utcnow
 from data_engineering.db.session import get_session
 from data_engineering.scraper.base import PortalScraper
@@ -96,6 +98,15 @@ def load_probe_cache() -> dict[tuple[str, str], bool]:
 
 def record_probe(source: str, slug: str, found: bool, company_name: str | None = None) -> None:
     """Remember a probe outcome so it is never re-sent."""
+    try:
+        _record_probe(source, slug, found, company_name)
+    except IntegrityError:
+        # Names are probed side by side, and "Acme" and "Acme Inc" make the
+        # same guess: the other one recorded it a moment ago.
+        pass
+
+
+def _record_probe(source: str, slug: str, found: bool, company_name: str | None) -> None:
     with get_session() as session:
         existing = session.query(ProbeLog).filter_by(source=source, slug=slug).one_or_none()
         if existing is None:
@@ -125,8 +136,9 @@ class DiscoveryProgress:
 
 class CompanyDiscoverer:
     def __init__(self, scrapers: dict[str, PortalScraper], strip_suffixes: list[str] | None = None,
-                 single_variant: set[str] | None = None):
+                 single_variant: set[str] | None = None, name_workers: int = 1):
         self.scrapers = scrapers
+        self.name_workers = name_workers
         self.strip_suffixes = strip_suffixes or []
         # Systems probed with only the first name variant. Where every company
         # shares ONE host (Greenhouse, Lever, Ashby, Workable, Jobvite) each
@@ -248,24 +260,47 @@ class CompanyDiscoverer:
         A name may be "Company" or "Company,domain.com"; the domain becomes the
         first slug guess.
         """
-        self._cache = load_probe_cache()
+        # Loaded once per discoverer: every probe it sends is added as it goes.
+        # Reloading all of probe_log (850,000 rows, four seconds) before each
+        # batch of forty names was pure waste.
+        if not self._cache:
+            self._cache = load_probe_cache()
         self.progress = DiscoveryProgress()
         results: list[DiscoveryResult] = []
 
-        for raw in names:
+        def one(raw):
             name, _, domain = str(raw).partition(",")
             name = name.strip()
-            domain = domain.strip() or None
             if not name:
-                continue
-            self.progress.names += 1
-            result = self.probe(name, sources, domain=domain, max_slugs=max_slugs)
-            results.append(result)
-            if result.found:
-                self.progress.found += 1
-                self._save(result.name, result.slug, result.source, origin="discovery")
-            if on_progress is not None:
-                on_progress(self.progress, result)
+                return None
+            return self.probe(name, sources, domain=domain.strip() or None, max_slugs=max_slugs)
+
+        # Several names at once. Each host is still paced on its own by the
+        # client, so this asks no host any faster; it stops a name that waits
+        # on Greenhouse from holding up the next one's BambooHR probe. One at
+        # a time, the run spent most of its life waiting on the slowest host.
+        # One worker runs in this thread, as it always did: an in-memory
+        # database (the tests') exists only for the thread that made it.
+        if self.name_workers <= 1:
+            done = map(one, names)
+            pool = None
+        else:
+            pool = ThreadPoolExecutor(max_workers=self.name_workers)
+            done = pool.map(one, names)
+        try:
+            for result in done:
+                if result is None:
+                    continue
+                self.progress.names += 1
+                results.append(result)
+                if result.found:
+                    self.progress.found += 1
+                    self._save(result.name, result.slug, result.source, origin="discovery")
+                if on_progress is not None:
+                    on_progress(self.progress, result)
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True)
         return results
 
     def _save(self, name: str, slug: str, source: str, origin: str) -> None:
@@ -277,6 +312,13 @@ def upsert_company(
     name: str, slug: str, source: str, origin: str = "config", board_url: str | None = None
 ) -> None:
     """Insert or refresh one company row. Idempotent on (source, slug)."""
+    try:
+        _upsert_company(name, slug, source, origin, board_url)
+    except IntegrityError:
+        pass                    # saved a moment ago by the name probed beside it
+
+
+def _upsert_company(name: str, slug: str, source: str, origin: str, board_url: str | None) -> None:
     with get_session() as session:
         existing = (
             session.query(Company).filter_by(source=source, slug=slug).one_or_none()

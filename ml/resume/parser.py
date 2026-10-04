@@ -190,11 +190,31 @@ def find_base_resume(directory: Path | str) -> Path | None:
     return max(pool, key=lambda p: p.stat().st_mtime)
 
 
+_SECTION_WORDS = ("summary", "objective", "profile", "experience", "education", "skill",
+                  "project", "certif", "employment", "work", "competenc", "highlight",
+                  "expertise", "technical", "professional", "about", "contact", "career")
+
+
+def _is_name_line(line: str) -> bool:
+    """A person's name: two to five words of letters, and no section word."""
+    text = line.strip()
+    words = text.split()
+    return (2 <= len(words) <= 5 and bool(re.fullmatch(r"[A-Za-z .'-]+", text))
+            and not any(w in text.lower() for w in _SECTION_WORDS))
+
+
 def _build(lines: list[str], path: Path | None) -> Resume:
     sections: list[Section] = []
     current = Section(heading="HEADER")
 
-    for line in lines:
+    for number, line in enumerate(lines):
+        # A name in capitals ("ALEX RIVERA") passes for a section heading, and
+        # the resume then had no header: the name printed as a section over
+        # the contact line, and the applicant's contact details were never
+        # put in. The first line, if it reads as a name, starts the header.
+        if number == 0 and _is_name_line(line):
+            current.lines.append(line)
+            continue
         if looks_like_heading(line):
             if current.lines or current.heading != "HEADER":
                 sections.append(current)

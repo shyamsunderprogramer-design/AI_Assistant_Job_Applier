@@ -115,6 +115,7 @@ PROVIDERS = {
 # A local model is slower than an API and loads from disk on first use. The
 # first call after a reboot can spend minutes just reading weights into memory.
 DEFAULT_TIMEOUT_S = 900
+CLAUDE_CODE_TIMEOUT_S = 360
 
 
 class ProviderUnavailable(RuntimeError):
@@ -395,7 +396,9 @@ def _claude_code(system: str, user: str, cfg=None) -> Completion:
             "Claude Code is not installed (no `claude` command).\n"
             "  Install it, run `claude` once to sign in, then try again.")
     model = model_name(cfg)
-    timeout = int(_setting(cfg, "resume.claude-code.timeout_seconds", DEFAULT_TIMEOUT_S))
+    # Six minutes, not fifteen: a rewrite answers in one to three, and a call
+    # that hangs held the page for 25 minutes before the backup model ran.
+    timeout = int(_setting(cfg, "resume.claude-code.timeout_seconds", CLAUDE_CODE_TIMEOUT_S))
     # Run away from this repository, so its CLAUDE.md and settings stay out.
     workdir = Path(__file__).resolve().parents[2] / "data" / "claude-code"
     workdir.mkdir(parents=True, exist_ok=True)

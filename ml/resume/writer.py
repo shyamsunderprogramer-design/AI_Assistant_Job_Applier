@@ -190,6 +190,69 @@ def _add_role(document: Document, text: str) -> None:
     return para
 
 
+def _add_contact(document: Document, text: str) -> None:
+    """The contact line, with the LinkedIn address as a linked word."""
+    para = document.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    para.paragraph_format.space_after = Pt(1)
+    items = [i for i in _tidy_contact(text).split(" \u00b7 ") if i]
+    for n, item in enumerate(items):
+        if n:
+            _contact_run(para, " \u00b7 ")
+        shown, url = contact_link(item)
+        if url:
+            _hyperlink(para, shown, url)
+        else:
+            _contact_run(para, shown)
+
+
+def _contact_run(para, value: str):
+    run = para.add_run(value)
+    run.font.name = FONT
+    run.font.size = CONTACT_SIZE
+    run.font.color.rgb = MUTED
+    return run
+
+
+def _hyperlink(para, shown: str, url: str) -> None:
+    """A clickable run. python-docx has no API for it; this is the XML Word writes."""
+    from docx.opc.constants import RELATIONSHIP_TYPE
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    rel = para.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    link = OxmlElement("w:hyperlink")
+    link.set(qn("r:id"), rel)
+    run = OxmlElement("w:r")
+    props = OxmlElement("w:rPr")
+    for tag, attr, value in (("w:rFonts", "w:ascii", FONT), ("w:color", "w:val", "1F4E79"),
+                             ("w:u", "w:val", "single"), ("w:sz", "w:val", str(int(CONTACT_SIZE.pt * 2)))):
+        el = OxmlElement(tag)
+        el.set(qn(attr), value)
+        if tag == "w:rFonts":
+            el.set(qn("w:hAnsi"), value)
+        props.append(el)
+    run.append(props)
+    t = OxmlElement("w:t")
+    t.text = shown
+    run.append(t)
+    link.append(run)
+    para._p.append(link)
+
+
+def _add_skill(document: Document, text: str) -> None:
+    """"Label: items" with the label in bold, as one paragraph."""
+    label, _, items = text.partition(": ")
+    para = document.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    para.paragraph_format.space_after = Pt(2.5)
+    for value, bold in ((label + ": ", True), (items, False)):
+        run = para.add_run(value)
+        run.bold = bold
+        run.font.name = FONT
+        run.font.size = BODY_SIZE
+
+
 def _add_subheading(document: Document, text: str) -> None:
     """A grouping inside one job ("Cloud Infrastructure & Scalability")."""
     para = _add(document, text, bold=True, space_before=5)
@@ -199,14 +262,14 @@ def _add_subheading(document: Document, text: str) -> None:
 
 
 def _bullet_width_pt() -> float:
-    """Width of "•" and two spaces in the body font, in points."""
+    """Width of "•" and an en space in the body font, in points."""
     try:
-        from ml.resume.pdf import BULLET, FONT as PDF_FONT, _bullet_width
-        if BULLET == "\u2022" and PDF_FONT == FONT:
-            return _bullet_width()
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+
+        from ml.resume.pdf import FONT as PDF_FONT
+        return stringWidth("\u2022", PDF_FONT, BODY_SIZE.pt) + 0.5 * BODY_SIZE.pt
     except Exception:
-        pass
-    return 0.62 * BODY_SIZE.pt           # Arial: bullet 0.35em + two spaces 0.28em each
+        return 0.85 * BODY_SIZE.pt           # Arial: bullet 0.35em + en space 0.5em
 
 
 def _add_bullet(document: Document, text: str) -> None:
@@ -217,16 +280,18 @@ def _add_bullet(document: Document, text: str) -> None:
     and a dropped bullet turns a list into a wall of prose.
     """
     para = document.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY      # both edges straight, as the PDF sets it
     fmt = para.paragraph_format
     # No tab: Quick Look, Pages and Google Docs ignore tab stops and jump to
     # their own half-inch one, so the first line started far right of the
-    # lines under it. The bullet and two no-break spaces, measured in the
-    # font, make the hang -- the way the PDF does it, the same everywhere.
+    # lines under it. The bullet and an en space, measured in the font, make
+    # the hang. An en space, not no-break spaces: in a justified line Word
+    # stretches those, and the gap after the bullet grew line by line.
     hang = Pt(_bullet_width_pt())
     fmt.left_indent = hang
     fmt.first_line_indent = -hang
     fmt.space_after = Pt(2.5)
-    run = para.add_run(f"\u2022\u00a0\u00a0{strip_bullet(text)}")
+    run = para.add_run(f"\u2022\u2002{strip_bullet(text)}")
     run.font.name = FONT
     run.font.size = BODY_SIZE
 
@@ -409,11 +474,141 @@ def plan_document(base: Resume, result: TailorResult,
                 blocks.append(("bullet", replacement or body))
             else:
                 blocks.append(("text", body))
-    from ml.resume.typeset import typeset
+    from ml.resume.typeset import plain_words, state_codes, typeset
     # Not a role line: its title and dates are told apart by the run of
     # spaces between them, which the tidy would close up.
-    return [(kind, text if kind in ("name", "role") else typeset(text))
+    tidy = [(kind, text if kind in ("name", "role", "contact")
+             else plain_words(state_codes(typeset(text))))
             for kind, text in _without_empty_titles(blocks, trimmed)]
+    arranged = _arrange(tidy)
+    overrides = getattr(result, "overrides", None) or {}
+    if overrides:
+        # The person's own edits from the preview, applied last and as written.
+        arranged = [(k, overrides.get(t, t)) for k, t in arranged]
+        arranged = [(k, t) for k, t in arranged if (t or "").strip()]
+    return arranged
+
+
+# Section order for an experienced engineer: what they do, what they know, where
+# they did it, and the degree last. A master resume kept in any order -- this
+# one had Education second -- comes out in this one.
+_ORDER = (("summary", "objective", "profile"), ("highlight", "impact", "achievement"),
+          ("expertise", "practice"), ("skill", "competenc", "technolog"),
+          ("experience", "employment", "work history"), ("project",),
+          ("certif", "license"), ("education",))
+_SKILLS = ("skill", "competenc", "technolog")
+
+
+_SIDE = ("highlight", "impact", "achievement", "expertise", "practice", "project")
+
+
+def _rank(heading: str, first: bool = False) -> int:
+    low = heading.lower()
+    # The more specific kinds first: "Core Competencies / Technical Skills
+    # Summary" is a skills section that happens to end in "Summary".
+    for i in sorted(range(len(_ORDER)), key=lambda i: i == 0):
+        if any(w in low for w in _ORDER[i]):
+            return i
+    # An unknown first section is usually the name read as a heading ("JANE
+    # DOE" over the contact line): it stays at the top. Any other unknown one
+    # sits just above Education.
+    return -1 if first else len(_ORDER) - 1
+
+
+def _arrange(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Order the sections, compact the skills, and drop a section left with one line.
+
+    kinds added here: skill -- "Label: items", drawn with the label in bold.
+    """
+    head = [b for b in blocks if b[0] in ("name", "contact")]
+    sections: list[list[tuple[str, str]]] = []
+    for kind, text in blocks:
+        if kind in ("name", "contact"):
+            continue
+        if kind == "heading" or not sections:
+            sections.append([])
+        sections[-1].append((kind, text))
+
+    out_sections = []
+    for number, section in enumerate(sections):
+        heading = section[0][1] if section[0][0] == "heading" else ""
+        body = section[1:] if heading else section
+        low = heading.lower()
+        if any(w in low for w in _SKILLS):
+            body = _compact_skills(body)
+        if any(w in low for w in ("education", "certif", "license", "project", "award")):
+            # A school, certificate or project the parser took for a label
+            # printed bold under one entry and plain under the next. Plain.
+            body = [("text", t) if k == "subheading" else (k, t) for k, t in body]
+        if any(w in low for w in ("expertise", "practice", "highlight")):
+            # "Infrastructure as Code (IaC): Built ..." reads as its skills
+            # neighbour does: the label in bold, the work after it.
+            body = [("skill", t) if k in ("bullet", "text") and _labelled(t) else (k, t)
+                    for k, t in body]
+        if _rank(heading) == 0:
+            # A summary is prose. Kept as three lines in the master, it came out
+            # as three bullets; joined into one it was a wall. Paragraphs.
+            body = [("text", t) if k == "bullet" else (k, t) for k, t in body]
+        lines = [b for b in body if b[0] in ("bullet", "text", "skill")]
+        if any(w in low for w in _SIDE) and len(lines) < 2:
+            continue                # "Highlights of Impact" with one bullet reads as a slip
+        out_sections.append((_rank(heading, first=number == 0),
+                             [section[0]] + body if heading else body))
+    out_sections.sort(key=lambda s: s[0])          # stable: master order within a rank
+    return head + [b for _, section in out_sections for b in section]
+
+
+def _skill_row(text: str) -> bool:
+    """"Label: a, b, c" -- a short label and a list after it."""
+    label, sep, rest = text.partition(": ")
+    return bool(sep) and 1 <= len(label.split()) <= 5 and ("," in rest or len(rest.split()) <= 12)
+
+
+def _labelled(text: str) -> bool:
+    label, sep, rest = text.partition(": ")
+    return bool(sep) and 1 <= len(label.split()) <= 6 and len(rest.split()) >= 4
+
+
+def _compact_skills(body: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Each skills group as one line, "Label: item; item", instead of a label over bullets.
+
+    Trimmed to a posting, a group often keeps one line, and a bold label over
+    a single bullet looks like something fell off the page.
+    """
+    out: list[tuple[str, str]] = []
+    label, items = None, []
+
+    def flush():
+        if label is None:
+            out.extend(("text", i) for i in items)        # a plain list under no label: text
+        elif items:
+            out.append(("skill", f"{label.rstrip(':')}: "
+                        + "; ".join(i.rstrip(".") for i in items) + "."))
+        # a label with nothing kept under it is dropped
+
+    for kind, text in body:
+        if _skill_row(text) and (kind == "subheading" or label is None):
+            # Already "Languages: Python, SQL, R" -- a whole row by itself. Read
+            # as a label it swallowed the next row and lost its own items.
+            flush()
+            label, items = None, []
+            out.append(("skill", text))
+        elif kind == "subheading":
+            flush()
+            label, items = text, []
+        elif kind in ("bullet", "text"):
+            # "Operating Systems: Windows, Linux" under "IDEs / Servers /
+            # Operating Systems" would print the label twice; drop the item's own.
+            own, sep, rest = text.partition(": ")
+            if sep and label and own.lower() in label.lower() and len(own.split()) <= 5:
+                text = rest
+            items.append(text)
+        else:
+            flush()
+            label, items = None, []
+            out.append((kind, text))
+    flush()
+    return out
 
 
 _TITLE_METRIC = re.compile(r"\d+\s?%|\d+\+")
@@ -493,9 +688,7 @@ def write_tailored_resume(
                         align=WD_ALIGN_PARAGRAPH.CENTER)
             name.paragraph_format.space_after = Pt(1)
         elif kind == "contact":
-            contact = _add(document, _tidy_contact(text), size=CONTACT_SIZE,
-                           align=WD_ALIGN_PARAGRAPH.CENTER, color=MUTED)
-            contact.paragraph_format.space_after = Pt(1)
+            _add_contact(document, text)
         elif kind == "heading":
             _add_heading(document, text)
         elif kind == "role":
@@ -504,8 +697,10 @@ def write_tailored_resume(
             _add_subheading(document, text)
         elif kind == "bullet":
             _add_bullet(document, text)
+        elif kind == "skill":
+            _add_skill(document, text)
         else:
-            _add(document, text)
+            _add(document, text, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
     document.save(output_path)
     log.info("Wrote ATS-safe resume: %s", output_path)
@@ -545,6 +740,20 @@ _PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
 
 def _is_contact_line(line: str) -> bool:
     return bool(_EMAIL.search(line or "") or _PHONE.search(line or ""))
+
+
+def contact_link(item: str) -> tuple[str, str | None]:
+    """(what the contact line shows, where it links) for one item.
+
+    A LinkedIn address shows as the word "LinkedIn", linked to the profile:
+    a long URL in the middle of the contact line is the part that wrapped
+    and looked untidy, and a recruiter clicks it rather than reads it.
+    """
+    text = (item or "").strip()
+    if re.match(r"^(https?://)?(www\.)?linkedin\.com/", text, re.I):
+        url = text if text.lower().startswith("http") else "https://" + text
+        return "LinkedIn", url
+    return text, None
 
 
 def applicant_contact_line():

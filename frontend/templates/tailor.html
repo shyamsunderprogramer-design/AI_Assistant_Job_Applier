@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% block title %}Resume Tailoring{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Resume Tailoring</h1>
+    <div class="sub">Upload a resume and a job description. The builder finds what the job asks for,
+      matches it to evidence in the resume, and writes a tailored copy. The uploaded file is never changed.</div>
+  </div>
+  <div class="row">
+    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+  </div>
+</header>
+
+<section class="card" id="inputs">
+  <div class="t-grid">
+    <div class="t-field" id="field-resume">
+      <label class="t-label" for="resume">Resume</label>
+      <div class="t-file">
+        <input type="file" id="resume" accept="{{ accepted }}" hidden>
+        <button class="btn" type="button" id="pick-resume">Choose .docx or .pdf</button>
+        <span class="t-name" id="resume-name">No file chosen</span>
+      </div>
+      <div class="t-error" id="error-resume" hidden></div>
+    </div>
+    <div class="t-field" id="field-job">
+      <label class="t-label" for="jd-text">Job description</label>
+      <textarea id="jd-text" rows="7" placeholder="Paste the full job posting here…">{{ jd }}</textarea>
+      <div class="t-file">
+        <input type="file" id="jd-file" accept=".docx,.pdf,.txt,.md" hidden>
+        <button class="btn" type="button" id="pick-jd">Or upload it as a file</button>
+        <span class="t-name" id="jd-name"></span>
+      </div>
+      <div class="t-error" id="error-job" hidden></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button class="btn primary" id="create">Create tailored resume</button>
+    <span class="hint" id="create-hint">Takes two to four minutes.</span>
+  </div>
+</section>
+
+<section class="card" id="progress" hidden>
+  <ol class="t-stages" id="stages"></ol>
+  <div class="t-error" id="error-run" hidden></div>
+</section>
+
+<section class="card" id="results" hidden>
+  <div class="t-scorebar">
+    <div><div class="t-score" id="score"></div><div class="hint">estimated job-description match</div></div>
+    <div class="t-ready" id="ready"></div>
+    <div class="row t-downloads">
+      <a class="btn primary" id="dl-docx" href="#">Download DOCX</a>
+      <a class="btn" id="dl-pdf" href="#">Download PDF</a>
+    </div>
+  </div>
+  <div class="t-warn" id="extraction" hidden></div>
+  <div class="t-tabs" role="tablist">
+    <button class="t-tab on" data-tab="resume">Tailored Resume</button>
+    <button class="t-tab" data-tab="report">Match Report</button>
+    <button class="t-tab" data-tab="alignment">Alignment Summary</button>
+    <button class="t-tab" data-tab="versions">Version Checks</button>
+    <button class="t-tab" data-tab="changes">Changes Made</button>
+    <button class="t-tab" data-tab="gaps">Gaps</button>
+  </div>
+
+  <div class="t-panel" data-panel="resume">
+    <div class="row" style="margin-bottom:10px">
+      <span class="hint">Preview:</span>
+      <button class="chip on" data-view="docx">Word document</button>
+      <button class="chip" data-view="pdf">PDF</button>
+      <button class="btn" id="edit-toggle" style="margin-left:auto">Edit the text</button>
+    </div>
+    <div id="checks"></div>
+    <div class="t-pages" id="pages"></div>
+    <div id="editor" hidden>
+      <div class="hint">Edit any line, or clear it to remove it. Your edits are your own: the builder does
+        not check them against the resume. The files are written and checked again when you save.</div>
+      <div id="edit-lines"></div>
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="save-edits">Save edits</button>
+        <button class="btn" id="cancel-edits">Cancel</button><span class="hint" id="edit-say"></span></div>
+    </div>
+  </div>
+
+  <div class="t-panel" data-panel="report" hidden>
+    <p class="hint" id="score-note"></p>
+    <div class="t-table-wrap"><table class="t-table" id="report-table"></table></div>
+    <p class="t-formula" id="formula"></p>
+  </div>
+  <div class="t-panel" data-panel="alignment" hidden><div id="alignment"></div></div>
+  <div class="t-panel" data-panel="versions" hidden><div id="versions"></div></div>
+  <div class="t-panel" data-panel="changes" hidden><div id="changes"></div></div>
+  <div class="t-panel" data-panel="gaps" hidden><div id="gaps"></div></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const STATUS = {direct: ['Direct match', 'good'], related: ['Related match', 'review'],
+                unclear: ['Unclear', 'muted'], not_found: ['Not found', 'bad']};
+let RUN = null, RESULT = null, VIEW = 'docx';
+
+// -- inputs ----------------------------------------------------------------------
+$('pick-resume').onclick = () => $('resume').click();
+$('pick-jd').onclick = () => $('jd-file').click();
+$('resume').onchange = () => {
+  const f = $('resume').files[0];
+  $('resume-name').textContent = f ? f.name : 'No file chosen';
+  $('pick-resume').textContent = f ? 'Replace' : 'Choose .docx or .pdf';
+  clearError('resume');
+};
+$('jd-file').onchange = () => {
+  const f = $('jd-file').files[0];
+  $('jd-name').textContent = f ? `${f.name} (used instead of the text above)` : '';
+  $('pick-jd').textContent = f ? 'Replace the file' : 'Or upload it as a file';
+  clearError('job');
+};
+$('jd-text').oninput = () => {
+  const words = $('jd-text').value.trim().split(/\s+/).filter(Boolean).length;
+  if (!$('jd-file').files[0]) $('jd-name').textContent = words ? `${words} words pasted` : '';
+  clearError('job');
+};
+function showError(file, message) {
+  const box = $(file === 'job' ? 'error-job' : file === 'resume' ? 'error-resume' : 'error-run');
+  box.textContent = message; box.hidden = false;
+  $(file === 'job' ? 'field-job' : 'field-resume')?.classList.toggle('t-bad', file === 'job' || file === 'resume');
+}
+function clearError(file) {
+  $(file === 'job' ? 'error-job' : 'error-resume').hidden = true;
+  $(file === 'job' ? 'field-job' : 'field-resume').classList.remove('t-bad');
+}
+
+// -- the run ---------------------------------------------------------------------
+$('create').onclick = async () => {
+  ['resume', 'job'].forEach(clearError); $('error-run').hidden = true;
+  const form = new FormData();
+  if ($('resume').files[0]) form.append('resume', $('resume').files[0]);
+  if ($('jd-file').files[0]) form.append('jd_file', $('jd-file').files[0]);
+  form.append('jd_text', $('jd-text').value);
+  $('create').disabled = true;
+  const r = await (await fetch('/tailor/start', {method: 'POST', body: form})).json();
+  if (!r.ok) { showError(r.file, r.error); $('create').disabled = false; return; }
+  RUN = r.run; $('results').hidden = true; $('progress').hidden = false;
+  history.replaceState(null, '', `?run=${RUN}`);       // come back to this result later
+  follow();
+};
+
+async function follow() {
+  const s = await (await fetch(`/tailor/${RUN}/status`)).json();
+  const names = s.stages || [];
+  $('stages').innerHTML = names.map((name, i) => {
+    const state = s.error && i === names.indexOf(s.error.stage) ? 'fail'
+                : i < s.stage || (s.done && !s.error) ? 'done' : i === s.stage && !s.done ? 'now' : '';
+    return `<li class="${state}"><span class="t-dot"></span>${esc(name[0].toUpperCase() + name.slice(1))}`
+         + (i === s.stage && s.note ? ` <span class="hint">— ${esc(s.note)}</span>` : '') + '</li>';
+  }).join('');
+  if (s.error) {
+    showError(s.error.file || 'run', s.error.message);
+    if (!s.error.file) { $('error-run').textContent = s.error.message; $('error-run').hidden = false; }
+    $('create').disabled = false; return;
+  }
+  if (!s.done) { setTimeout(follow, 1500); return; }
+  $('create').disabled = false;
+  await load();
+}
+
+async function load() {
+  RESULT = await (await fetch(`/tailor/${RUN}/result`)).json();
+  if (!RESULT.ok) return;
+  $('results').hidden = false;
+  // Without Word's own pages there is only the PDF view to offer.
+  const hasWord = !!(RESULT.pages.docx || []).length;
+  document.querySelector('[data-view=docx]').hidden = !hasWord;
+  if (!hasWord) { VIEW = 'pdf'; document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x.dataset.view === 'pdf')); }
+  $('score').textContent = Math.round(RESULT.score) + '%';
+  $('score-note').textContent = RESULT.score_note;
+  $('dl-docx').href = `/tailor/${RUN}/download/docx`;
+  $('dl-pdf').href = `/tailor/${RUN}/download/pdf`;
+  const problems = RESULT.checks.filter(c => c.severity === 'problem').length;
+  $('ready').innerHTML = problems
+    ? `<span class="pill bad">${problems} layout or content problem(s)</span>`
+    : `<span class="pill good">Document checks passed</span>`
+      + (RESULT.word_rendered ? '<span class="hint"> · laid out by Microsoft Word</span>' : '');
+  const ex = RESULT.extraction || {};
+  $('extraction').hidden = !(ex.warnings || []).length && !ex.ocr && !RESULT.draft_note && !(RESULT.notes || []).length;
+  $('extraction').innerHTML = [RESULT.draft_note, ...(RESULT.notes || []), ...(ex.warnings || [])]
+      .filter(Boolean).map(w => `<div>⚠ ${esc(w)}</div>`).join('')
+    + (ex.text ? `<details><summary>Show the text read from the resume</summary><pre>${esc(ex.text)}</pre></details>` : '');
+  renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps();
+}
+
+// -- tabs ------------------------------------------------------------------------
+document.querySelectorAll('.t-tab').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.t-tab').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.t-panel').forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+});
+document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
+  VIEW = b.dataset.view;
+  document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
+  renderResume();
+});
+
+function renderResume() {
+  const pages = (RESULT.pages[VIEW] || RESULT.pages.pdf || []);
+  const stamp = Date.now();
+  $('pages').innerHTML = pages.map((p, i) =>
+    `<figure class="t-page"><img src="/tailor/${RUN}/page/${p}?t=${stamp}" alt="Page ${i + 1}"><figcaption>Page ${i + 1}</figcaption></figure>`).join('');
+  const checks = RESULT.checks.filter(c => c.file === VIEW || VIEW === 'docx' && c.file === 'docx');
+  $('checks').innerHTML = checks.length
+    ? `<div class="t-warn">${checks.map(c => `<div>${c.severity === 'problem' ? '✕' : '⚠'} ${c.page ? 'Page ' + c.page + ': ' : ''}${esc(c.detail)}</div>`).join('')}</div>`
+    : '';
+}
+
+function badge(status) {
+  const [label, cls] = STATUS[status] || [status, ''];
+  return `<span class="pill ${cls}">${label}</span>`;
+}
+
+function renderReport() {
+  const rows = RESULT.report.matches.map(m => {
+    const r = m.requirement, ev = m.evidence[0];
+    return `<tr><td><b>${esc(r.original)}</b>${r.also && r.also.length ? `<div class="hint">also: ${esc(r.also.join(', '))}</div>` : ''}
+        <div class="hint">${esc(r.category)}</div></td>
+      <td>${r.priority === 'required' ? 'Required' : 'Preferred'}</td>
+      <td>${badge(m.status)}</td>
+      <td>${ev ? `<q>${esc(ev.text)}</q><div class="hint">${esc(ev.where)} · ${esc(ev.source)}${ev.confidence === 'low' ? ' · recognised text' : ''}</div>` : '<span class="hint">—</span>'}
+        <div class="t-why">${esc(m.explanation)}</div></td>
+      <td class="num">${m.weight}</td><td class="num">${m.value.toFixed(1)}</td><td class="num">${m.contribution.toFixed(1)}</td></tr>`;
+  }).join('');
+  $('report-table').innerHTML = `<thead><tr><th>Requirement</th><th>Priority</th><th>Status</th><th>Evidence and why</th>
+    <th class="num">Weight</th><th class="num">Value</th><th class="num">Points</th></tr></thead><tbody>${rows}</tbody>`;
+  const sum = RESULT.report.matches.reduce((a, m) => a + m.weight * m.value, 0);
+  $('formula').textContent = `Score = Σ(weight × value) ÷ Σ(weight) × 100 = ${sum.toFixed(1)} ÷ ${RESULT.report.total_weight} × 100 = ${RESULT.score.toFixed(1)}%`;
+}
+
+function renderAlignment() {
+  const direct = RESULT.report.matches.filter(m => m.status === 'direct' && m.evidence.length);
+  $('alignment').innerHTML = `<p>${esc(RESULT.alignment || 'No summary was written for this run.')}</p>
+    <h3>What the resume shows for this position</h3>
+    <ul class="t-list">${direct.slice(0, 20).map(m => `<li><b>${esc(m.requirement.original)}</b> — ${esc(m.evidence[0].where)}</li>`).join('')}</ul>
+    <p class="hint">Job titles are compared by the duties and skills behind them; a different title is never counted as a missing skill, and the resume's titles are kept as written.</p>`;
+}
+
+function renderVersions() {
+  const groups = {mismatch: 'Date mismatches', confirmed: 'Confirmed versions', possible: 'Possible versions (no version stated)', unknown: 'Could not be verified'};
+  const out = Object.entries(groups).map(([k, title]) => {
+    const items = RESULT.versions.filter(v => v.status === k);
+    if (!items.length) return '';
+    return `<h3>${title} (${items.length})</h3><ul class="t-list">${items.map(v =>
+      `<li><b>${esc(v.tool)} ${esc(v.version)}</b> — ${esc(v.where)}<div class="hint">${esc(v.detail)}${v.source ? ' Source: ' + esc(v.source) : ''}</div></li>`).join('')}</ul>`;
+  }).join('');
+  $('versions').innerHTML = out || '<p class="hint">No tool versions were found in the resume.</p>';
+}
+
+function renderChanges() {
+  const items = [...RESULT.changes, ...(RESULT.edited || []).map(e => ({kind: 'Edited by you', before: e.before, after: e.after, why: ''}))];
+  $('changes').innerHTML = items.length ? `<ul class="t-list">${items.map(c => `<li><b>${esc(c.kind)}</b>
+      ${c.before ? `<details><summary>Before / after</summary><div class="t-before">${esc(c.before)}</div>${c.after ? `<div class="t-after">${esc(c.after)}</div>` : ''}</details>` : `<div class="t-after">${esc(c.after)}</div>`}
+      ${c.why ? `<div class="hint">${esc(c.why)}</div>` : ''}</li>`).join('')}</ul>`
+    : '<p class="hint">No changes were made.</p>';
+}
+
+function renderGaps() {
+  const gaps = RESULT.report.matches.filter(m => m.status === 'unclear' || m.status === 'not_found');
+  $('gaps').innerHTML = gaps.length ? `<p class="hint">What the job asks for that the resume does not demonstrate. These are not added to the resume.</p>
+    <ul class="t-list">${gaps.map(m => `<li>${badge(m.status)} <b>${esc(m.requirement.original)}</b> <span class="hint">(${m.requirement.priority})</span><div class="hint">${esc(m.explanation)}</div></li>`).join('')}</ul>`
+    : '<p class="hint">No gaps: every identified requirement is directly or partly shown.</p>';
+}
+
+// -- editing ---------------------------------------------------------------------
+$('edit-toggle').onclick = async () => {
+  const r = await (await fetch(`/tailor/${RUN}/lines`)).json();
+  $('edit-lines').innerHTML = r.lines.map((l, i) => l.kind === 'heading' || l.kind === 'name'
+    ? `<div class="t-ed-head">${esc(l.text)}</div>`
+    : `<textarea class="t-ed" data-before="${esc(l.text)}" rows="${Math.max(1, Math.ceil(l.text.length / 110))}">${esc(l.text)}</textarea>`).join('');
+  $('editor').hidden = false; $('pages').hidden = true; $('edit-say').textContent = '';
+};
+$('cancel-edits').onclick = () => { $('editor').hidden = true; $('pages').hidden = false; };
+$('save-edits').onclick = async () => {
+  const edits = {};
+  document.querySelectorAll('.t-ed').forEach(t => { if (t.value !== t.dataset.before) edits[t.dataset.before] = t.value; });
+  if (!Object.keys(edits).length) { $('edit-say').textContent = 'Nothing was changed.'; return; }
+  $('save-edits').disabled = true; $('edit-say').textContent = 'Writing and checking the files again…';
+  const r = await (await fetch(`/tailor/${RUN}/edit`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                      body: JSON.stringify({edits})})).json();
+  $('save-edits').disabled = false;
+  if (!r.ok) { $('edit-say').textContent = r.error; return; }
+  RESULT = r; $('editor').hidden = true; $('pages').hidden = false;
+  await load();
+};
+// Opened as /tailor?run=<id>: show that run (its progress, or its results).
+const opened = new URLSearchParams(location.search).get('run');
+if (opened) { RUN = opened; $('progress').hidden = false; follow(); }
+</script>
+{% endblock %}

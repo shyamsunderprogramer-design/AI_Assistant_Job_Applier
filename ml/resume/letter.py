@@ -139,11 +139,11 @@ class LetterResult:
         return "\n".join([*self.body, self.why_this_company])
 
     def text(self) -> str:
-        from ml.resume.typeset import typeset
+        from ml.resume.typeset import plain_words, typeset
         # One blank line between paragraphs. Empty spacer parts joined with
         # blank lines gave three in a row after the greeting.
         parts = [self.greeting, *self.body, self.closing]
-        return "\n\n".join(typeset(p) for p in parts if p).strip() + "\n"
+        return "\n\n".join(plain_words(typeset(p)) for p in parts if p).strip() + "\n"
 
     def word_count(self) -> int:
         return len(" ".join(self.body).split())

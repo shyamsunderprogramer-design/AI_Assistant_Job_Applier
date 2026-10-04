@@ -287,3 +287,63 @@ def test_a_completely_read_board_still_closes(db):
     add_job("JR2")
 
     assert reconcile_board("greenhouse", "acme", ["JR1"], partial=False).closed == 1
+
+
+# -- a host that rate-limits us ---------------------------------------------
+
+class _Cooling:
+    def cooling_left(self, host):
+        return 0.0
+
+
+class _BusyThenOk:
+    """Turned away with 429s on the first pass, answers on the second."""
+
+    def __init__(self, answer_on_retry=True):
+        self.calls = 0
+        self.answer_on_retry = answer_on_retry
+
+    def fetch_jobs(self, company):
+        from data_engineering.scraper.http_client import RateLimited
+        self.calls += 1
+        if self.calls == 1 or not self.answer_on_retry:
+            raise RateLimited("apply.example.com is rate-limiting us (HTTP 429)")
+        return []
+
+
+def _run_rate_limited(monkeypatch, scraper, **cfg):
+    from data_engineering.scraper import runner as runner_mod
+    monkeypatch.setattr(runner_mod, "PoliteClient", lambda *a, **k: _Cooling())
+    monkeypatch.setattr(runner_mod.HttpSettings, "from_config", staticmethod(lambda cfg: None))
+    monkeypatch.setattr(runner_mod, "build_scrapers", lambda cfg, client: {"greenhouse": scraper})
+    monkeypatch.setattr(runner_mod, "resolve_filter", lambda cfg: _PassThroughFilter())
+    return runner_mod.run_scrape(FakeConfig(**cfg))
+
+
+def test_a_rate_limited_board_is_asked_again_after_the_cool_off(db, monkeypatch):
+    with get_session() as s:
+        s.add(Company(name="Acme", slug="acme", source="greenhouse"))
+    scraper = _BusyThenOk()
+    summary = _run_rate_limited(monkeypatch, scraper)
+    assert scraper.calls == 2 and summary.companies_failed == 0 and summary.companies_attempted == 1
+
+
+def test_rate_limits_never_retire_a_board(db, monkeypatch):
+    with get_session() as s:
+        s.add(Company(name="Acme", slug="acme", source="greenhouse"))
+    summary = _run_rate_limited(monkeypatch, _BusyThenOk(answer_on_retry=False),
+                                **{"limits.deactivate_after_failures": 1})
+    assert summary.companies_failed == 1
+    with get_session() as s:
+        row = s.query(Company).one()
+        assert row.active is True and row.consecutive_failures == 0
+
+
+def test_a_host_can_have_its_own_delay():
+    from data_engineering.scraper.http_client import HttpSettings
+
+    class Cfg:
+        user_agent = "test"
+        def get(self, path, default=None):
+            return {"http.host_delays": {"apply.workable.com": 4}}.get(path, default)
+    assert HttpSettings.from_config(Cfg()).host_delays == {"apply.workable.com": 4.0}

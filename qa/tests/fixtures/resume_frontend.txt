@@ -1,0 +1,32 @@
+ALEX RIVERA
+Portland, OR | alex.rivera@example.com | linkedin.com/in/alex-rivera-example | github.com/alexr-example
+
+EDUCATION
+B.S. Computer Science, Oregon State University     2014 – 2018
+
+SUMMARY
+Frontend engineer with 7 years building fast, accessible web apps in React and TypeScript. Led design-system work used by 12 product teams.
+
+SKILLS
+React, TypeScript, JavaScript, Next.js, Redux, GraphQL, Node.js, Jest, Cypress, Storybook, Tailwind CSS, Webpack, Vite, Figma, AWS Amplify, CI/CD with GitHub Actions, Accessibility (WCAG 2.1)
+
+PROFESSIONAL EXPERIENCE
+SENIOR FRONTEND ENGINEER, NIMBUS HEALTH, REMOTE     Mar 2022 – Present
+- Rebuilt the patient portal in Next.js and TypeScript, cutting page load time by 48% and raising Lighthouse scores from 61 to 96.
+- Led a design system in Storybook adopted by 12 product teams, removing 30% of duplicated UI code.
+- Introduced Cypress end-to-end tests into GitHub Actions, reducing production UI regressions by 40%.
+- Mentored 4 junior engineers through weekly code reviews and pairing sessions.
+- Worked with designers in Figma to deliver WCAG 2.1 AA accessible flows for screen-reader users.
+FRONTEND ENGINEER, BRIGHTCART, PORTLAND, OR     Jun 2018 – Feb 2022
+- Built the checkout flow in React and Redux handling 2M orders per year with a 99.9% success rate.
+- Migrated a legacy jQuery storefront to React over 9 months without a single outage.
+- Added GraphQL data fetching with Apollo, cutting API payload sizes by 35%.
+- Wrote Jest unit tests raising coverage from 35% to 80%.
+- Organised the office charity bake sale and the annual team picnic.
+
+PROJECTS
+- OpenForm: an open-source React form library with 1.2k GitHub stars and 40 contributors.
+- Personal blog built with Next.js and MDX, deployed on Vercel.
+
+CERTIFICATIONS
+AWS Certified Cloud Practitioner (2023)

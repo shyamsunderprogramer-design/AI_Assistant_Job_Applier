@@ -10,7 +10,7 @@ import random
 import threading
 import time
 import urllib.robotparser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
@@ -54,6 +54,9 @@ class HttpSettings:
     # RFC 9309, which says a 4xx means the file is unavailable and the crawler
     # may proceed. Off by default; see _robots_for().
     strict_robots_on_4xx: bool = False
+    # Hosts that want a longer gap than min_delay_seconds: apply.workable.com
+    # turned away 56 boards in one run at 1.5s.
+    host_delays: dict[str, float] = field(default_factory=dict)
 
     @classmethod
     def from_config(cls, cfg) -> "HttpSettings":
@@ -68,6 +71,7 @@ class HttpSettings:
             rate_limit_cooldown_seconds=float(
                 cfg.get("http.rate_limit_cooldown_seconds", 900.0)),
             strict_robots_on_4xx=bool(cfg.get("http.strict_robots_on_4xx", False)),
+            host_delays={str(h): float(s) for h, s in (cfg.get("http.host_delays", {}) or {}).items()},
         )
 
 
@@ -167,7 +171,7 @@ class PoliteClient:
             lock = self._host_locks.setdefault(host, threading.Lock())
 
         with lock:
-            delay = (self.settings.min_delay_seconds
+            delay = (self.settings.host_delays.get(host, self.settings.min_delay_seconds)
                      + random.uniform(0, self.settings.jitter_seconds))
             last = self._last_request_at.get(host)
             if last is not None:
@@ -190,7 +194,27 @@ class PoliteClient:
         """
         return self._request("POST", url, **kwargs)
 
+    # Board discovery asks a different host for every company on the boards
+    # that give each one a subdomain (BambooHR, Breezy, JazzHR, Recruitee,
+    # Teamtailor). Kept for a whole run, their cookies and robots.txt files
+    # piled up past a hundred thousand; the cookie jar is searched on every
+    # request, so each probe got slower than the last -- 1,084 names an hour
+    # fell to 225 with one core pinned. Past these sizes they are let go.
+    MAX_COOKIES = 2000
+    MAX_ROBOTS = 5000
+
+    def cooling_left(self, host: str) -> float:
+        """Seconds until a host that refused us may be asked again (0 if it may now)."""
+        return max(0.0, self._cooling_until.get(host, 0.0) - time.monotonic())
+
+    def _forget_old(self) -> None:
+        if len(self._session.cookies) > self.MAX_COOKIES:
+            self._session.cookies.clear()
+        if len(self._robots) > self.MAX_ROBOTS:
+            self._robots.clear()
+
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        self._forget_old()
         if not self.allowed(url):
             raise RobotsDisallowed(f"robots.txt disallows {url}")
 
