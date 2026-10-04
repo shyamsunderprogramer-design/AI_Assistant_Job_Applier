@@ -79,6 +79,9 @@
           <button class="btn" data-act="packet">{{ 'Rebuild' if packet.exists else 'Create folder' }}</button>
           <button class="btn" id="reveal" {% if not packet.exists %}disabled{% endif %}>Show in Finder</button>
         </div>
+        <div class="hint saved-in" id="saved-in" {% if not packet.exists %}hidden{% endif %}>Saved in:
+          <code id="saved-path">{{ packet.path }}</code>
+        </div>
         <div class="out" id="out-packet" hidden></div>
       </div>
     </li>
@@ -232,6 +235,26 @@
 </section>
 
 
+<dialog class="place" id="place" aria-labelledby="place-title">
+  <form method="dialog" id="place-form">
+    <h2 id="place-title">Where should the folder go?</h2>
+    <p class="hint">The folder keeps the job summary, the resume and the letter you sent for this application.</p>
+    <div class="place-options" id="place-options"></div>
+    <label class="t-label" for="place-base">Location</label>
+    <div class="row place-row">
+      <input type="text" id="place-base" spellcheck="false" autocomplete="off">
+      <button type="button" class="btn" id="place-pick">Choose…</button>
+    </div>
+    <div class="place-preview">Folder: <code id="place-full"></code></div>
+    <label class="used-check"><input type="checkbox" id="place-remember"> Use this location for every new application</label>
+    <div class="place-error bad" id="place-error" hidden></div>
+    <div class="row place-actions">
+      <button type="button" class="btn" id="place-cancel">Cancel</button>
+      <button type="submit" class="btn primary" id="place-create">Create folder</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const JOB = {{ job.id }};
 // Who writes when the second button is pressed. The label is rendered by the
@@ -312,6 +335,8 @@ document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click',
   // the event is dispatching. Hold the button in a variable instead.
   const button = e.currentTarget;
   const act = button.dataset.act;
+  // A new folder asks where it should go; Rebuild keeps the folder it has.
+  if (act === 'packet' && $('reveal').disabled) { openPlace(button); return; }
   button.disabled = true;
   show('out-' + act, 'Working…');
   const d = await ask(`/job/${JOB}/${act}`, {method:'POST'});
@@ -648,6 +673,56 @@ $('posting-save')?.addEventListener('click', async e => {
   $('posting-say').textContent = r.ok ? r.said : r.error;
   $('posting-say').className = 'hint ' + (r.ok ? 'good' : 'bad');
   if (r.ok) setTimeout(() => location.reload(), 1200);
+});
+
+// -- "Create folder": choose where it goes ------------------------------------------
+let placeName = '', placeButton = null;
+function placeFull() {
+  const base = $('place-base').value.trim().replace(/\/+$/, '');
+  $('place-full').textContent = base ? `${base}/${placeName}` : '—';
+  document.querySelectorAll('#place-options .chip').forEach(c =>
+    c.classList.toggle('on', c.dataset.path === base));
+}
+async function openPlace(button) {
+  placeButton = button;
+  const d = await ask(`/job/${JOB}/packet-place`);
+  if (!d.ok) { show('out-packet', d.error, 'bad'); return; }
+  placeName = d.name;
+  $('place-options').innerHTML = d.options.map(o =>
+    `<button type="button" class="chip" data-path="${esc(o.path)}" title="${esc(o.path)}">${esc(o.label)}</button>`).join('');
+  document.querySelectorAll('#place-options .chip').forEach(c => c.onclick = () => {
+    $('place-base').value = c.dataset.path; placeFull(); });
+  $('place-base').value = d.base;
+  $('place-remember').checked = false;
+  $('place-error').hidden = true;
+  placeFull();
+  $('place').showModal();
+  $('place-base').focus();
+}
+$('place-base').addEventListener('input', placeFull);
+$('place-cancel').onclick = () => $('place').close();
+$('place-pick').onclick = async () => {
+  const button = $('place-pick'); button.disabled = true; button.textContent = 'Opening Finder…';
+  const d = await ask('/pick-folder', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({start: $('place-base').value})}, 650000);
+  button.disabled = false; button.textContent = 'Choose…';
+  if (d.ok) { $('place-base').value = d.path; placeFull(); $('place-error').hidden = true; }
+  else if (!d.cancelled) { $('place-error').textContent = d.error; $('place-error').hidden = false; }
+};
+$('place-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const create = $('place-create'); create.disabled = true;
+  const d = await ask(`/job/${JOB}/packet`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({base: $('place-base').value, remember: $('place-remember').checked})});
+  create.disabled = false;
+  if (!d.ok && !d.output) { $('place-error').textContent = d.error; $('place-error').hidden = false; return; }
+  $('place').close();
+  show('out-packet', d.output || d.error, d.ok ? 'good' : 'bad');
+  if (d.ok) {
+    $('step-packet').classList.add('done'); $('reveal').disabled = false; countDone();
+    if (placeButton) placeButton.textContent = 'Rebuild';
+    $('saved-path').textContent = $('place-full').textContent; $('saved-in').hidden = false;
+  }
 });
 </script>
 {% endblock %}

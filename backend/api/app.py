@@ -476,8 +476,8 @@ def packet_folder(row: dict) -> Path | None:
     with get_session() as session:
         job = session.get(Job, row["id"])
         external = job.external_id or "" if job else ""
-    stem = output_filename(row["company"], row["title"], external)[:-5]
-    folder = output_dir() / stem
+    from ml.resume.packet import packet_dir
+    folder = packet_dir(cfg(), row["company"], row["title"], external, job_id=row["id"])
     return folder if folder.exists() else None
 
 
@@ -1099,6 +1099,19 @@ def act(job_id: int, action: str):
                 f"at the top of this page. Then press this again.")), 400
     if action == "tailor" and request.args.get("estimate"):
         args.insert(1, "--estimate")
+    if action == "packet":
+        # From the "where should it go" popup: remember the place, then build there.
+        body = request.get_json(silent=True) or {}
+        if body.get("base"):
+            base, problem = _usable_folder(str(body["base"]))
+            if problem:
+                return jsonify(ok=False, error=problem), 400
+            from ml.resume.packet import choose_place
+            with get_session() as session:
+                job = session.get(Job, job_id)
+                if job is None:
+                    return jsonify(ok=False, error="No such job."), 404
+                choose_place(cfg(), job, base, remember=bool(body.get("remember")))
 
     ok, output = run_command(*args, str(job_id))
     return jsonify(ok=ok, output=output)
@@ -1121,7 +1134,7 @@ def job_documents(job_id: int) -> dict[str, Path | None]:
         company, title, external = job.company, job.title, job.external_id or ""
     config = cfg()
     flat = packet_root(config) / output_filename(company, title, external)
-    folder = packet_dir(config, company, title, external)
+    folder = packet_dir(config, company, title, external, job_id=job_id)
     for key, candidates in (
         ("resume_pdf", [flat.with_suffix(".pdf")]),
         ("resume_docx", [flat, folder / RESUME_FILE]),
@@ -1289,6 +1302,77 @@ def job_file(job_id: int, kind: str):
     if kind == "letter":
         return send_file(path, mimetype="text/plain")
     return send_file(path, mimetype="application/pdf")
+
+
+def _usable_folder(raw: str) -> tuple[Path | None, str | None]:
+    """A folder the person may put applications in: theirs, not the system's."""
+    path = Path(raw.strip()).expanduser()
+    if not path.is_absolute():
+        return None, "Choose a full folder path, like ~/Documents/Job Applications."
+    path = path.resolve()
+    home = Path.home().resolve()
+    if not (path == home or home in path.parents or Path("/Volumes") in path.parents):
+        return None, f"{path} is outside your home folder and external drives — choose a folder of yours."
+    if path.exists() and not path.is_dir():
+        return None, f"{path} is a file, not a folder."
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return None, f"Cannot create {path}: {exc.strerror or exc}."
+    return path, None
+
+
+@app.get("/job/<int:job_id>/packet-place")
+def packet_place(job_id: int):
+    """Where this job's folder is, or would go, and places to choose from."""
+    from ml.resume.packet import load_places, packet_dir, packet_name, packet_root
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        company, title, external = job.company, job.title, job.external_id or ""
+    config = cfg()
+    folder = packet_dir(config, company, title, external, job_id=job_id)
+    places = load_places(config)
+    home = Path.home()
+    options = [("Documents", home / "Documents" / "Job Applications"), ("Desktop", home / "Desktop"),
+               ("Downloads", home / "Downloads"), ("This project", packet_root(config))]
+    if places.get("default"):
+        options.insert(0, ("Your default", Path(places["default"])))
+    # A new folder is offered outside the project, where deleting or moving the
+    # project can never take the record of what was sent with it.
+    suggested = folder.parent if (folder.exists() or str(job_id) in places["jobs"] or places.get("default")) \
+        else home / "Documents" / "Job Applications"
+    return jsonify(ok=True, name=packet_name(company, title, external), base=str(suggested),
+                   exists=folder.exists(), chosen=str(job_id) in places["jobs"],
+                   default=places.get("default"),
+                   options=[{"label": label, "path": str(path)} for label, path in options])
+
+
+@app.post("/pick-folder")
+def pick_folder():
+    """The Mac's own folder picker, so the person can browse to any folder."""
+    start = Path(str((request.get_json(silent=True) or {}).get("start") or Path.home())).expanduser()
+    while not start.exists() and start != start.parent:
+        start = start.parent
+    script = f'''
+with timeout of 600 seconds
+  tell application "System Events"
+    activate
+    set chosen to choose folder with prompt "Where should the application folder go?" default location (POSIX file "{start}")
+  end tell
+end timeout
+return POSIX path of chosen'''
+    try:
+        done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=620)
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False, error="The folder picker was left open too long."), 408
+    if done.returncode != 0:
+        if "-128" in done.stderr:
+            return jsonify(ok=False, cancelled=True)
+        return jsonify(ok=False, error="The folder picker could not open here — type or paste the folder "
+                                       "path instead. (" + done.stderr.strip()[-120:] + ")"), 500
+    return jsonify(ok=True, path=done.stdout.strip().rstrip("/"))
 
 
 @app.post("/job/<int:job_id>/reveal")

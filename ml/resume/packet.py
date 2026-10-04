@@ -11,6 +11,8 @@ been tailored or a letter drafted.
 
 from __future__ import annotations
 
+import json
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,14 +60,52 @@ def packet_root(cfg) -> Path:
     return root if root.is_absolute() else PROJECT_ROOT / root
 
 
-def packet_dir(cfg, company: str, title: str, external_id: str = "") -> Path:
+def packet_dir(cfg, company: str, title: str, external_id: str = "",
+               job_id: int | None = None) -> Path:
     """One directory per posting, named the way the resume file already is.
 
     Sharing `output_filename`'s stem keeps a packet traceable to exactly one
     posting, and means an existing tailored resume can be found beside it.
+    Where the person chose to put a job's folder wins; then their default
+    location; then the output directory.
     """
-    stem = output_filename(company, title, external_id)
-    return packet_root(cfg) / stem[:-5]     # drop ".docx"
+    places = load_places(cfg)
+    if job_id is not None and str(job_id) in places["jobs"]:
+        return Path(places["jobs"][str(job_id)])
+    base = Path(places["default"]) if places.get("default") else packet_root(cfg)
+    return base / packet_name(company, title, external_id)
+
+
+def packet_name(company: str, title: str, external_id: str = "") -> str:
+    return output_filename(company, title, external_id)[:-5]     # drop ".docx"
+
+
+# -- where the person wants application folders ----------------------------------
+
+def _places_file(cfg) -> Path:
+    return packet_root(cfg) / ".folder-places.json"
+
+
+def load_places(cfg) -> dict:
+    """{"default": base folder or None, "jobs": {job id: that job's folder}}."""
+    try:
+        data = json.loads(_places_file(cfg).read_text())
+        return {"default": data.get("default"), "jobs": dict(data.get("jobs") or {})}
+    except (OSError, ValueError):
+        return {"default": None, "jobs": {}}
+
+
+def choose_place(cfg, job, base: Path, remember: bool = False) -> Path:
+    """Put this job's folder in `base`; with `remember`, every new one too."""
+    places = load_places(cfg)
+    folder = Path(base) / packet_name(job.company, job.title, job.external_id or "")
+    places["jobs"][str(job.id)] = str(folder)
+    if remember:
+        places["default"] = str(base)
+    path = _places_file(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(places, indent=1))
+    return folder
 
 
 def _line(label: str, value: str) -> str:
@@ -110,7 +150,8 @@ def build_packet(cfg, job, letter_text: str | None = None) -> Packet:
     Never deletes: a letter drafted earlier survives a rebuild, so re-running
     this to pick up a newly tailored resume cannot cost you work.
     """
-    directory = packet_dir(cfg, job.company, job.title, job.external_id or "")
+    directory = packet_dir(cfg, job.company, job.title, job.external_id or "",
+                           job_id=getattr(job, "id", None))
     directory.mkdir(parents=True, exist_ok=True)
 
     (directory / JOB_SUMMARY).write_text(render_job_summary(job), encoding="utf-8")

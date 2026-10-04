@@ -149,3 +149,33 @@ def test_a_packet_with_both_pieces_is_complete(tmp_path):
 
     assert again.complete
     assert again.missing() == []
+
+
+# -- choosing where the folder goes ------------------------------------------------
+
+def test_a_chosen_location_is_where_the_folder_is_built_and_found(tmp_path):
+    from ml.resume.packet import choose_place
+    cfg, elsewhere = Cfg(tmp_path / "out"), tmp_path / "My Applications"
+    folder = choose_place(cfg, FakeJob(), elsewhere)
+    packet = build_packet(cfg, FakeJob())
+    assert packet.path == folder and folder.parent == elsewhere and folder.is_dir()
+    assert packet_dir(cfg, "ClickUp", "GTM DevOps Engineer", "ec1b5de9", job_id=178) == folder
+
+
+def test_remember_makes_it_the_default_for_new_jobs_only(tmp_path):
+    from ml.resume.packet import choose_place
+    cfg = Cfg(tmp_path / "out")
+    first = packet_dir(cfg, "Other", "Engineer", "x1", job_id=5)            # chosen before the default
+    choose_place(cfg, FakeJob(id=5, company="Other", title="Engineer", external_id="x1"), tmp_path / "out")
+    choose_place(cfg, FakeJob(), tmp_path / "Applications", remember=True)
+    assert packet_dir(cfg, "New Co", "SRE", "n1", job_id=9).parent == tmp_path / "Applications"
+    assert packet_dir(cfg, "Other", "Engineer", "x1", job_id=5) == first      # its own choice stays
+
+
+def test_only_the_persons_own_folders_are_allowed(monkeypatch, tmp_path):
+    from backend.api import app as webapp
+    monkeypatch.setattr(webapp.Path, "home", staticmethod(lambda: tmp_path))
+    assert webapp._usable_folder("/etc")[1]
+    assert webapp._usable_folder("relative/path")[1]
+    ok, problem = webapp._usable_folder(str(tmp_path / "Job Applications"))
+    assert problem is None and ok.is_dir()

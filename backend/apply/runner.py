@@ -166,7 +166,7 @@ def cover_letter(cfg, job, evidence: Path) -> Path | None:
     """The drafted letter, as a .txt Greenhouse will accept, if one exists."""
     from ml.resume.packet import LETTER_FILE, packet_dir
 
-    letter = packet_dir(cfg, job.company, job.title, job.external_id or "") / LETTER_FILE
+    letter = packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id) / LETTER_FILE
     if not letter.exists():
         return None
     target = evidence / "cover-letter.txt"
