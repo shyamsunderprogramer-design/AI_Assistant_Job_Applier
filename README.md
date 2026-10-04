@@ -6,7 +6,7 @@ against your resume, and tailors that resume per job — without inventing a sin
 thing you haven't done.
 
 **This file is the whole project's documentation: setup, decisions, and plan.**
-Last verified against the code on **2026-09-20**.
+Last verified against the code on **2026-10-04**.
 It replaces the old `README.md` + `constraints.txt` + `PLAN.md` split (originals in
 `docs/archive/`). Code comments cite the constraint sections as **§C1–§C10** below;
 those numbers are stable, don't renumber them.
@@ -27,12 +27,16 @@ those numbers are stable, don't renumber them.
 | **P8** Relevance v2 | ✅ Done, verified live | Role fit: 971 wrong-field postings fell below threshold, 0 remained |
 | **P4** Assisted apply | ⚠️ Built, untested | Fills Greenhouse forms and stops at the CAPTCHA (§C9) |
 | **P9** Outcome feedback | ❌ Not started | Needs real applications first |
+| **P10** Resume Tailoring | ✅ Done, verified live | Requirement-by-requirement match, gaps, version checks, checked .docx + PDF — see [Resume Tailoring](#resume-tailoring) |
+| **Web app** | ✅ Done | Jobs list, job pages, Tailor page, Settings, chat — `python -m backend.api` on :8770 |
+| **Board finder** | ⏳ Running | 6,875 active boards; 69,360 of 393,823 company names probed, ~3,400 names/hr |
 
-**599 tests, all passing, all offline.** Under git (§C11).
+**934 tests, all passing, all offline.** Under git (§C11).
 
 **The model is free by default.** Tailoring and cover letters are the only part
-that needs one, and a model on your own machine does it in about thirty seconds
-at no cost. Paid APIs (Anthropic, OpenAI, xAI, OpenRouter) and a self-hosted
+that needs one. A model on your own machine (Ollama) does it at no cost, and
+**Claude Code** can be the writer on a Claude plan you already pay for — also no
+extra cost (`RESUME_PROVIDER=claude-code`, or choose it in Settings). Paid APIs (Anthropic, OpenAI, xAI, OpenRouter) and a self-hosted
 OmniRoute gateway are supported and entirely optional — see §C10. Nobody with a
 chat subscription should have to buy API credit to use this.
 
@@ -58,9 +62,20 @@ below is the setup and the individual pieces.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium
 cp .env.example .env          # discovery and scoring need no API key
 ```
+
+**The web app** is where most of the work happens day to day:
+
+```bash
+.venv/bin/python -m backend.api        # then open http://localhost:8770
+```
+
+It lists the jobs ranked against your resume, and each job page walks one
+application through: read the posting, tailor the resume, write the letter,
+send it. On macOS, `devops/launchd/` keeps it running in the background.
 
 **Then drop your resume — any resume — into `ml/resume/`** and run:
 
@@ -78,8 +93,9 @@ seniority, and where you can work — then saves that to
 `backend/config/search_profile.yaml`, which the scraper reads in preference to
 `config.yaml`. **The file is yours to edit**; regenerate with `profile --force`.
 
-Only resume *tailoring* needs an `ANTHROPIC_API_KEY` in `.env`. Everything
-above — discovery, ranking, tracking — is free and works offline of the API.
+Only resume *tailoring* and cover letters need a model, and the default ones
+cost nothing (see §C10). Everything above — discovery, ranking, tracking — needs
+no model at all.
 
 Two things worth understanding before you read a number out of this tool:
 
@@ -131,8 +147,14 @@ main.py profile --force                  # regenerate, overwriting your edits
 main.py score --rescore --top 20
 main.py score --include-closed           # closed postings are skipped by default
 main.py tailor --estimate                # projected cost, sends nothing
-main.py tailor --limit 3                 # needs ANTHROPIC_API_KEY
+main.py tailor --limit 3                 # with the model chosen in Settings
+main.py tailor --job-id N                # one job, aiming for the ATS target
 main.py reparse                          # re-derive requirements after a heuristic change
+
+# The long-running board finder (walks the whole company list, resumable)
+python -m devops.probe_runner            # start or resume
+python -m devops.probe_runner --status   # where it is
+python -m devops.probe_runner --stop     # stop after the current batch
 ```
 
 ### Scaling the company list
@@ -161,6 +183,46 @@ the *old* one sitting in the DB, still ranked and still recommended.
 no longer matches, and removes it on `--apply` — including the sheet rows.
 Anything you have acted on (Applied, Rejected, …) is never touched.
 
+### Resume Tailoring
+
+Open it from the header's **Tailor** button, or press **Or let Claude write it**
+on any job page, which runs it for that job with your saved resume and shows the
+result right under the button. A run takes about five to ten minutes.
+
+1. **Reading** — DOCX in reading order (tables, lists, links, headers, footers)
+   or PDF page by page; a scanned PDF is read with OCR and marked low-confidence.
+2. **Resume information** — sections, each job with its own bullets, every fact
+   traceable to the line it came from.
+3. **Requirements** — each one from the posting's own words, marked required or
+   preferred, compound items split, synonyms joined (`k8s` = Kubernetes).
+4. **Matching** — each requirement is **Direct**, **Related**, **Unclear** or
+   **Not found**, with the resume line that shows it. A tool only in the skills
+   list is Unclear; a similar technology is Related, with the reason.
+5. **The draft** — rewritten from the resume's own facts only; no invented tool,
+   number, title or date (§C8). Job titles are kept as written.
+6. **Checking** — the .docx and PDF are drawn page by page and checked for
+   clipped or overlapping text, broken bullets, stranded headings and anything
+   missing; a problem is fixed and checked again before the result is shown.
+
+**The score** is `sum(weight × value) / total weight`, with required items
+weighing 3 and preferred 1, Direct counting 1.0 and Related 0.5. It is the
+tool's estimate, shown with its calculation — not an employer's ATS result.
+
+**Version checks** compare versions named in the resume with release dates from
+[endoflife.date](https://endoflife.date) (cached 30 days), plus any you enter in
+`ml/tailoring/release_dates.json`. A date that cannot be confirmed is *Unknown*,
+never guessed.
+
+Results tabs: Tailored Resume (editable, with downloads), Match Report,
+Alignment Summary, Version Checks, Changes Made, Gaps. The uploaded file is never
+changed. With Microsoft Word installed, Word also lays out the .docx so its pages
+are checked the way Word shows them (the web app needs Word to be granted access
+to `data/tailoring/word` once).
+
+**A teaser is not a posting.** Aggregators such as Jooble often carry 30–40 words.
+Those jobs show a *Paste the full posting* box, and tailoring waits for the real
+text rather than spending minutes on a paragraph.
+
 ## 3. Configuration
 
 Everything tunable lives in `backend/config/config.yaml`. No behaviour is hardcoded.
@@ -170,12 +232,12 @@ Everything tunable lives in `backend/config/config.yaml`. No behaviour is hardco
 | `database` | SQLite path |
 | `excel` | tracker workbook path |
 | `resume` | base resume path (null = auto-detect), output dir, `min_score`, overwrite, `max_spend_per_run_usd`, per-model `pricing` |
-| `http` | robots.txt enforcement, per-host delay, jitter, retries, backoff, UA |
+| `http` | robots.txt enforcement, per-host delay, jitter, retries, backoff, UA; `host_delays` for hosts that need a longer gap (Workable: 4s) |
 | `portals` | which ATSs are enabled (greenhouse, lever, ashby) |
 | `companies` | seed list; whether to also scrape discovered companies |
 | `filters` | JD keyword requirements; `use_derived_profile` (default true) makes the resume-derived search win over the hand-written lists here |
 | `limits` | companies per run, applications/day (P4), auto-deactivation, posting-closure safety (`close_on_empty_board`), staleness warning (`stale_company_warn_days`) |
-| `discovery` | which ATSs to probe, corporate suffixes to strip from names |
+| `discovery` | which ATSs to probe, corporate suffixes to strip; `probe_delay_seconds` and `name_workers` set the board finder's pace (0.5s, 6 names at a time) |
 | `logging` | level and log file |
 
 **You should not need to touch `filters.title_keywords`.** `main.py profile`
@@ -196,7 +258,7 @@ Organised by the software-engineering role that owns each part.
 main.py               the CLI entrypoint (stays at the root)
 
 frontend/             UI engineer
-  templates/          Flask/Jinja pages: index, job, setup, applicant
+  templates/          Flask/Jinja pages: index, job, tailor, setup, applicant
   static/             app.css
   console.html        the status console served by devops/jobstatus.py
 
@@ -225,8 +287,12 @@ data_engineering/     data engineer
 
 ml/                   AI / ML engineer
   resume/             parser, profile (resume -> search), scorer, tailor, guard,
-                      letter, llm, cost, writer, pdf, packet, pipeline
+                      letter, llm, cost, writer, pdf, packet, pipeline, typeset,
+                      additions ("I've used this"), progress (the job page's bar)
                       (+ your base resume and tailored output, gitignored)
+  tailoring/          Resume Tailoring: reader (DOCX/PDF/OCR), structure,
+                      requirements, synonyms, matching, versions, draft,
+                      documents (render + page checks), pipeline
   benchmark_resume.py tailoring benchmark
 
 devops/               DevOps / SRE
@@ -454,6 +520,10 @@ Two things worth knowing before choosing a local model:
   were found this way — `KPIs`, `S&OP` and `Functional` were all flagged as
   invented while printed verbatim in the resume. Check the resume before
   blaming the model.
+
+**Claude Code as the writer** (`claude-code`) runs Claude through the Claude
+Code CLI on your own plan: no API key and no per-call charge. A call that does not
+answer within six minutes gives up rather than holding the page.
 
 **Paid providers are supported and entirely optional:** `anthropic`, `openai`,
 `grok`, `openrouter`, and a self-hosted `omniroute` gateway. They are chosen on
@@ -953,10 +1023,12 @@ rather than a feeling.
 |---|---|---|
 | ~~1~~ | ~~Base resume into `ml/resume/`~~ — ✅ supplied 2026-09-06 | done |
 | ~~3~~ | ~~Your actual target roles~~ — ✅ now derived from the resume automatically | done |
-| 2 | **`ANTHROPIC_API_KEY`** in `.env` — no `.env` file exists yet | P3B, P8 |
+| ~~2~~ | ~~`ANTHROPIC_API_KEY`~~ — ✅ not needed: Ollama or Claude Code write for free | done |
 | 4 | **Profile data** — contact, work history, EEO answers | P4 |
 | 5 | **Go/no-go on the P4 recast** — prefill-and-hand-over instead of auto-submit. This is a scope *reduction*; confirm it's the one you want | P4 |
 | 6 | **Breadth target** — is 300 boards right? | P6 |
+| 7 | **Your auto-apply workflow** — the steps you take on a real application | P4 |
+| 8 | **Word access** (optional) — grant Word access to `data/tailoring/word` once | Word page checks in the web app |
 
 **None of items 1–6 block `git init`, P5, P6, or P7.** That is the point of the
 reorder: there is roughly a week of high-value, fully unblocked work available right
