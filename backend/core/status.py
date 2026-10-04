@@ -363,7 +363,7 @@ def watch(cfg, interval: float = 5.0) -> int:
             tasks = collect(cfg)
             stamp = time.strftime("%H:%M:%S")
             print("\033[2J\033[H", end="")  # clear, home
-            print(f"  JOB APPLIER — live status          {stamp}")
+            print(f"  AI_Assistant_Job_Applier — live status          {stamp}")
             print(f"  {'─' * 92}")
             print(render(tasks))
             print(f"  {'─' * 92}")

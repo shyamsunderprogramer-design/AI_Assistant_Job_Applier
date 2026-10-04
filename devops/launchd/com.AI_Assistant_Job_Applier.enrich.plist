@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.jobapplier.enrich</string>
+	<string>com.AI_Assistant_Job_Applier.enrich</string>
 	<key>LowPriorityIO</key>
 	<true/>
 	<key>Nice</key>
@@ -13,7 +13,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/tools/daily_pipeline.sh</string>
+		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/devops/daily_pipeline.sh</string>
 		<string>enrich</string>
 	</array>
 	<key>RunAtLoad</key>

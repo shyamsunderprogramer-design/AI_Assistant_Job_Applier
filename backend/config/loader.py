@@ -38,7 +38,7 @@ class Config:
     @property
     def user_agent(self) -> str:
         contact = os.getenv("SCRAPER_CONTACT_EMAIL", "").strip() or "not provided"
-        template = self.get("http.user_agent", "JobApplierAgent/0.1")
+        template = self.get("http.user_agent", "AI_Assistant_Job_Applier/0.1")
         return template.replace("{contact}", contact)
 
     @property

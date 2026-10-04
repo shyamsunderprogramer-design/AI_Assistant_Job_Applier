@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.jobapplier.discover</string>
+	<string>com.AI_Assistant_Job_Applier.daily</string>
 	<key>LowPriorityIO</key>
 	<true/>
 	<key>Nice</key>
@@ -13,23 +13,21 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/tools/daily_pipeline.sh</string>
-		<string>discover</string>
+		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/devops/daily_pipeline.sh</string>
+		<string>daily</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
 	<key>StandardErrorPath</key>
-	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_discover.log</string>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_daily.log</string>
 	<key>StandardOutPath</key>
-	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_discover.log</string>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_daily.log</string>
 	<key>StartCalendarInterval</key>
 	<array>
 		<dict>
 			<key>Hour</key>
-			<integer>3</integer>
+			<integer>6</integer>
 			<key>Minute</key>
-			<integer>7</integer>
-			<key>Weekday</key>
 			<integer>0</integer>
 		</dict>
 	</array>

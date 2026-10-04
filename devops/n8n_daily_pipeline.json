@@ -1,5 +1,5 @@
 {
-  "name": "Job Applier \u2014 daily pipeline",
+  "name": "AI_Assistant_Job_Applier \u2014 daily pipeline",
   "nodes": [
     {
       "parameters": {

@@ -6,9 +6,9 @@ the home directory.
 
 | agent | when | what |
 |---|---|---|
-| `…jobapplier.daily` | 07:13 daily | scrape → score → export → digest |
-| `…jobapplier.enrich` | 02:23 and 14:23 | continue website/careers enrichment |
-| `…jobapplier.discover` | Sunday 03:07 | probe for new boards |
+| `…AI_Assistant_Job_Applier.daily` | 06:00 daily | scrape → score → export → digest |
+| `…AI_Assistant_Job_Applier.enrich` | 02:23 and 14:23 | continue website/careers enrichment |
+| `…AI_Assistant_Job_Applier.discover` | Sunday 03:07 | probe for new boards |
 
 All three call `devops/daily_pipeline.sh <task>`, which takes a lock so two runs
 can never overlap, logs to `data/daily_run.log`, and notifies only when there is
@@ -16,10 +16,10 @@ something to say — a new strong match, or a failure.
 
 ## Managing them
 
-    launchctl list | grep jobapplier                     # are they registered
-    launchctl kickstart -p gui/$UID/com.jobapplier.daily   # run now
-    launchctl bootout gui/$UID/com.jobapplier.daily        # stop
-    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.jobapplier.daily.plist
+    launchctl list | grep AI_Assistant_Job_Applier                     # are they registered
+    launchctl kickstart -p gui/$UID/com.AI_Assistant_Job_Applier.daily   # run now
+    launchctl bootout gui/$UID/com.AI_Assistant_Job_Applier.daily        # stop
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.AI_Assistant_Job_Applier.daily.plist
 
 After editing a plist, `bootout` then `bootstrap` it — launchd caches the old
 definition otherwise.

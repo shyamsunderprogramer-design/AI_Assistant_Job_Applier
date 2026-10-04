@@ -1,4 +1,4 @@
-# Job Applier Agent
+# AI_Assistant_Job_Applier
 
 Personal job-search automation for one person. Scrapes real ATS job boards, tracks
 every posting in SQLite, mirrors them into an editable Excel sheet, scores each one

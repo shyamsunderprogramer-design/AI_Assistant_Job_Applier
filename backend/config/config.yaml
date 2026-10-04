@@ -1,4 +1,4 @@
-# Job Applier Agent — configuration
+# AI_Assistant_Job_Applier — configuration
 # Everything tunable lives here. No behaviour is hardcoded in the modules.
 
 database:
@@ -148,7 +148,7 @@ resume:
 # ---------------------------------------------------------------------------
 http:
   # Honest, contactable UA. {contact} is filled from SCRAPER_CONTACT_EMAIL.
-  user_agent: "JobApplierAgent/0.1 (personal job search; contact: {contact})"
+  user_agent: "AI_Assistant_Job_Applier/0.1 (personal job search; contact: {contact})"
   respect_robots: true
   timeout_seconds: 20
   # Minimum seconds between requests to the SAME host, plus random jitter.

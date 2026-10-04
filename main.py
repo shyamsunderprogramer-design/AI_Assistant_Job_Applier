@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Job Applier Agent CLI. Phase 1: discovery + scraping.
+"""AI_Assistant_Job_Applier CLI. Phase 1: discovery + scraping.
 
     python main.py init-db
     python main.py scrape
@@ -918,7 +918,7 @@ def cmd_failures(cfg, args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Job Applier Agent")
+    parser = argparse.ArgumentParser(description="AI_Assistant_Job_Applier")
     parser.add_argument("--config", default=None, help="Path to config.yaml")
     sub = parser.add_subparsers(dest="command", required=True)
 
