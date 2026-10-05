@@ -61,6 +61,25 @@ PROVIDERS = {
                 "API key and no credit to buy. Each resume uses some of your "
                 "plan's usage. The resume and posting go to Anthropic.",
     },
+    # Two more chat plans, through their own official tools (ml/resume/plans.py).
+    "chatgpt": {
+        "label": "ChatGPT, through Codex (your plan)",
+        "free": True,           # the person's own ChatGPT plan, no per-call bill
+        "env_key": None,
+        "default_model": "",
+        "note": "ChatGPT, signed in with your ChatGPT plan through OpenAI's Codex "
+                "CLI -- no API key and no credit to buy. Each resume uses some of "
+                "your plan's usage. The resume and posting go to OpenAI.",
+    },
+    "gemini": {
+        "label": "Gemini, through Gemini CLI (your Google account)",
+        "free": True,
+        "env_key": None,
+        "default_model": "",
+        "note": "Gemini, signed in with your Google account through Google's "
+                "Gemini CLI -- a free daily allowance, more with Gemini Advanced. "
+                "The resume and posting go to Google.",
+    },
     "anthropic": {
         "label": "Anthropic API",
         "free": False,
@@ -226,6 +245,9 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
 def _dispatch(provider, system, user, cfg, *, max_tokens, want_json) -> Completion:
     if provider == "claude-code":
         return _claude_code(system, user, cfg)
+    if provider in ("chatgpt", "gemini"):
+        from ml.resume import plans
+        return getattr(plans, provider)(system, user, model_name(cfg))
     if provider == "anthropic":
         return _anthropic(system, user, cfg, max_tokens=max_tokens)
     if provider == "ollama":

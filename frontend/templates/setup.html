@@ -10,6 +10,15 @@
   <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
 </header>
 
+<section class="card" id="plans">
+  <h2 style="margin-top:0;font-size:1.05em">Sign in with the chat plan you already have</h2>
+  <p class="sub">Claude, ChatGPT or Gemini can write your resumes on your own plan — no API key,
+    nothing extra to pay. Sign in happens on their own page in your browser; this app never sees
+    your password. Each resume uses some of that plan's usage.</p>
+  <div class="plan-list" id="plan-list"><p class="sub dim">Checking…</p></div>
+  <div id="plans-out" class="sub" hidden></div>
+</section>
+
 <section class="card">
   <h2 style="margin-top:0;font-size:1.05em">Which model writes your resume</h2>
   <p class="sub">Tailoring and cover letters are the <b>only</b> part of this
@@ -202,5 +211,44 @@ $('setup').addEventListener('submit', async e => {
     out.textContent = 'Could not reach the app. If you restarted it, reload this page.';
   }
 });
+
+// -- Sign in with a chat plan ------------------------------------------------------
+const PLAN_PROVIDER = {claude: 'claude-code', chatgpt: 'chatgpt', gemini: 'gemini'};
+async function loadPlans() {
+  const r = await (await fetch('/plans/status')).json();
+  const chosen = document.querySelector('input[name="RESUME_PROVIDER"]:checked')?.value;
+  document.getElementById('plan-list').innerHTML = r.plans.map(p => {
+    const inUse = PLAN_PROVIDER[p.name] === chosen;
+    const state = !p.installed ? '<span class="pill">not installed</span>'
+      : p.signed_in ? `<span class="pill good">signed in</span> <span class="sub dim">${p.who || ''}</span>`
+      : '<span class="pill bad">not signed in</span>';
+    const buttons = !p.installed
+      ? `<button class="btn" data-plan="${p.name}" data-act="install">Install</button>`
+      : p.signed_in
+        ? `${inUse ? '<span class="pill good">writing your resumes</span>'
+                   : `<button class="btn primary" data-use="${p.name}">Use ${p.label}</button>`}
+           <button class="btn" data-plan="${p.name}" data-act="signout">Sign out</button>`
+        : `<button class="btn primary" data-plan="${p.name}" data-act="signin">Sign in to ${p.label}</button>`;
+    return `<div class="plan-row"><div><b>${p.label}</b> ${state}<div class="sub dim">Works with ${p.plan}.</div></div>
+      <div class="row" style="gap:8px">${buttons}<button class="btn" data-check>Check</button></div></div>`;
+  }).join('');
+  document.querySelectorAll('[data-plan]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const d = await (await fetch(`/plans/${b.dataset.plan}/${b.dataset.act}`, {method: 'POST'})).json();
+    const out = document.getElementById('plans-out'); out.hidden = false;
+    out.textContent = d.ok ? 'A Terminal window opened — follow the steps there (and in your browser), then press Check.'
+                           : d.error;
+    b.disabled = false;
+  });
+  document.querySelectorAll('[data-check]').forEach(b => b.onclick = loadPlans);
+  document.querySelectorAll('[data-use]').forEach(b => b.onclick = () => {
+    const radio = document.querySelector(`input[name="RESUME_PROVIDER"][value="${PLAN_PROVIDER[b.dataset.use]}"]`);
+    if (!radio) return;
+    radio.checked = true; radio.dispatchEvent(new Event('change', {bubbles: true}));
+    document.getElementById('writing').requestSubmit();
+    setTimeout(loadPlans, 800);
+  });
+}
+loadPlans();
 </script>
 {% endblock %}

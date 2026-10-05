@@ -409,6 +409,10 @@ def writer_state() -> dict:
     # minute" of a cloud model that took two and a half.
     if provider == "claude-code":
         label, where, takes = "Or let Claude write it", "on your Claude plan", "about a minute"
+    elif provider == "chatgpt":
+        label, where, takes = "Or let ChatGPT write it", "on your ChatGPT plan", "about a minute"
+    elif provider == "gemini":
+        label, where, takes = "Or let Gemini write it", "on your Google account", "about a minute"
     elif provider == "ollama" and model.endswith(":cloud"):
         label, where, takes = "Or let Ollama Cloud write it", "on Ollama Cloud", "two or three minutes"
     elif provider == "ollama":
@@ -1293,6 +1297,27 @@ def job_suggestions_accept(job_id: int):
         return jsonify(ok=False, error="Nothing to add."), 400
     added, problems = accept(cfg(), job_id, [c for c in chosen if isinstance(c, dict)])
     return jsonify(ok=True, added=added, problems=problems)
+
+
+@app.get("/plans/status")
+def plans_status():
+    """Who is signed in to Claude, ChatGPT and Gemini, for the Settings page."""
+    from ml.resume.plans import TOOLS, status
+    return jsonify(ok=True, plans=[status(name) for name in TOOLS])
+
+
+@app.post("/plans/<name>/<action>")
+def plans_action(name: str, action: str):
+    """Open the tool's own sign-in, sign-out or install in a Terminal window."""
+    from ml.resume.plans import TOOLS, open_in_terminal
+    if name not in TOOLS or action not in ("signin", "signout", "install"):
+        return jsonify(ok=False, error="Unknown request."), 400
+    try:
+        command = open_in_terminal(name, action)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"Could not open Terminal ({type(exc).__name__}). "
+                                       f"Run it yourself: {TOOLS[name][action]}"), 500
+    return jsonify(ok=True, command=command)
 
 
 @app.get("/job/<int:job_id>/progress")

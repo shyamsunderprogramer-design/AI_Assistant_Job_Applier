@@ -458,3 +458,7 @@ dialog.place h2{margin:0 0 4px}
 .ba-up{font-size:12.5px;padding:1px 7px;border-radius:99px;background:var(--sunk)}
 .ba .good{color:var(--good)} .ba .ok{color:var(--warn)} .ba .low{color:var(--crit)}
 .ba-foot{margin-top:4px;font-size:12.5px;color:var(--muted)}
+/* Sign in with a chat plan */
+.plan-list{display:grid;gap:8px;margin-top:10px}
+.plan-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
