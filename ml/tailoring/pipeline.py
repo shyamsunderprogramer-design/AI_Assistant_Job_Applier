@@ -41,7 +41,7 @@ def new_run() -> Path:
 
 
 def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None = None, cfg=None,
-        progress=lambda stage, note="": None, use_model: bool = True) -> dict:
+        progress=lambda stage, note="": None, use_model: bool = True, company: str | None = None) -> dict:
     from ml.tailoring import documents, draft as drafting, matching, requirements, versions
     from ml.tailoring.reader import ReadError, read_document
     from ml.tailoring.structure import build
@@ -83,7 +83,14 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     progress(STAGES[4])
     if resume_file.suffix.lower() not in (".docx", ".pdf", ".txt", ".md"):
         raise StageError(STAGES[4], "Unsupported resume file.", "resume")
-    draft = drafting.create(resume_file, jd_text, report, cfg, use_model=use_model)
+    # Drafted again until it matches the posting's keywords well (rounds.py);
+    # without a model every round would be the same, so one is enough.
+    from ml.tailoring import rounds
+    draft, ats, rounds_used = rounds.best_draft(
+        lambda extra, focus: drafting.create(resume_file, jd_text, report, cfg, use_model=use_model,
+                                             extra=extra, focus=focus),
+        jd_text, progress=lambda note: progress(STAGES[4], note), rounds=rounds.ROUNDS if use_model else 1,
+        company=company)
     # A header that says "LinkedIn" as a linked word keeps the link: the
     # writer draws a LinkedIn address as that word, linked.
     linkedin = next((l for l in model.contact.get("links", []) if "linkedin.com" in l.lower()), None)
@@ -95,12 +102,23 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     progress(STAGES[5])
     rendered = documents.produce(draft, folder, model=model, jd_text=jd_text)
     draft.changes = drafting.changes(draft.base, draft.result, draft.header)
+    from pypdf import PdfReader
+    before_after = {
+        "ats": [ats["before"], ats["after"]],
+        "requirements": [round(rounds.requirements_shown(reqs, resume_file), 1),
+                         round(rounds.requirements_shown(reqs, rendered.docx), 1)],
+        "rewritten": sum(1 for c in draft.changes if c["kind"] == "Rewrote a bullet"),
+        "rounds": rounds_used,
+        "target": max(rounds.TARGET, ats["before"] or 0),
+        "pages": [rounds.pages_of_original(draft), len(PdfReader(str(rendered.pdf)).pages)],
+    }
 
     result = {
         "folder": str(folder),
         "files": {"docx": rendered.docx.name, "pdf": rendered.pdf.name},
         "pages": {k: [Path(p).name for p in v] for k, v in rendered.pages.items()},
         "score": report.score,
+        "before_after": before_after,
         "score_note": ("The builder's estimate: required items weigh 3 and preferred 1; a direct match "
                        "counts 1.0 and a related one 0.5. 100% means every identified requirement is "
                        "directly shown under these rules — not a guaranteed result from an employer's ATS."),
@@ -188,7 +206,7 @@ def _progress(folder: Path, **state) -> None:
 
 
 def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, cfg,
-          after=None) -> None:
+          after=None, company: str | None = None) -> None:
     """Run in the background; the page follows progress.json.
 
     `after(result)` runs once the files are made and before the run reads as
@@ -201,7 +219,7 @@ def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, c
 
     def work():
         try:
-            result = run(folder, resume_file, jd_text, jd_file, cfg, progress=follow)
+            result = run(folder, resume_file, jd_text, jd_file, cfg, progress=follow, company=company)
             if after is not None:
                 after(result)
             _progress(folder, stage=len(STAGES), done=True, note="")
@@ -339,10 +357,15 @@ def finish_job_run(job_id: int, folder: Path, target_docx: Path, score: float,
                    packet: Path | None = None) -> bool:
     """Make this run the job's resume only if it matches at least as well as the best so far.
 
+    `score` is the tailored resume's ATS keyword match -- the outcome. The
+    requirement score was used first, but it measures the original resume
+    and moved a point between runs by chance, so a better resume was passed
+    over. A record from then (no "measure") is replaced, not compared.
     Returns whether it did. A rewrite that does worse never replaces a better one.
     """
     record = _job_record(job_id)
-    best = record.get("best_score")
+    best = record.get("best_score") if record.get("measure") == "ats" else None
+    record["measure"] = "ats"
     better = best is None or score >= best or not target_docx.exists()
     if better:
         place_for_job(folder, target_docx, packet)

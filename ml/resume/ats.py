@@ -70,7 +70,9 @@ FILLER = {"next", "part", "bring", "come", "challenges", "large", "additional", 
           # how a posting talks about itself and the reader, not skills
           "excellence", "seeks", "seeking", "professional", "professionals",
           "responsibilities", "responsibility", "requirements", "qualifications",
-          "experienced", "platforms", "critical", "operational", "readiness"}
+          "experienced", "platforms", "critical", "operational", "readiness",
+          "improve", "improving", "day", "days", "learning", "objects", "complexity", "ideas",
+          "things", "everyone", "together", "growth", "impact", "journey", "passion"}
 
 
 def as_phrases(terms: list[str], jd_text: str) -> list[str]:
@@ -158,12 +160,37 @@ def split_gaps(gaps: list[str], jd_text: str) -> tuple[list[str], list[str]]:
     return [g for g in gaps if is_concept(g)], tools
 
 
+def _noise(term: str, jd_text: str, company: str | None) -> bool:
+    """Words no ATS weighs: the company's own name, places, people, everyday words."""
+    first = term.split()[0]
+    if term in FILLER or first in FILLER or first in ("at", "in", "of", "for", "our", "your", "the"):
+        return True
+    for word in re.findall(r"[a-z0-9]{3,}", (company or "").lower()):
+        if term.startswith(word) or word.startswith(term):     # "catawiki", "catawikians"
+            return True
+    return _is_name(term, jd_text) and not is_tool(term, jd_text)
+
+
+def _percent(result, jd_text: str, company: str | None) -> int:
+    """The share of the posting's real terms the text has, with the noise left out."""
+    matched = [t for t in result.matched if not _noise(t, jd_text, company)]
+    missing = [t for t in result.missing if not _noise(t, jd_text, company)]
+    total = len(matched) + len(missing)
+    return round(100 * len(matched) / total) if total else result.percent
+
+
 def compare(base_text: str, tailored_text: str | None, jd_text: str,
             requirements: str | None = None, company: str | None = None) -> dict:
+    """The keyword match of a resume, and of its tailored version, against a posting.
+
+    The company's own name, places and everyday words are not counted: a
+    real ATS does not score them, and counting them held a resume that had
+    every skill the posting named at 71% ("lisbon", "catawikians", "improve").
+    """
     jd_text = requirements_only(jd_text)
     requirements = requirements_only(requirements) if requirements else requirements
     before = score_resume(base_text, jd_text, requirements=requirements, company=company)
-    out = {"before": before.percent, "terms": before.jd_terms, "after": None,
+    out = {"before": _percent(before, jd_text, company), "terms": before.jd_terms, "after": None,
            "matched": before.matched, "fixable": [],
            "gaps": _shown(as_phrases(_shown(before.missing), jd_text))}
     out["concepts"], out["tools"] = split_gaps(out["gaps"], jd_text)
@@ -172,7 +199,7 @@ def compare(base_text: str, tailored_text: str | None, jd_text: str,
     after = score_resume(tailored_text, jd_text, requirements=requirements, company=company)
     have = set(before.matched)
     out.update({
-        "after": after.percent,
+        "after": _percent(after, jd_text, company),
         "matched": after.matched,
         "fixable": _shown([t for t in after.missing if t in have]),
         "gaps": _shown(as_phrases(_shown([t for t in after.missing if t not in have]), jd_text)),

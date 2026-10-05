@@ -74,7 +74,14 @@ def guidance(report) -> str:
                            gaps="\n".join(gaps[:40]) or "- (none)")
 
 
-def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_model: bool = True) -> Draft:
+def evidence_lines(report) -> set[str]:
+    """The resume lines that show a requirement the posting has (direct or related)."""
+    return {e["text"] for m in report.matches if m.status in ("direct", "related")
+            for e in (m.evidence or []) if e.get("text")}
+
+
+def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_model: bool = True,
+           extra: str = "", focus: list[str] | None = None) -> Draft:
     from ml.resume.fit import fit_to_pages
     from ml.resume.parser import parse_resume
     from ml.resume.tailor import TailorResult, tailor_resume
@@ -86,7 +93,8 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_
     try:
         if not use_model:
             raise RuntimeError("the writing model is switched off")
-        result = tailor_resume(base, title, "the employer", jd_text, cfg=cfg, guidance=guidance(report))
+        result = tailor_resume(base, title, "the employer", jd_text, cfg=cfg,
+                               guidance=guidance(report) + ("\n\n" + extra if extra else ""))
     except Exception as exc:
         # No model, or none answering: the draft is still made, from the
         # resume's own words, selected and laid out for the posting.
@@ -105,7 +113,8 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_
     if max_pages:
         try:
             fit_to_pages(base, result, jd_text, max_pages=max_pages,
-                         pages=lambda b, r: _pages(b, r, header))
+                         pages=lambda b, r: _pages(b, r, header), keep=evidence_lines(report),
+                         focus_terms=focus or None)
         except Exception:
             pass
     draft.changes = changes(base, result, header)

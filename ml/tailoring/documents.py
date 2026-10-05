@@ -77,8 +77,12 @@ def word_to_pdf(docx: Path, out: Path) -> bool:
     access to that folder (Word asks once, with its own "Grant Access" box).
     Until then Word waits on that box, so a timeout pauses Word for an hour
     rather than holding every run.
+
+    Off unless `tailoring.use_word` is true: without that one grant, Word
+    bounced in the Dock after every tailoring asking for file access, and the
+    PDF page checks already cover the layout.
     """
-    if not Path("/Applications/Microsoft Word.app").exists():
+    if not use_word() or not Path("/Applications/Microsoft Word.app").exists():
         return False
     for folder in (WORD_DIR, SHARED_DIR):
         if folder == SHARED_DIR and _paused():
@@ -105,6 +109,15 @@ def word_to_pdf(docx: Path, out: Path) -> bool:
                 except OSError:
                     pass
     return False
+
+
+def use_word() -> bool:
+    """Whether the person has switched Word's page checks on (config: tailoring.use_word)."""
+    try:
+        from backend.config.loader import load_config
+        return bool(load_config().get("tailoring.use_word", False))
+    except Exception:
+        return False
 
 
 def _word_save_pdf(src: Path, dst: Path) -> bool | None:
@@ -283,10 +296,10 @@ def produce(draft, folder: Path, name: str = "tailored-resume", model=None, jd_t
         if word:
             checks += visual_checks(docx_pdf, "docx", headings) + content_checks(docx_pdf, "docx", blocks, model)
         else:
-            checks.append(Check("docx", None, "render", "Microsoft Word could not be used here (it is not "
-                                                        "installed, or macOS has not allowed this app to use "
-                                                        "it), so the DOCX was checked through its matching PDF, "
-                                                        "drawn from the same content."))
+            checks.append(Check("docx", None, "render", "The DOCX was checked through its matching PDF, drawn "
+                                                        "from the same content (Word's own page check is off "
+                                                        "in Settings, or Word is not available).",
+                                severity="note"))
         rendered = Rendered(docx, pdf, docx_pdf if word else None, {}, checks, attempt, word)
         fixable = [c for c in checks if c.kind == "page break"]
         if not fixable or attempt == attempts:

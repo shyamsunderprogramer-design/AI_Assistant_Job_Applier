@@ -54,6 +54,7 @@
       <a class="btn" id="dl-pdf" href="#">Download PDF</a>
     </div>
   </div>
+  <div id="ba"></div>
   <div class="t-warn" id="extraction" hidden></div>
   <div class="t-tabs" role="tablist">
     <button class="t-tab on" data-tab="resume">Tailored Resume</button>
@@ -175,6 +176,7 @@ async function load() {
   document.querySelector('[data-view=docx]').hidden = !hasWord;
   if (!hasWord) { VIEW = 'pdf'; document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x.dataset.view === 'pdf')); }
   $('score').textContent = Math.round(RESULT.score) + '%';
+  $('ba').innerHTML = beforeAfter(RESULT);
   $('score-note').textContent = RESULT.score_note;
   $('dl-docx').href = `/tailor/${RUN}/download/docx`;
   $('dl-pdf').href = `/tailor/${RUN}/download/pdf`;
@@ -209,7 +211,7 @@ function renderResume() {
     `<figure class="t-page"><img src="/tailor/${RUN}/page/${p}?t=${stamp}" alt="Page ${i + 1}"><figcaption>Page ${i + 1}</figcaption></figure>`).join('');
   const checks = RESULT.checks.filter(c => c.file === VIEW || VIEW === 'docx' && c.file === 'docx');
   $('checks').innerHTML = checks.length
-    ? `<div class="t-warn">${checks.map(c => `<div>${c.severity === 'problem' ? '✕' : '⚠'} ${c.page ? 'Page ' + c.page + ': ' : ''}${esc(c.detail)}</div>`).join('')}</div>`
+    ? `<div class="t-warn">${checks.map(c => `<div>${c.severity === 'problem' ? '✕' : c.severity === 'note' ? 'ℹ' : '⚠'} ${c.page ? 'Page ' + c.page + ': ' : ''}${esc(c.detail)}</div>`).join('')}</div>`
     : '';
 }
 
@@ -297,5 +299,26 @@ if (opened) { RUN = opened; $('progress').hidden = false; follow(); }
 // Opened with "Tailor ↗" from a job page: the posting and the saved resume
 // are both here, so the run starts without another press.
 if ({{ 'true' if autostart else 'false' }} && !new URLSearchParams(location.search).get('run')) $('create').click();
+
+// Before -> after: the original resume and the tailored one, measured the same way.
+function beforeAfter(d) {
+  const ba = d.before_after;
+  if (!ba) return '';
+  const row = (label, pair, help) => {
+    const [b, a] = pair.map(v => Math.round(v ?? 0));
+    const up = a - b;
+    return `<div class="ba-row" title="${help}"><span class="ba-label">${label}</span>
+      <span class="ba-num">${b}%</span><span class="ba-arrow">→</span>
+      <b class="ba-num ${a >= (ba.target || 80) ? 'good' : a > b ? 'ok' : a === b ? '' : 'low'}">${a}%</b>
+      <span class="ba-up ${up > 0 ? 'good' : up < 0 ? 'low' : ''}">${up > 0 ? '+' + up : up < 0 ? up : '±0'}</span></div>`;
+  };
+  return `<div class="ba"><div class="ba-title">Your resume → tailored resume</div>
+    ${row('ATS keyword match', ba.ats, 'How many of the posting\'s keywords the resume text contains — what an ATS scans for')}
+    ${row('Requirements (strict check)', ba.requirements, 'Requirements the resume names outright, counted by the same strict rules on both. Requirements met below also credits related work, as the AI reads it.')}
+    ${ba.pages ? `<div class="ba-row" title="The whole resume, then the tailored one, in the same layout"><span class="ba-label">Length</span>
+      <span class="ba-num">${ba.pages[0]} pages</span><span class="ba-arrow">→</span><b class="ba-num">${ba.pages[1]} pages</b><span></span></div>` : ''}
+    <div class="ba-foot">${ba.rewritten} line(s) rewritten in the posting's words · ${ba.rounds} round(s), aiming for ${ba.target}%</div></div>`;
+}
+
 </script>
 {% endblock %}

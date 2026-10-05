@@ -1242,6 +1242,7 @@ def job_tailor_full(job_id: int):
         if job is None:
             return jsonify(ok=False, error="No such job."), 404
         jd = f"{job.title}\n\n{job.description or ''}"
+        company = job.company
         target = packet_root(cfg()) / output_filename(job.company, job.title, job.external_id or "")
         from ml.resume.packet import packet_dir
         packet = packet_dir(cfg(), job.company, job.title, job.external_id or "", job_id=job_id)
@@ -1252,8 +1253,9 @@ def job_tailor_full(job_id: int):
     folder = new_run()
     resume = save_saved_resume(folder, saved)
     remember_job_run(job_id, folder, target, packet)
-    start(folder, resume, jd, None, cfg(),
-          after=lambda result: finish_job_run(job_id, folder, target, result["score"], packet))
+    start(folder, resume, jd, None, cfg(), company=company,
+          after=lambda result: finish_job_run(
+              job_id, folder, target, (result.get("before_after") or {}).get("ats", [0, result["score"]])[1], packet))
     return jsonify(ok=True, run=folder.name)
 
 

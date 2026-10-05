@@ -449,3 +449,12 @@ dialog.place h2{margin:0 0 4px}
 .suggest-top{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .suggest-item select,.suggest-item textarea{width:100%;font:inherit;font-size:13px;padding:5px 7px;
   border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+/* Before -> after */
+.ba{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 10px;background:var(--surface)}
+.ba-title{font-weight:600;margin-bottom:6px}
+.ba-row{display:grid;grid-template-columns:minmax(150px,1fr) auto auto auto auto;gap:10px;align-items:baseline;padding:3px 0}
+.ba-num{font-variant-numeric:tabular-nums;font-size:18px}
+.ba-arrow{color:var(--muted)}
+.ba-up{font-size:12.5px;padding:1px 7px;border-radius:99px;background:var(--sunk)}
+.ba .good{color:var(--good)} .ba .ok{color:var(--warn)} .ba .low{color:var(--crit)}
+.ba-foot{margin-top:4px;font-size:12.5px;color:var(--muted)}

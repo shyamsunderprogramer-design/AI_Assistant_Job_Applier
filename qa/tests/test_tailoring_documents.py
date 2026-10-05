@@ -66,9 +66,18 @@ def test_a_missing_section_and_a_missing_line(tmp_path):
 
 
 @pytest.mark.skipif(not Path("/Applications/Microsoft Word.app").exists(), reason="needs Microsoft Word")
-def test_word_lays_the_docx_out_as_pages(tmp_path):
+def test_word_lays_the_docx_out_as_pages(tmp_path, monkeypatch):
     from docx import Document
+    from ml.tailoring import documents
+    monkeypatch.setattr(documents, "use_word", lambda: True)
     d = Document()
     d.add_paragraph("A short document for Word to lay out.")
     d.save(tmp_path / "w.docx")
     assert word_to_pdf(tmp_path / "w.docx", tmp_path / "w.pdf") and (tmp_path / "w.pdf").stat().st_size > 0
+
+
+def test_word_is_left_alone_unless_switched_on(tmp_path, monkeypatch):
+    from ml.tailoring import documents
+    monkeypatch.setattr(documents, "use_word", lambda: False)
+    monkeypatch.setattr(documents, "_word_save_pdf", lambda *a: pytest.fail("Word must not be opened"))
+    assert word_to_pdf(tmp_path / "w.docx", tmp_path / "w.pdf") is False

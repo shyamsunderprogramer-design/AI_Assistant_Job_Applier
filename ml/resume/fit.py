@@ -225,6 +225,11 @@ def _score(text: str, weights: dict[str, float], role: int | None, *, rewritten:
     return score
 
 
+def _key(text: str) -> str:
+    """A line's identity across readers: bullets, case and spacing set aside."""
+    return " ".join((text or "").lower().lstrip("-•*·▪◦–— ").split())[:80]
+
+
 def _protected(line: Line, dropped: set[str], lines: list[Line]) -> bool:
     """Would dropping this take a role below its minimum?"""
     if line.role is None or line.children is not None:
@@ -265,11 +270,16 @@ def count_pages(base, result) -> int:
 
 def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
                  company: str | None = None, max_pages: int = 2,
-                 pages=count_pages, focus_terms: list[str] | None = None) -> int:
+                 pages=count_pages, focus_terms: list[str] | None = None,
+                 keep: set[str] | None = None) -> int:
     """Trim `result` in place so the rendered resume fits `max_pages`.
 
     Returns the page count it ends at (it may exceed the limit if the
     protected lines alone do not fit). `pages` is injectable for tests.
+    `keep` holds lines that prove one of the posting's requirements: the
+    model's own omissions never take them, and the page trim takes them last.
+    Without it a tailored resume showed fewer requirements than the original
+    (25% -> 21%): lines were dropped for space that were the evidence.
     """
     if max_pages <= 0:
         return pages(base, result)
@@ -280,12 +290,14 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
         weights[term.lower()] = max(weights.values() or [1.0]) * 3
     lines = candidates(base, result, weights)
     by_text = {l.text: l for l in lines}
+    keys = {_key(k) for k in keep or ()}
+    evidence = {l.text for l in lines if _key(l.text) in keys}
 
     # The model's own omissions go first, as far as the per-role floor allows.
     asked = {(e.get("original") or "").strip() for e in result.omitted if isinstance(e, dict)}
     dropped: set[str] = set()
     for line in sorted((by_text[t] for t in asked
-                        if t in by_text and by_text[t].children is None),
+                        if t in by_text and by_text[t].children is None and t not in evidence),
                        key=lambda l: l.score):
         if not _protected(line, dropped, lines):
             dropped.add(line.text)
@@ -310,7 +322,7 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     total = sum(l.words for l in lines if l.text not in dropped) or 1
     budget = total * max_pages / current * 0.97
     queue = sorted((l for l in lines if l.text not in dropped and l.children is None),
-                   key=lambda l: l.score)
+                   key=lambda l: (l.text in evidence, l.score))
     kept_words = total
     for line in queue:
         if kept_words <= budget:

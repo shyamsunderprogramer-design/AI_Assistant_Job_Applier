@@ -327,6 +327,14 @@ discovery:
                    "ltd", "ltd.", "co", "co.", "plc", "group", "holdings",
                    "the", "company"]
 
+# Resume Tailoring (ml/tailoring/).
+tailoring:
+  # Also lay the .docx out in Microsoft Word to check its pages. Off: Word
+  # needs a one-time "Grant File Access" for data/tailoring/word, and until
+  # then it bounced in the Dock after every tailoring asking for it. The PDF
+  # page checks run either way.
+  use_word: false
+
 logging:
   level: "INFO"
   file: "logs/agent.log"
