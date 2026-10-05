@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     Integer,
@@ -136,6 +137,12 @@ class Job(Base):
     experience_max_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Who can take the job, as the posting states it (backend/core/eligibility.py).
+    clearance: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    clearance_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    polygraph: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    citizenship: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sponsorship: Mapped[str | None] = mapped_column(String(8), nullable=True)
     salary_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     salary_period: Mapped[str | None] = mapped_column(String(8), nullable=True)
 

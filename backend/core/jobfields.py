@@ -295,4 +295,10 @@ def derive(title: str | None, location: str | None,
         "salary_max": pay.high if pay else None,
         "salary_currency": pay.currency if pay else None,
         "salary_period": pay.period if pay else None,
+        **_eligibility(title, description, requirements),
     }
+
+
+def _eligibility(title, description, requirements) -> dict:
+    from backend.core.eligibility import parse
+    return parse(title, description, requirements)

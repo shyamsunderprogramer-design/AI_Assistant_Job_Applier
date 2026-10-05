@@ -162,8 +162,11 @@ def prepare(cfg, top: int | None = None, min_fit: float | None = None, say=print
     applicant = load_profile(PROJECT_ROOT / "backend" / "config" / "applicant.yaml")
     data = load()
     with get_session() as session:
+        from backend.core.eligibility import eligible
+        auth = getattr(applicant, "authorisation", {}) or {}
+        # Not a job the person can take (clearance, citizenship, sponsorship): not prepared.
         jobs = [j for j in session.query(Job).filter(Job.is_open.is_(True)).all()
-                if str(j.id) not in data and j.score_basis == "full"]
+                if str(j.id) not in data and j.score_basis == "full" and eligible(j, auth)[0]]
         queue = build_queue(jobs, limit=top, min_score=min_fit,
                             last_applied=_last_applied_by_company(session))
         chosen = [session.get(Job, c.job_id) for c in queue]

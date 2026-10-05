@@ -24,6 +24,12 @@
   <span>Board <b>{{ job.board }}</b></span>
   {% if job.location %}<span>{{ job.location }}</span>{% endif %}
 </div>
+{% if job.tags %}
+<div class="meta etags">
+  {% for g in job.tags %}<span class="etag etag-{{ g.k }}">{{ g.t }}</span>{% endfor %}
+  {% if job.eligible == false %}<span class="etag etag-bar" title="From your profile (Settings → Applicant)">⚠ Not for you: {{ job.not_eligible_because|join(', ') }}</span>{% endif %}
+</div>
+{% endif %}
 
 {% if job.basis == 'title' %}
 <section class="card teaser" id="teaser">

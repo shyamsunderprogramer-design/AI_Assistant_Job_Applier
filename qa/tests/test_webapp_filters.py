@@ -27,8 +27,8 @@ def test_the_declarations_name_their_question():
     webapp.app.config["TESTING"] = True
     with webapp.app.test_client() as client:
         page = client.get("/applicant").get_data(as_text=True)
-    assert page.count('role="radiogroup"') == 2
-    for qid in ("q-authorised", "q-sponsorship"):
+    assert page.count('role="radiogroup"') == 4
+    for qid in ("q-authorised", "q-sponsorship", "q-citizen", "q-greencard"):
         assert f'aria-labelledby="{qid}"' in page
         assert f'id="{qid}"' in page
 

@@ -122,6 +122,7 @@
   <button class="chip" id="f-paid" aria-pressed="false">Salary published</button>
   <button class="chip" id="f-90k" aria-pressed="false" title="Where a salary is published and starts at $150K or more">$150K+</button>
   <button class="chip" id="f-reach" aria-pressed="false" title="Asks for no more years than you have, or does not say">Within my experience</button>
+  <button class="chip" id="f-eligible" aria-pressed="false" title="Hides jobs whose posting needs a clearance you don't hold, US citizenship you don't have, or won't sponsor a visa you need — from your profile">I'm eligible</button>
   <button class="chip" id="f-new" aria-pressed="false">Not yet applied</button>
   <button class="chip" id="f-fresh" aria-pressed="false">Under 3 months</button>
   <select id="board" aria-label="Board">
@@ -202,7 +203,7 @@ const ROWS = RAW.map(r => ({...r,
 
 const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
                recent:false, board:'', today:false, week:false, pay150:false,
-               reach:false};
+               reach:false, eligible:false};
 // Years of experience the derived profile says you have. Used by the
 // "Within my experience" filter, which hides roles asking for more.
 const MY_YEARS = {{ my_years or 'null' }};
@@ -229,6 +230,7 @@ function visible() {
     // higher than what you have.
     if (state.reach && MY_YEARS !== null && r.expMin !== null
         && r.expMin > MY_YEARS) return false;
+    if (state.eligible && r.eligible === false) return false;
     if (state.board && r.board !== state.board) return false;
     return true;
   }).sort((a, b) => {
@@ -257,7 +259,7 @@ function render() {
           : `<span class="sc sc-${band(r.score)}">${r.score}</span>`}</td>
       <td class="num age"></td><td class="num dim w"></td><td class="num dim e"></td>
       <td class="num y"></td><td class="co"></td>
-      <td class="ti"><a></a>${r.repeats > 1
+      <td class="ti"><a></a>${(r.tags || []).map(g => `<span class="etag etag-${g.k}"></span>`).join('')}${r.repeats > 1
         ? `<span class="rep" title="This employer has posted the same role ${r.repeats} times. Shown once, newest first.">×${r.repeats}</span>`
         : ''}</td>
       <td><span class="b b-${r.board}"></span></td>
@@ -271,6 +273,8 @@ function render() {
     tr.querySelector('.co').textContent = r.company;
     const a = tr.querySelector('.ti a');
     a.textContent = r.title; a.href = '/job/' + r.id;
+    tr.querySelectorAll('.etag').forEach((el, i) => { el.textContent = r.tags[i].t; });
+    if (r.eligible === false) { tr.classList.add('ineligible'); tr.title = 'Not for you: ' + r.not_eligible_because.join(', '); }
     tr.querySelector('.b').textContent = r.board;
     tr.querySelector('.pill').textContent = r.status;
     return tr;
@@ -280,7 +284,7 @@ function render() {
 $('q').addEventListener('input', e => { state.q = e.target.value; render(); });
 [['f-remote','remote'],['f-strong','strong'],['f-paid','paid'],
  ['f-new','fresh'],['f-fresh','recent'],['f-today','today'],
- ['f-week','week'],['f-90k','pay150'],['f-reach','reach']]
+ ['f-week','week'],['f-90k','pay150'],['f-reach','reach'],['f-eligible','eligible']]
   .forEach(([id,k]) => $(id).addEventListener('click', e => {
     state[k] = !state[k];
     e.currentTarget.setAttribute('aria-pressed', String(state[k]));

@@ -78,6 +78,40 @@
           {% if a.authorisation.get('requires_sponsorship') is false %}checked{% endif %}> No</label>
       </div>
     </div>
+
+    {# Used to show which jobs you can take: clearance, citizens-only, no-sponsorship
+       postings. Leave blank to see every job. #}
+    <div class="ask">
+      <span id="q-citizen">Are you a US citizen?</span>
+      <div class="row" role="radiogroup" aria-labelledby="q-citizen">
+        <label class="radio"><input type="radio" name="us_citizen" value="yes"
+          {% if a.authorisation.get('us_citizen') is true %}checked{% endif %}> Yes</label>
+        <label class="radio"><input type="radio" name="us_citizen" value="no"
+          {% if a.authorisation.get('us_citizen') is false %}checked{% endif %}> No</label>
+      </div>
+    </div>
+
+    <div class="ask">
+      <span id="q-greencard">Do you hold a US green card (permanent residence)?</span>
+      <div class="row" role="radiogroup" aria-labelledby="q-greencard">
+        <label class="radio"><input type="radio" name="green_card" value="yes"
+          {% if a.authorisation.get('green_card') is true %}checked{% endif %}> Yes</label>
+        <label class="radio"><input type="radio" name="green_card" value="no"
+          {% if a.authorisation.get('green_card') is false %}checked{% endif %}> No</label>
+      </div>
+    </div>
+
+    <div class="ask">
+      <label for="security_clearance">Security clearance you hold now</label>
+      <select id="security_clearance" name="security_clearance">
+        {% set held = a.authorisation.get('security_clearance') or '' %}
+        {% for option in ['', 'None', 'Public Trust', 'Secret', 'Top Secret', 'TS/SCI', 'TS/SCI with polygraph'] %}
+        <option value="{{ option }}" {% if held == option %}selected{% endif %}>{{ option or '— not answered —' }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="hint">These decide the "I'm eligible" filter on the jobs list and which jobs auto-apply
+      prepares. They stay in your profile on this Mac.</p>
   </fieldset>
 
   {# Off unless ticked: sending an application cannot be undone, so the

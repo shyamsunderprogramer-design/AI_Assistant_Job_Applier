@@ -57,6 +57,8 @@ async function load() {
           <span class="sub">· ${esc(e.company)} · fit ${e.score}% · ${esc(e.source)}</span></div>
         <button class="btn" data-skip="${e.job_id}">Skip</button>
       </div>
+      ${(e.tags || []).length ? `<div>${e.tags.map(g => `<span class="etag etag-${g.k}">${esc(g.t)}</span>`).join('')}</div>` : ''}
+      ${e.eligible === false ? `<div class="sub warn">⚠ Not for you, from your profile: ${esc(e.not_eligible_because.join(', '))}. Press Skip.</div>` : ''}
       <div class="sub">${ats} · ${e.letter ? 'cover letter ✓' : 'no cover letter'} ·
         <a href="#" data-folder="${esc(e.folder)}" title="${esc(e.folder)}">folder</a></div>
       ${(e.notes || []).map(n => `<div class="sub warn">${esc(n)}</div>`).join('')}

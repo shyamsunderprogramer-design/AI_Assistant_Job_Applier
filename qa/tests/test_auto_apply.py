@@ -150,3 +150,50 @@ def test_the_morning_picks_from_the_queue_by_job(monkeypatch, tmp_path):
             return default
     prepare.prepare(Cfg(), say=lambda s: None)
     assert seen == ["SRE"] and prepare.pending()[0]["job_id"]
+
+
+# -- who can take the job -------------------------------------------------------------
+
+from backend.core.eligibility import eligible, parse
+
+
+@pytest.mark.parametrize("text,level,active", [
+    ("Must have an active TS/SCI with polygraph level clearance. Must have the ability to obtain a CI Poly.", "TS/SCI", True),
+    ("Active TS/SCI with CI Poly (or ability to obtain CI Poly).", "TS/SCI", True),
+    ("CLEARANCE REQUIRED FOR START: No CLEARANCE TYPE: Secret", "Secret", False),
+    ("Nice to have: Active security clearance", "Clearance", False),
+    ("Must be able to obtain and maintain a Secret clearance.", "Secret", False),
+    ("An active Top Secret with SCI clearance (Polygraph preferred) is required", "TS/SCI", True),
+    ("Manage secrets with HashiCorp Vault and rotate secret keys.", None, None),
+])
+def test_clearance_is_read_from_the_posting(text, level, active):
+    p = parse("", text, "")
+    assert p["clearance"] == level and p["clearance_active"] == active
+
+
+@pytest.mark.parametrize("text,said", [
+    ("We are unable to sponsor visas for this role.", "no"),
+    ("Visa sponsorship is available for the right candidate.", "yes"),
+    ("Software cannot be exported without sponsorship for an export license.", None),
+])
+def test_sponsorship_is_read_from_the_posting(text, said):
+    assert parse("", text, "")["sponsorship"] == said
+
+
+class Posting:
+    def __init__(self, **kw):
+        self.clearance = self.clearance_active = self.citizenship = self.sponsorship = None
+        self.__dict__.update(kw)
+
+
+def test_eligibility_follows_the_profile():
+    ts = Posting(clearance="Top Secret", clearance_active=True)
+    assert eligible(ts, {"security_clearance": "TS/SCI"})[0]
+    assert not eligible(ts, {"security_clearance": "Secret"})[0]
+    assert eligible(Posting(clearance="Top Secret", clearance_active=False), {})[0]   # obtainable
+    assert not eligible(Posting(sponsorship="no"), {"requires_sponsorship": True})[0]
+    assert eligible(Posting(sponsorship="no"), {"requires_sponsorship": False})[0]
+    assert not eligible(Posting(citizenship="US citizen"), {"us_citizen": False})[0]
+    assert eligible(Posting(citizenship="US citizen or green card"), {"us_citizen": False, "green_card": True})[0]
+    assert eligible(Posting(citizenship="US citizen"), {})[0]      # unanswered: never hidden
+    assert eligible(ts, {})[0] and not eligible(ts, {"security_clearance": "None"})[0]

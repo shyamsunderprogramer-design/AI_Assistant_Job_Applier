@@ -116,7 +116,45 @@ def job_row(job: Job) -> dict:
         "salary": stated(salary_label(job.salary_min, job.salary_max,
                                       job.salary_currency, job.salary_period)),
         "status": job.status,
+        "tags": eligibility_tags(job),
     }
+
+
+def my_authorisation() -> dict:
+    """The person's own answers on work authorisation, from their profile (may be empty)."""
+    import yaml
+    try:
+        data = yaml.safe_load((PROJECT_ROOT / "backend" / "config" / "applicant.yaml").read_text()) or {}
+        return data.get("authorisation") or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+
+def with_eligibility(row: dict, job, auth: dict) -> dict:
+    from backend.core.eligibility import eligible
+    ok, reasons = eligible(job, auth)
+    row["eligible"], row["not_eligible_because"] = ok, reasons
+    return row
+
+
+def eligibility_tags(job) -> list[dict]:
+    """Short tags for who can take the job: a bar ("bar") or worth knowing ("info")."""
+    tags = []
+    if job.clearance:
+        level = job.clearance if job.clearance != "Clearance" else "Security clearance"
+        if job.clearance_active:
+            tags.append({"t": f"🔒 {level}{' + poly' if job.polygraph else ''}, must hold", "k": "bar"})
+        else:
+            tags.append({"t": f"🔓 {level} (can obtain)", "k": "info"})
+    if job.citizenship == "US citizen":
+        tags.append({"t": "🇺🇸 US citizens only", "k": "bar"})
+    elif job.citizenship:
+        tags.append({"t": "🇺🇸 Citizen or green card", "k": "bar"})
+    if job.sponsorship == "no":
+        tags.append({"t": "🛂 No visa sponsorship", "k": "bar"})
+    elif job.sponsorship == "yes":
+        tags.append({"t": "✅ Sponsors visas", "k": "good"})
+    return tags
 
 
 # -- pages ------------------------------------------------------------------
@@ -128,7 +166,8 @@ def index():
             session.query(Job).filter(Job.is_open.is_(True))
             .order_by(Job.ats_match_score.desc()).all()
         )
-        rows = collapse_repeats([job_row(j) for j in jobs])
+        auth = my_authorisation()
+        rows = collapse_repeats([with_eligibility(job_row(j), j, auth) for j in jobs])
 
     resume = current_resume()
     return render_template(
@@ -210,6 +249,9 @@ def applicant_save():
     existing.setdefault("authorisation", {}).update({
         "authorised_to_work": tri("authorised_to_work"),
         "requires_sponsorship": tri("requires_sponsorship"),
+        "us_citizen": tri("us_citizen"),
+        "green_card": tri("green_card"),
+        "security_clearance": field("security_clearance") or None,
     })
     existing.setdefault("employment", {}).update({
         "current_employer": field("current_employer"),
@@ -439,7 +481,13 @@ def job_detail(job_id: int):
         job = session.get(Job, job_id)
         if job is None:
             return "No such job", 404
-        row = job_row(job)
+        row = with_eligibility(job_row(job), job, my_authorisation())
+        # Where the posting is silent on visas, the company's own record says something.
+        if job.sponsorship is None:
+            from backend.core.eligibility import sponsor_history
+            program = sponsor_history(job.company)
+            if program:
+                row["tags"].append({"t": f"✅ Has sponsored {program} before", "k": "good"})
         description = job.description or ""
         requirements = job.requirements or ""
     # Many boards give no separate requirements, and the field holds the
@@ -1319,7 +1367,11 @@ def apply_prepared():
                 ba = json.loads((RUNS / run / "result.json").read_text()).get("before_after")
             except (OSError, ValueError):
                 ba = None
-        items.append({**e, "before_after": ba})
+        with get_session() as session:
+            job = session.get(Job, e["job_id"])
+            tags = eligibility_tags(job) if job else []
+            ok, why = with_eligibility({}, job, my_authorisation()).values() if job else (True, [])
+        items.append({**e, "before_after": ba, "tags": tags, "eligible": ok, "not_eligible_because": why})
     return jsonify(ok=True, items=items, account=account_status())
 
 
