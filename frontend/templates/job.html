@@ -165,6 +165,22 @@
           <textarea id="reply-resume" placeholder="Paste the reply here" aria-label="Reply"></textarea>
           <div class="row"><button class="btn primary" data-accept="resume">Check it and save</button></div>
         </details>
+        <div class="suggest" id="suggest" hidden>
+          <div class="ats-head"><b>Skills this job wants that your resume doesn't show</b>
+            <span class="hint" id="suggest-count"></span></div>
+          <p class="hint">Untick anything you have not done. What you add goes on your resume for this job
+            and every future one, so each skill is asked about only once.</p>
+          <div id="suggest-list"></div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn primary" id="suggest-add">Add ticked and tailor</button>
+            <button class="btn" id="suggest-skip">Skip — tailor without them</button>
+            <span class="hint" id="suggest-say"></span>
+          </div>
+        </div>
+        <div class="row" id="suggest-find-row" hidden style="margin-top:8px">
+          <button class="btn" id="suggest-find">Find missing skills</button>
+          <span class="hint">Lists what this job wants that your resume doesn't show, with a line drafted for each.</span>
+        </div>
         <div class="pbar" id="bar-resume" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100">
           <div class="pbar-track"><div class="pbar-fill" id="bar-resume-fill"><i class="pbar-dot"></i></div></div>
           <div class="pbar-label"><span id="bar-resume-label">Starting…</span><b id="bar-resume-pct">0%</b></div>
@@ -385,7 +401,7 @@ document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
   $('out-resume').hidden = true; $('req-result').hidden = true;
   const r = await ask(`/job/${JOB}/tailor-full`, {method: 'POST'});
   if (!r.ok) {
-    button.disabled = false; button.textContent = WRITER_LABEL;
+    button.disabled = false; button.textContent = tailorLabel();
     show('out-resume', r.error, 'bad');
     return;
   }
@@ -406,20 +422,28 @@ function followRun(run, button) {
             label: `Step ${stage + 1} of ${STAGES}: ${name}${status.note ? ' — ' + status.note : ''}`,
             done: status.done};
   }, async finished => {
-    if (button) { button.disabled = false; button.textContent = WRITER_LABEL; }
+    if (button) { button.disabled = false; button.textContent = tailorLabel(); }
     if (status && status.error) {
       show('out-resume', status.error.message, 'bad');
       return false;
     }
-    await showRun(run);
+    const j = await ask(`/job/${JOB}/tailored`);
+    TAILORED = true;
+    await showRun(j.best || run, j.best && j.best !== run ? j.best_score : null);
     $('step-resume').classList.add('done'); countDone(); refreshDocs();
+    if (button) button.textContent = tailorLabel();
     return true;
   });
 }
 
-async function showRun(run) {
+let TAILORED = false;
+const tailorLabel = () => TAILORED ? 'Re-tailor' : WRITER_LABEL;
+
+async function showRun(run, keptScore) {
   const d = await ask(`/tailor/${run}/result`);
   if (!d.ok) return;
+  const kept = keptScore != null
+    ? `<div class="ats-list muted">The new version matched less well, so this better one (${Math.round(keptScore)}%) was kept.</div>` : '';
   const m = d.report.matches || [];
   const count = s => m.filter(x => x.status === s).length;
   const missing = m.filter(x => x.requirement.priority === 'required' && (x.status === 'not_found' || x.status === 'unclear'))
@@ -428,6 +452,7 @@ async function showRun(run) {
   $('req-result').innerHTML = `
     <div class="ats-head"><b>Requirements met</b><span class="ats-nums"><b>${Math.round(d.score)}%</b></span></div>
     <div class="ats-bar"><span class="${d.score >= 75 ? 'good' : d.score >= 55 ? 'ok' : 'low'}" style="width:${d.score}%"></span></div>
+    ${kept}
     <div class="ats-list">${count('direct')} shown directly · ${count('related')} related · ${count('unclear')} unclear · ${count('not_found')} not found</div>
     ${missing.length ? `<div class="ats-list muted">Required, not shown in your resume: ${missing.slice(0, 8).map(short).map(esc).join(' · ')}${missing.length > 8 ? ` · and ${missing.length - 8} more` : ''}</div>` : ''}
     ${d.draft_note ? `<div class="ats-list muted">${esc(d.draft_note)}</div>` : ''}
@@ -451,11 +476,15 @@ function esc(s) {
 // A run already made or still going for this job: show it, or pick it up.
 (async () => {
   const j = await ask(`/job/${JOB}/tailored`);
-  if (!j.ok || !j.run) return;
+  if (!j.ok || !j.run) { $('suggest-find-row').hidden = !document.querySelector('[data-tailor]'); return; }
   const s = await ask(`/tailor/${j.run}/status`);
   if (!s.ok) return;
-  if (!s.done) followRun(j.run, document.querySelector('[data-tailor]'));
-  else if (!s.error) showRun(j.run);
+  const button = document.querySelector('[data-tailor]');
+  if (!s.done) { followRun(j.run, button); return; }
+  TAILORED = Boolean(j.best);
+  if (button) button.textContent = tailorLabel();
+  if (j.best) showRun(j.best);
+  $('suggest-find-row').hidden = !button;
 })();
 
 // The letter, written by the same model and checked by the same guard.
@@ -723,6 +752,54 @@ $('place-form').addEventListener('submit', async e => {
     if (placeButton) placeButton.textContent = 'Rebuild';
     $('saved-path').textContent = $('place-full').textContent; $('saved-in').hidden = false;
   }
+});
+
+// -- Skills the job wants that the resume doesn't show --------------------------------
+let SUGGEST = {items: [], roles: []};
+async function loadSuggestions(refresh) {
+  $('suggest-find').disabled = true; $('suggest-find').textContent = 'Looking… (up to a minute)';
+  const d = await ask(`/job/${JOB}/suggestions${refresh ? '?refresh=1' : ''}`);
+  $('suggest-find').disabled = false; $('suggest-find').textContent = 'Find missing skills';
+  if (!d.ok) { show('out-resume', d.error, 'bad'); return; }
+  if (d.teaser) { show('out-resume', 'Paste the full posting first — a teaser has no skills to compare.', 'bad'); return; }
+  SUGGEST = d;
+  if (!d.items.length) {
+    $('suggest').hidden = true;
+    show('out-resume', 'Your resume already shows every skill this job asks for.', 'good');
+    return;
+  }
+  const roleOptions = sel => d.roles.map(r => `<option ${r === sel ? 'selected' : ''}>${esc(r)}</option>`).join('');
+  $('suggest-list').innerHTML = d.items.map((m, i) => `
+    <div class="suggest-item">
+      <label class="suggest-top"><input type="checkbox" data-i="${i}" checked>
+        <b>${esc(m.skill)}</b> <span class="hint">${m.required ? 'required' : 'preferred'} · ${esc(m.why)}${m.drafted ? '' : ' · edit this line'}</span></label>
+      <select data-role="${i}" aria-label="Job for ${esc(m.skill)}">${roleOptions(m.role)}</select>
+      <textarea data-line="${i}" rows="2" aria-label="Line for ${esc(m.skill)}">${esc(m.line)}</textarea>
+    </div>`).join('');
+  $('suggest-count').textContent = `${d.items.length} found`;
+  $('suggest').hidden = false; $('suggest-find-row').hidden = true;
+}
+$('suggest-find')?.addEventListener('click', () => loadSuggestions(false));
+$('suggest-skip')?.addEventListener('click', () => {
+  $('suggest').hidden = true; $('suggest-find-row').hidden = false;
+  document.querySelector('[data-tailor]')?.click();
+});
+$('suggest-add')?.addEventListener('click', async () => {
+  const chosen = SUGGEST.items.map((m, i) => ({
+    skill: m.skill,
+    role: document.querySelector(`[data-role="${i}"]`).value,
+    line: document.querySelector(`[data-line="${i}"]`).value,
+    keep: document.querySelector(`[data-i="${i}"]`).checked,
+  })).filter(c => c.keep);
+  const button = $('suggest-add'); button.disabled = true;
+  const r = await ask(`/job/${JOB}/suggestions`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({items: chosen})});
+  button.disabled = false;
+  if (!r.ok) { $('suggest-say').textContent = r.error; return; }
+  $('suggest-say').textContent = `Added ${r.added} to your resume.` + (r.problems.length ? ' Not added: ' + r.problems.join(' · ') : '');
+  if (!r.problems.length) { $('suggest').hidden = true; }
+  refreshAts();
+  document.querySelector('[data-tailor]')?.click();
 });
 </script>
 {% endblock %}

@@ -145,11 +145,24 @@ def save_inputs(folder: Path, resume_upload, jd_upload=None) -> tuple[Path, Path
 
 
 def save_saved_resume(folder: Path, source: Path) -> Path:
-    """A copy of the person's saved resume, for a run started from a job page."""
+    """The person's saved resume for a run started from a job page.
+
+    With lines added from job pages it is written out with them under their
+    jobs, so the match and the draft count what the person has added.
+    """
+    from ml.resume.additions import load as load_additions
     inputs = folder / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
-    resume = inputs / ("resume" + source.suffix.lower())
-    shutil.copy2(source, resume)
+    if not load_additions():
+        resume = inputs / ("resume" + source.suffix.lower())
+        shutil.copy2(source, resume)
+        return resume
+    from ml.resume.additions import apply
+    from ml.resume.parser import parse_resume
+    from ml.resume.tailor import TailorResult
+    from ml.resume.writer import write_tailored_resume
+    resume = inputs / "resume.docx"
+    write_tailored_resume(apply(parse_resume(source)), TailorResult(summary=None), resume)
     return resume
 
 
@@ -294,25 +307,59 @@ def job_score(job_id: int, resume_file: Path, jd_text: str, cfg=None, use_model:
 JOBS = PROJECT_ROOT / "data" / "tailoring" / "jobs"
 
 
-def place_for_job(folder: Path, target_docx: Path) -> None:
+def place_for_job(folder: Path, target_docx: Path, packet: Path | None = None) -> None:
     """The run's files become the job's tailored resume, where the job page,
-    its keyword check and the application packet look for them."""
+    its keyword check and the application packet look for them -- and, when
+    the job has a folder, in that folder too, so it holds what was sent."""
     target_docx.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(folder / "tailored-resume.docx", target_docx)
     shutil.copy2(folder / "tailored-resume.pdf", target_docx.with_suffix(".pdf"))
+    if packet is not None and packet.is_dir():
+        shutil.copy2(folder / "tailored-resume.docx", packet / "resume.docx")
+        shutil.copy2(folder / "tailored-resume.pdf", packet / "resume.pdf")
 
 
-def remember_job_run(job_id: int, folder: Path, target_docx: Path) -> None:
+def _job_record(job_id: int) -> dict:
+    try:
+        return json.loads((JOBS / f"{job_id}.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def remember_job_run(job_id: int, folder: Path, target_docx: Path, packet: Path | None = None) -> None:
     JOBS.mkdir(parents=True, exist_ok=True)
-    (JOBS / f"{job_id}.json").write_text(json.dumps({"run": folder.name}))
-    (folder / "job.json").write_text(json.dumps({"job_id": job_id, "docx": str(target_docx)}))
+    record = _job_record(job_id)
+    record["run"] = folder.name                      # the latest, which the page follows
+    (JOBS / f"{job_id}.json").write_text(json.dumps(record))
+    (folder / "job.json").write_text(json.dumps({"job_id": job_id, "docx": str(target_docx),
+                                                 "packet": str(packet) if packet else None}))
+
+
+def finish_job_run(job_id: int, folder: Path, target_docx: Path, score: float,
+                   packet: Path | None = None) -> bool:
+    """Make this run the job's resume only if it matches at least as well as the best so far.
+
+    Returns whether it did. A rewrite that does worse never replaces a better one.
+    """
+    record = _job_record(job_id)
+    best = record.get("best_score")
+    better = best is None or score >= best or not target_docx.exists()
+    if better:
+        place_for_job(folder, target_docx, packet)
+        record.update(best=folder.name, best_score=score)
+    record["run"] = folder.name
+    JOBS.mkdir(parents=True, exist_ok=True)
+    (JOBS / f"{job_id}.json").write_text(json.dumps(record))
+    return better
 
 
 def job_run(job_id: int) -> str | None:
-    try:
-        return json.loads((JOBS / f"{job_id}.json").read_text())["run"]
-    except (OSError, ValueError, KeyError):
-        return None
+    return _job_record(job_id).get("run")
+
+
+def job_best(job_id: int) -> tuple[str | None, float | None]:
+    record = _job_record(job_id)
+    return record.get("best") or record.get("run"), record.get("best_score")
 
 
 def job_of_run(folder: Path) -> dict | None:

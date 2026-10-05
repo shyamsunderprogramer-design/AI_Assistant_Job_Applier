@@ -633,6 +633,31 @@ def cmd_letter(cfg, args) -> int:
     return 0
 
 
+def cmd_suggest(cfg, args) -> int:
+    """Draft the "skills this job wants" lines for the best open jobs, ahead of time.
+
+    Run after the daily scrape, so the job page has them ready. Jobs already
+    prepared for the current resume are skipped, and a job's failure never
+    stops the rest.
+    """
+    init_engine(cfg.database_url)
+    from data_engineering.db.models import Job
+    from ml.resume.suggest import for_job
+    with get_session() as session:
+        jobs = (session.query(Job).filter(Job.is_open.is_(True), Job.score_basis == "full",
+                                          Job.ats_match_score.isnot(None))
+                .order_by(Job.ats_match_score.desc()).limit(max(0, args.top)).all())
+        for job in jobs:
+            session.expunge(job)
+    for job in jobs:
+        try:
+            found = for_job(cfg, job)["items"]
+            print(f"  {job.company[:28]:<28} {job.title[:40]:<40} {len(found)} to review")
+        except Exception as exc:
+            print(f"  {job.company[:28]:<28} skipped: {type(exc).__name__}: {exc}")
+    return 0
+
+
 def cmd_packet(cfg, args) -> int:
     """Gather everything needed to apply to one job into a single folder."""
     init_engine(cfg.database_url)
@@ -1042,6 +1067,10 @@ def build_parser() -> argparse.ArgumentParser:
         "packet", help="Gather resume, letter and job summary into one folder")
     p_packet.add_argument("job_id")
 
+    p_suggest = sub.add_parser(
+        "suggest", help="Prepare the missing-skill suggestions for the top open jobs")
+    p_suggest.add_argument("--top", type=int, default=10, help="How many of the best-scoring jobs")
+
     p_apply = sub.add_parser(
         "apply", help="Fill Greenhouse applications in a browser; you press Submit")
     p_apply.add_argument("--limit", type=int, default=10,
@@ -1121,6 +1150,7 @@ COMMANDS = {
     "brief": cmd_brief,
     "letter": cmd_letter,
     "packet": cmd_packet,
+    "suggest": cmd_suggest,
     "accept": cmd_accept,
     "adzuna": cmd_adzuna,
     "feeds": cmd_feeds,

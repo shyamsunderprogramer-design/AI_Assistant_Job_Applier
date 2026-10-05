@@ -73,6 +73,9 @@ case "$TASK" in
     # the cloud keeps scraping a months-old list. Exporting costs a second,
     # and its own success is not the pipeline's success.
     "$PY" -m data_engineering.boards export >> "$LOG" 2>&1 || log "board export failed (not fatal)"
+    # Ready-made "skills this job wants" for the best jobs, so the job page
+    # opens with them. Uses the writing model; a failure is not the pipeline's.
+    $CAFFEINATE "$PY" -u main.py suggest --top 10 >> "$LOG" 2>&1 || log "suggestions failed (not fatal)"
     ;;
   discover)
     # Weekly, not daily: a full sweep is hours of polite probing.

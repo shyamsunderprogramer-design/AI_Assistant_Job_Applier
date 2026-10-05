@@ -176,6 +176,8 @@ def build_packet(cfg, job, letter_text: str | None = None) -> Packet:
         )
         if legacy.exists():
             (directory / RESUME_FILE).write_bytes(legacy.read_bytes())
+            if legacy.with_suffix(".pdf").exists():
+                (directory / "resume.pdf").write_bytes(legacy.with_suffix(".pdf").read_bytes())
             packet.has_resume = True
             packet.notes.append(f"adopted the existing tailored resume ({legacy.name})")
             review = legacy.with_name(legacy.stem + "_review.txt")

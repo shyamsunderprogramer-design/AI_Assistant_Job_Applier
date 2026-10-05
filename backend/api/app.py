@@ -1231,8 +1231,7 @@ def job_tailor_full(job_id: int):
     from ml.resume.pipeline import base_resume_path
     from ml.resume.writer import output_filename
     from ml.resume.packet import packet_root
-    from ml.tailoring.pipeline import (new_run, place_for_job, remember_job_run, save_saved_resume,
-                                       start)
+    from ml.tailoring.pipeline import finish_job_run, new_run, remember_job_run, save_saved_resume, start
     teaser = _teaser_words(job_id)
     if teaser is not None:
         return jsonify(ok=False, error=(
@@ -1244,22 +1243,54 @@ def job_tailor_full(job_id: int):
             return jsonify(ok=False, error="No such job."), 404
         jd = f"{job.title}\n\n{job.description or ''}"
         target = packet_root(cfg()) / output_filename(job.company, job.title, job.external_id or "")
+        from ml.resume.packet import packet_dir
+        packet = packet_dir(cfg(), job.company, job.title, job.external_id or "", job_id=job_id)
     try:
         saved = base_resume_path(cfg())
     except FileNotFoundError as exc:
         return jsonify(ok=False, error=str(exc)), 400
     folder = new_run()
     resume = save_saved_resume(folder, saved)
-    remember_job_run(job_id, folder, target)
-    start(folder, resume, jd, None, cfg(), after=lambda result: place_for_job(folder, target))
+    remember_job_run(job_id, folder, target, packet)
+    start(folder, resume, jd, None, cfg(),
+          after=lambda result: finish_job_run(job_id, folder, target, result["score"], packet))
     return jsonify(ok=True, run=folder.name)
 
 
 @app.get("/job/<int:job_id>/tailored")
 def job_tailored(job_id: int):
     """This job's last tailoring run, so the page can show it or follow it."""
-    from ml.tailoring.pipeline import job_run
-    return jsonify(ok=True, run=job_run(job_id))
+    from ml.tailoring.pipeline import job_best, job_run
+    best, best_score = job_best(job_id)
+    return jsonify(ok=True, run=job_run(job_id), best=best, best_score=best_score)
+
+
+@app.get("/job/<int:job_id>/suggestions")
+def job_suggestions(job_id: int):
+    """What the posting asks for that the resume does not show, with a drafted line each."""
+    from ml.resume.suggest import for_job
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        session.expunge(job)
+    if _teaser_words(job_id) is not None:
+        return jsonify(ok=True, items=[], roles=[], teaser=True)
+    try:
+        return jsonify(ok=True, **for_job(cfg(), job, refresh=bool(request.args.get("refresh"))))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+
+
+@app.post("/job/<int:job_id>/suggestions")
+def job_suggestions_accept(job_id: int):
+    """Add the lines the person kept to their resume."""
+    from ml.resume.suggest import accept
+    chosen = (request.get_json(silent=True) or {}).get("items") or []
+    if not isinstance(chosen, list):
+        return jsonify(ok=False, error="Nothing to add."), 400
+    added, problems = accept(cfg(), job_id, [c for c in chosen if isinstance(c, dict)])
+    return jsonify(ok=True, added=added, problems=problems)
 
 
 @app.get("/job/<int:job_id>/progress")
@@ -2037,6 +2068,6 @@ def tailor_edit(run_id):
     from ml.tailoring.pipeline import job_of_run, place_for_job
     owner = job_of_run(folder)
     if owner:
-        place_for_job(folder, Path(owner["docx"]))
+        place_for_job(folder, Path(owner["docx"]), Path(owner["packet"]) if owner.get("packet") else None)
     data.pop("folder", None)
     return jsonify(ok=True, **data)
