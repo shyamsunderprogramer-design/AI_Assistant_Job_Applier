@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Auto-apply{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Auto-apply</h1>
+    <div class="sub">Every morning your best matches are made ready: a tailored resume, a cover letter,
+      and the form's questions it can't answer yet. Answer those once, press Start applying, and each
+      form is filled for you — <b>it always stops before Submit</b>, so you check and send it yourself.</div>
+  </div>
+  <div class="row">
+    <a class="btn" href="{{ url_for('setup_form') }}#account">Job-site account</a>
+    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+  </div>
+</header>
+
+<section class="card">
+  <div class="card-head">
+    <h2 id="ready-title">Ready to apply</h2>
+    <div class="row" style="gap:8px">
+      <button class="btn" id="prepare" title="Do the morning preparation now">Prepare now</button>
+      <button class="btn primary" id="start">Start applying</button>
+    </div>
+  </div>
+  <div class="sub" id="account-note"></div>
+  <div class="out" id="run-out" hidden></div>
+  <div id="ready-list"><p class="sub dim">Loading…</p></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+async function load() {
+  const d = await (await fetch('/apply/prepared')).json();
+  $('account-note').innerHTML = d.account.saved
+    ? `Workday and similar sites: signs in as <b>${esc(d.account.email)}</b> (password in your Keychain).`
+    : 'No job-site account saved — on Workday you will sign in yourself. <a href="/setup#account">Save one</a>.';
+  $('ready-title').textContent = `Ready to apply (${d.items.length})`;
+  $('start').disabled = !d.items.length;
+  if (!d.items.length) {
+    $('ready-list').innerHTML = '<p class="sub">Nothing ready yet. The morning run prepares the day\'s best matches, or press <b>Prepare now</b>.</p>';
+    return;
+  }
+  $('ready-list').innerHTML = d.items.map(e => {
+    const ba = e.before_after;
+    const ats = ba ? `ATS ${Math.round(ba.ats[0])}% → <b>${Math.round(ba.ats[1])}%</b>` : 'your own resume';
+    const qs = (e.questions || []).map((q, i) => `
+      <label class="apply-q"><span>${esc(q.label)}${q.required ? ' <span class="pill bad">required</span>' : ''}</span>
+        ${q.options && q.options.length
+          ? `<select data-job="${e.job_id}" data-label="${esc(q.label)}"><option value=""></option>${q.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
+          : `<textarea rows="2" data-job="${e.job_id}" data-label="${esc(q.label)}"></textarea>`}
+      </label>`).join('');
+    return `<div class="apply-item">
+      <div class="apply-top">
+        <div><a href="/job/${e.job_id}" target="_blank" rel="noopener"><b>${esc(e.title)}</b></a>
+          <span class="sub">· ${esc(e.company)} · fit ${e.score}% · ${esc(e.source)}</span></div>
+        <button class="btn" data-skip="${e.job_id}">Skip</button>
+      </div>
+      <div class="sub">${ats} · ${e.letter ? 'cover letter ✓' : 'no cover letter'} ·
+        <a href="#" data-folder="${esc(e.folder)}" title="${esc(e.folder)}">folder</a></div>
+      ${(e.notes || []).map(n => `<div class="sub warn">${esc(n)}</div>`).join('')}
+      ${qs ? `<div class="apply-qs"><div class="sub"><b>${e.questions.length} question(s) for you</b> — answered once, used on this form (general ones are remembered for later forms too).</div>${qs}
+        <button class="btn" data-save="${e.job_id}">Save answers</button></div>` : ''}
+    </div>`;
+  }).join('');
+  document.querySelectorAll('[data-skip]').forEach(b => b.onclick = async () => {
+    await fetch(`/apply/skip/${b.dataset.skip}`, {method: 'POST'}); load(); });
+  document.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
+    const answers = {};
+    document.querySelectorAll(`[data-job="${b.dataset.save}"]`).forEach(f => { if (f.value.trim()) answers[f.dataset.label] = f.value; });
+    await fetch('/apply/answers', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({job_id: Number(b.dataset.save), answers})});
+    load();
+  });
+  document.querySelectorAll('[data-folder]').forEach(a => a.onclick = e => {
+    e.preventDefault(); navigator.clipboard?.writeText(a.dataset.folder); a.textContent = 'folder path copied'; });
+}
+
+async function runTask(task, button, label) {
+  button.disabled = true;
+  const r = await (await fetch(`/run/${task}`, {method: 'POST'})).json();
+  $('run-out').hidden = false;
+  $('run-out').textContent = r.ok ? `${label}…` : (r.error || r.note || 'Could not start.');
+  const poll = setInterval(async () => {
+    const s = await (await fetch(`/run/${task}/status`)).json();
+    if (s.tail) $('run-out').textContent = s.tail.split('\n').slice(-12).join('\n');
+    if (!s.running) { clearInterval(poll); button.disabled = false; load(); }
+  }, 2500);
+}
+$('prepare').onclick = () => runTask('prepare', $('prepare'), 'Preparing: tailoring, cover letters, questions — a few minutes per job');
+$('start').onclick = () => runTask('apply-ready', $('start'),
+  'A browser is opening. Each form is filled and stops before Submit — check it, press Submit, and the next one opens');
+load();
+</script>
+{% endblock %}

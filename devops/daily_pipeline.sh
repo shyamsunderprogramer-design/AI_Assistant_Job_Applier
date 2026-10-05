@@ -76,6 +76,9 @@ case "$TASK" in
     # Ready-made "skills this job wants" for the best jobs, so the job page
     # opens with them. Uses the writing model; a failure is not the pipeline's.
     $CAFFEINATE "$PY" -u main.py suggest --top 10 >> "$LOG" 2>&1 || log "suggestions failed (not fatal)"
+    # Auto-apply's morning work: tailor, write letters and list questions for
+    # the day's best matches. Nothing is sent; the Apply page shows them.
+    $CAFFEINATE "$PY" -u main.py prepare-apply >> "$LOG" 2>&1 || log "apply preparation failed (not fatal)"
     ;;
   discover)
     # Weekly, not daily: a full sweep is hours of polite probing.

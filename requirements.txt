@@ -20,3 +20,4 @@ requests>=2.32
 mcp>=2.2,<3            # the assistant's job tools, for Claude Code (backend/assistant)
 pypdfium2>=5.8           # page images and text boxes for the tailoring checks
 ocrmac>=1.0; sys_platform == "darwin"   # OCR for scanned resumes (macOS Vision)
+keyring>=25; sys_platform == "darwin"   # job-site password in the macOS Keychain

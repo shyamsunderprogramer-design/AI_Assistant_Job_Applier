@@ -633,6 +633,14 @@ def cmd_letter(cfg, args) -> int:
     return 0
 
 
+def cmd_prepare_apply(cfg, args) -> int:
+    """Get the day's best matches ready to apply to: tailored, with letters and questions."""
+    init_engine(cfg.database_url)
+    from backend.apply.prepare import prepare
+    prepare(cfg, top=args.top, min_fit=args.min_fit)
+    return 0
+
+
 def cmd_suggest(cfg, args) -> int:
     """Draft the "skills this job wants" lines for the best open jobs, ahead of time.
 
@@ -723,7 +731,8 @@ def cmd_apply(cfg, args) -> int:
 
     try:
         outcomes = run(cfg, limit=args.limit, job_id=args.job_id,
-                       tailor=not args.no_tailor, wait_minutes=args.wait)
+                       tailor=not args.no_tailor, wait_minutes=args.wait,
+                       prepared=getattr(args, "prepared", False))
     except NotReady as exc:
         print(f"Can't apply yet. {exc}")
         return 2
@@ -1077,6 +1086,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="At most this many (today's cap still applies)")
     p_apply.add_argument("--job-id", type=int, default=None,
                          help="Apply to this one job only")
+    p_apply.add_argument("--prepared", action="store_true",
+                         help="Apply to the jobs prepared this morning (Apply page)")
+
+    p_prep = sub.add_parser(
+        "prepare-apply", help="Tailor, write letters and list questions for the day's top matches")
+    p_prep.add_argument("--top", type=int, default=None, help="How many (default apply.auto.per_day)")
+    p_prep.add_argument("--min-fit", type=float, default=None, help="Lowest fit, 0-1 (default apply.auto.min_fit)")
     p_apply.add_argument("--no-tailor", action="store_true",
                          help="Never tailor during the run; use what exists or the base resume")
     p_apply.add_argument("--wait", type=float, default=None,
@@ -1151,6 +1167,7 @@ COMMANDS = {
     "letter": cmd_letter,
     "packet": cmd_packet,
     "suggest": cmd_suggest,
+    "prepare-apply": cmd_prepare_apply,
     "accept": cmd_accept,
     "adzuna": cmd_adzuna,
     "feeds": cmd_feeds,

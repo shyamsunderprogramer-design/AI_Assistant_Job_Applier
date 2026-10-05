@@ -1299,6 +1299,76 @@ def job_suggestions_accept(job_id: int):
     return jsonify(ok=True, added=added, problems=problems)
 
 
+@app.get("/apply")
+def apply_page():
+    return render_template("apply.html")
+
+
+@app.get("/apply/prepared")
+def apply_prepared():
+    """The jobs prepared for applying, with their tailoring result and open questions."""
+    from backend.apply.accounts import status as account_status
+    from backend.apply.prepare import pending
+    from ml.tailoring.pipeline import RUNS
+    items = []
+    for e in pending():
+        run = (e.get("tailored") or {}).get("run")
+        ba = None
+        if run:
+            try:
+                ba = json.loads((RUNS / run / "result.json").read_text()).get("before_after")
+            except (OSError, ValueError):
+                ba = None
+        items.append({**e, "before_after": ba})
+    return jsonify(ok=True, items=items, account=account_status())
+
+
+@app.post("/apply/answers")
+def apply_answers():
+    from backend.apply.prepare import save_answers
+    body = request.get_json(silent=True) or {}
+    answers = body.get("answers") or {}
+    if not isinstance(answers, dict) or not str(body.get("job_id", "")).isdigit():
+        return jsonify(ok=False, error="Nothing to save."), 400
+    save_answers(int(body["job_id"]), {str(k): str(v) for k, v in answers.items()})
+    return jsonify(ok=True)
+
+
+@app.post("/apply/skip/<int:job_id>")
+def apply_skip(job_id: int):
+    from backend.apply.prepare import mark
+    mark(job_id, "skipped")
+    return jsonify(ok=True)
+
+
+@app.get("/account/status")
+def account_status():
+    """Whether a job-site email and password are saved (never the password itself)."""
+    from backend.apply.accounts import status
+    return jsonify(ok=True, **status())
+
+
+@app.post("/account")
+def account_save():
+    """Keep the job-site email and password: the password goes to the Keychain only."""
+    from backend.apply.accounts import save
+    body = request.get_json(silent=True) or {}
+    try:
+        save(str(body.get("email") or ""), str(body.get("password") or ""))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(ok=False, error=f"The Keychain refused it ({type(exc).__name__})."), 500
+    return jsonify(ok=True)
+
+
+@app.post("/account/forget")
+def account_forget():
+    from backend.apply.accounts import forget
+    forget()
+    return jsonify(ok=True)
+
+
 @app.get("/plans/status")
 def plans_status():
     """Who is signed in to Claude, ChatGPT and Gemini, for the Settings page."""
@@ -1522,6 +1592,9 @@ def brief_text(job_id: int):
 # --rescore it printed "Nothing to score" and changed nothing.
 TASKS = {"scrape": ["scrape"], "score": ["score", "--rescore"], "export": ["export"],
          "apply": ["apply", "--limit", "10"],
+         # Auto-apply: the morning's preparation on demand, and applying to it.
+         "prepare": ["prepare-apply"],
+         "apply-ready": ["apply", "--prepared"],
          "daily": ["daily"], "discover": ["discover", "--names",
                                           "data/mailbox_names.txt", "--max-slugs", "2"]}
 def task_log(task: str) -> Path:

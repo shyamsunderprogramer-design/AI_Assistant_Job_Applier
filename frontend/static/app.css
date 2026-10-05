@@ -462,3 +462,10 @@ dialog.place h2{margin:0 0 4px}
 .plan-list{display:grid;gap:8px;margin-top:10px}
 .plan-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
   padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
+/* Auto-apply */
+.apply-item{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px;background:var(--raised)}
+.apply-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.apply-qs{margin-top:8px;display:grid;gap:8px}
+.apply-q{display:grid;gap:4px}
+.apply-q select,.apply-q textarea{font:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line);
+  border-radius:6px;background:var(--surface);color:var(--ink);width:100%}

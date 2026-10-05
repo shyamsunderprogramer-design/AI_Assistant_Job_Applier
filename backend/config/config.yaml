@@ -369,6 +369,13 @@ feeds:
 
 # -- applying ------------------------------------------------------------------
 apply:
+  # Auto-apply: every morning the best matches are prepared (tailored resume,
+  # cover letter, the form's open questions). Nothing is sent: on the Apply
+  # page you answer the questions and press Start applying, and every form
+  # stops before Submit for you.
+  auto:
+    min_fit: 0.80        # prepare jobs at or above this fit
+    per_day: 10          # at most this many a day
   # An autofill browser extension loaded into the apply browser, for the person
   # to press when a form waits for them -- it fills portals our filler does not
   # know (Workday). Copied from your own Chrome, where you install it; set up

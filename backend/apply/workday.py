@@ -467,6 +467,7 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
 
     done_steps: set[str] = set()
     told: set[str] = set()
+    account_state: dict = {}
     reached_review = False
     deadline = clock() + wait_s
     while clock() < deadline:
@@ -479,9 +480,14 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
             return "submitted", result
 
         if signing_in(page):
-            if "signin" not in told:
+            # The saved job-site account signs in, or fills a new account for
+            # the person to agree to and create (backend/apply/accounts.py).
+            from backend.apply.accounts import workday_sign_in
+            done = workday_sign_in(page, account_state, say)
+            if done == "no-account-saved" and "signin" not in told:
                 say("   Sign in to this employer's Workday (or create your account) in the "
-                    "browser — I'll carry on from there.")
+                    "browser — I'll carry on from there. Save a job-site email and password "
+                    "in Settings and I'll do this for you next time.")
                 told.add("signin")
         elif on_review(page):
             if not reached_review:

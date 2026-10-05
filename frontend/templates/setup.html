@@ -10,6 +10,23 @@
   <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
 </header>
 
+<section class="card" id="account">
+  <h2 style="margin-top:0;font-size:1.05em">Job-site account</h2>
+  <p class="sub">Workday and similar sites want an account per employer. Save one email and password
+    here and auto-apply signs in for you — or fills in a new account for you to agree to and create.
+    The password is kept in your Mac's Keychain only: never in a file, never on GitHub.
+    <b>Use a password just for job sites</b>, not your email or bank password.</p>
+  <form id="account-form" class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+    <label class="wide" style="flex:1;min-width:220px"><span class="sub">Email for job sites</span>
+      <input type="email" id="acct-email" autocomplete="email" required></label>
+    <label class="wide" style="flex:1;min-width:220px"><span class="sub">Password for job sites</span>
+      <input type="password" id="acct-password" autocomplete="new-password" minlength="8" required></label>
+    <button class="btn primary" type="submit">Save to Keychain</button>
+    <button class="btn" type="button" id="acct-forget" hidden>Forget</button>
+  </form>
+  <div class="sub" id="acct-say"></div>
+</section>
+
 <section class="card" id="plans">
   <h2 style="margin-top:0;font-size:1.05em">Sign in with the chat plan you already have</h2>
   <p class="sub">Claude, ChatGPT or Gemini can write your resumes on your own plan — no API key,
@@ -250,5 +267,28 @@ async function loadPlans() {
   });
 }
 loadPlans();
+
+// -- Job-site account ----------------------------------------------------------------
+async function loadAccount() {
+  const s = await (await fetch('/account/status')).json();
+  document.getElementById('acct-say').innerHTML = s.saved
+    ? `<span class="pill good">saved</span> for <b>${s.email.replace(/[&<>"]/g, '')}</b> — the password is in your Keychain.`
+    : '<span class="pill">not saved</span> Auto-apply will ask you to sign in yourself.';
+  if (s.email) document.getElementById('acct-email').value = s.email;
+  document.getElementById('acct-forget').hidden = !s.saved;
+}
+document.getElementById('account-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const r = await (await fetch('/account', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: document.getElementById('acct-email').value,
+                          password: document.getElementById('acct-password').value})})).json();
+  document.getElementById('acct-password').value = '';
+  if (!r.ok) { document.getElementById('acct-say').textContent = r.error; return; }
+  loadAccount();
+});
+document.getElementById('acct-forget').onclick = async () => {
+  await fetch('/account/forget', {method: 'POST'}); document.getElementById('acct-email').value = ''; loadAccount();
+};
+loadAccount();
 </script>
 {% endblock %}

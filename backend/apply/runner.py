@@ -192,11 +192,18 @@ def record_application(job_id: int, entry: dict, *, audit_log: Path | None = Non
 
 # -- the run --------------------------------------------------------------
 
-def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None):
+def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None,
+               job_ids: list[int] | None = None):
     """What this run will apply to, and how many today's cap still allows."""
     with get_session() as session:
         left = remaining_today(cfg, applicant, _applied_since(session, start_of_today_utc()))
-        if job_id is not None:
+        if job_ids:
+            # The prepared ones, in the order they were chosen this morning.
+            jobs = [j for j in (session.get(Job, i) for i in job_ids) if j is not None and j.is_open]
+            queue = build_queue(jobs, limit=min(len(jobs), left), max_per_company=len(jobs))
+            order = {i: n for n, i in enumerate(job_ids)}
+            queue.sort(key=lambda c: order.get(c.job_id, 0))
+        elif job_id is not None:
             job = session.get(Job, job_id)
             jobs = [job] if job is not None else []
             queue = build_queue(jobs, limit=1)
@@ -212,7 +219,8 @@ def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None)
 
 
 def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
-        wait_minutes: float | None = None, browser_factory=None) -> list[Outcome]:
+        wait_minutes: float | None = None, browser_factory=None,
+        prepared: bool = False) -> list[Outcome]:
     try:
         applicant = load(PROJECT_ROOT / "backend" / "config" / "applicant.yaml")
     except ProfileIncomplete as exc:
@@ -223,7 +231,15 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
                        + "\n".join(f"  - {p}" for p in problems)
                        + "\nFix them at http://127.0.0.1:8770/applicant")
 
-    queue, left = candidates(cfg, applicant, limit, job_id)
+    ready = {}
+    if prepared:
+        from backend.apply.prepare import pending
+        ready = {e["job_id"]: e for e in pending()}
+        if not ready:
+            say("Nothing prepared to apply to. The morning run prepares the day's best matches; "
+                "or press Prepare now on the Apply page.")
+            return []
+    queue, left = candidates(cfg, applicant, limit, job_id, list(ready) or None)
     if left <= 0 and job_id is None:
         say("Today's application limit is reached — nothing more until tomorrow.")
         return []
@@ -260,8 +276,18 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
                 say(f"{head}: the browser was closed — stopping.")
                 outcomes.append(Outcome(job.id, job.company, job.title, "stopped"))
                 break
-            outcomes.append(apply_one(cfg, page, job, applicant, head,
-                                      auto=auto, tailor=tailor, wait_s=wait_s))
+            # This form's own answers, given on the Apply page, for this job only.
+            saved = dict(applicant.answers)
+            if job.id in ready:
+                from backend.apply.answers import normalise
+                applicant.answers.update({normalise(k): v for k, v in
+                                          (ready[job.id].get("answers") or {}).items()})
+            outcome = apply_one(cfg, page, job, applicant, head, auto=auto, tailor=tailor, wait_s=wait_s)
+            applicant.answers.clear(); applicant.answers.update(saved)
+            outcomes.append(outcome)
+            if job.id in ready and outcome.result in ("submitted", "skipped"):
+                from backend.apply.prepare import mark
+                mark(job.id, "applied" if outcome.result == "submitted" else "skipped")
             try:
                 if not page.is_closed():
                     page.close()
