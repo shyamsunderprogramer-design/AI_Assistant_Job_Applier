@@ -143,6 +143,8 @@ class Job(Base):
     polygraph: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     citizenship: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sponsorship: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Set by the person after reading the posting: re-parsing leaves these alone.
+    eligibility_manual: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     salary_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     salary_period: Mapped[str | None] = mapped_column(String(8), nullable=True)
 

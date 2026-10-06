@@ -344,8 +344,9 @@ def _persist(jobs: list[RawJob]) -> tuple[int, int]:
                 existing.requirements = raw.requirements
                 existing.application_url = raw.application_url
                 existing.content_hash = content_hash
-                for field, value in derive(raw.title, raw.location,
-                                           raw.description, raw.requirements).items():
+                from backend.core.jobfields import derived_for
+                for field, value in derived_for(existing, derive(raw.title, raw.location,
+                                                raw.description, raw.requirements)).items():
                     setattr(existing, field, value)
                 existing.exported_to_excel = False  # re-export in Phase 2
                 updated_count += 1

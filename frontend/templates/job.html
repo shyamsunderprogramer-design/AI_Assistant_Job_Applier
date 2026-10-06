@@ -24,12 +24,37 @@
   <span>Board <b>{{ job.board }}</b></span>
   {% if job.location %}<span>{{ job.location }}</span>{% endif %}
 </div>
-{% if job.tags %}
-<div class="meta etags">
+<div class="meta etags" id="etags">
   {% for g in job.tags %}<span class="etag etag-{{ g.k }}">{{ g.t }}</span>{% endfor %}
+  {% if not job.tags %}<span class="sub">No clearance, citizenship or visa rule found in the posting.</span>{% endif %}
   {% if job.eligible == false %}<span class="etag etag-bar" title="From your profile (Settings → Applicant)">⚠ Not for you: {{ job.not_eligible_because|join(', ') }}</span>{% endif %}
+  <button class="btn" id="elig-edit" title="Read the posting yourself and set these">Edit</button>
 </div>
-{% endif %}
+<form class="elig-form" id="elig-form" hidden>
+  <label>Clearance
+    <select id="ef-clr">
+      {% for v, l in [('', 'None asked'), ('Public Trust', 'Public Trust'), ('Secret', 'Secret'), ('Top Secret', 'Top Secret'), ('TS/SCI', 'TS/SCI'), ('Clearance', 'Clearance (level not stated)')] %}
+      <option value="{{ v }}" {% if job.elig.clearance == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+    </select></label>
+  <label class="used-check"><input type="checkbox" id="ef-active" {% if job.elig.clearance_active %}checked{% endif %}> Must already hold it</label>
+  <label class="used-check"><input type="checkbox" id="ef-poly" {% if job.elig.polygraph %}checked{% endif %}> Polygraph</label>
+  <label>Citizenship
+    <select id="ef-ctz">
+      {% for v, l in [('', 'No rule'), ('US citizen', 'US citizens only'), ('US citizen or green card', 'US citizen or green card')] %}
+      <option value="{{ v }}" {% if job.elig.citizenship == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+    </select></label>
+  <label>Visa
+    <select id="ef-visa">
+      {% for v, l in [('', 'Not stated'), ('no', "Won't sponsor"), ('yes', 'Sponsors')] %}
+      <option value="{{ v }}" {% if job.elig.sponsorship == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+    </select></label>
+  <div class="row">
+    <button class="btn primary" type="submit">Save</button>
+    <button class="btn" type="button" id="ef-cancel">Cancel</button>
+    {% if job.elig.manual %}<button class="btn" type="button" id="ef-reset" title="Forget your edit and use what the posting says">Use the posting's reading</button>{% endif %}
+    <span class="hint" id="ef-say">Kept over re-scrapes and re-reading of the posting.</span>
+  </div>
+</form>
 
 {% if job.basis == 'title' %}
 <section class="card teaser" id="teaser">
@@ -828,5 +853,21 @@ $('suggest-add')?.addEventListener('click', async () => {
   refreshAts();
   document.querySelector('[data-tailor]')?.click();
 });
+
+// -- Correct the clearance / citizenship / visa reading after reviewing the posting ------
+$('elig-edit')?.addEventListener('click', () => { $('elig-form').hidden = false; $('elig-edit').hidden = true; });
+$('ef-cancel')?.addEventListener('click', () => { $('elig-form').hidden = true; $('elig-edit').hidden = false; });
+async function sendElig(body) {
+  const r = await ask(`/job/${JOB}/eligibility`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify(body)});
+  if (!r.ok) { $('ef-say').textContent = r.error; return; }
+  location.reload();
+}
+$('elig-form')?.addEventListener('submit', e => {
+  e.preventDefault();
+  sendElig({clearance: $('ef-clr').value, clearance_active: $('ef-active').checked, polygraph: $('ef-poly').checked,
+            citizenship: $('ef-ctz').value, sponsorship: $('ef-visa').value});
+});
+$('ef-reset')?.addEventListener('click', () => sendElig({reset: true}));
 </script>
 {% endblock %}

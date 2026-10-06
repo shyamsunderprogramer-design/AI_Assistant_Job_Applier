@@ -117,7 +117,28 @@ def job_row(job: Job) -> dict:
                                       job.salary_currency, job.salary_period)),
         "status": job.status,
         "tags": eligibility_tags(job),
+        # The same facts as columns, to read across and sort by.
+        **eligibility_columns(job),
     }
+
+
+CLEARANCE_SHORT = {"Public Trust": "Trust", "Secret": "Secret", "Top Secret": "TS",
+                   "TS/SCI": "TS/SCI", "Clearance": "Yes"}
+CLEARANCE_RANK = {"Clearance": 1, "Public Trust": 1, "Secret": 2, "Top Secret": 3, "TS/SCI": 4}
+
+
+def eligibility_columns(job) -> dict:
+    """Clearance, citizenship and visa as short column values, with a sort key for clearance."""
+    clearance, rank = "", None
+    if job.clearance:
+        # Short: the colour says must-hold (orange) or can-obtain (grey); the tooltip says it in words.
+        clearance = CLEARANCE_SHORT.get(job.clearance, job.clearance) + ("+poly" if job.polygraph else "")
+        clearance += "" if job.clearance_active else " (obtain)"
+        # Must-hold above can-get, and a higher level above a lower one.
+        rank = CLEARANCE_RANK.get(job.clearance, 1) + (10 if job.clearance_active else 0)
+    citizen = {"US citizen": "US only", "US citizen or green card": "US or GC"}.get(job.citizenship or "", "")
+    visa = {"no": "No sponsor", "yes": "Sponsors"}.get(job.sponsorship or "", "")
+    return {"clr": clearance, "clrRank": rank, "citizen": citizen, "visa": visa}
 
 
 def my_authorisation() -> dict:
@@ -154,6 +175,8 @@ def eligibility_tags(job) -> list[dict]:
         tags.append({"t": "🛂 No visa sponsorship", "k": "bar"})
     elif job.sponsorship == "yes":
         tags.append({"t": "✅ Sponsors visas", "k": "good"})
+    if getattr(job, "eligibility_manual", None):
+        tags.append({"t": "✎ set by you", "k": "info"})
     return tags
 
 
@@ -482,6 +505,9 @@ def job_detail(job_id: int):
         if job is None:
             return "No such job", 404
         row = with_eligibility(job_row(job), job, my_authorisation())
+        row["elig"] = {"clearance": job.clearance or "", "clearance_active": bool(job.clearance_active),
+                       "polygraph": bool(job.polygraph), "citizenship": job.citizenship or "",
+                       "sponsorship": job.sponsorship or "", "manual": bool(job.eligibility_manual)}
         # Where the posting is silent on visas, the company's own record says something.
         if job.sponsorship is None:
             from backend.core.eligibility import sponsor_history
@@ -1345,6 +1371,43 @@ def job_suggestions_accept(job_id: int):
         return jsonify(ok=False, error="Nothing to add."), 400
     added, problems = accept(cfg(), job_id, [c for c in chosen if isinstance(c, dict)])
     return jsonify(ok=True, added=added, problems=problems)
+
+
+@app.post("/job/<int:job_id>/eligibility")
+def job_eligibility(job_id: int):
+    """The person's own reading of clearance, citizenship and visa, kept over re-parsing.
+
+    {"reset": true} goes back to what the posting itself says.
+    """
+    from backend.core.eligibility import LEVELS
+    from backend.core.jobfields import ELIGIBILITY_FIELDS, derive
+    body = request.get_json(silent=True) or {}
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        if body.get("reset"):
+            parsed = derive(job.title, job.location, job.description, job.requirements)
+            for field in ELIGIBILITY_FIELDS:
+                setattr(job, field, parsed[field])
+            job.eligibility_manual = None
+        else:
+            level = body.get("clearance") or None
+            if level is not None and level not in (*LEVELS, "Clearance"):
+                return jsonify(ok=False, error="Unknown clearance level."), 400
+            citizenship = body.get("citizenship") or None
+            if citizenship not in (None, "US citizen", "US citizen or green card"):
+                return jsonify(ok=False, error="Unknown citizenship rule."), 400
+            sponsorship = body.get("sponsorship") or None
+            if sponsorship not in (None, "yes", "no"):
+                return jsonify(ok=False, error="Unknown visa answer."), 400
+            job.clearance = level
+            job.clearance_active = bool(body.get("clearance_active")) if level else None
+            job.polygraph = bool(body.get("polygraph")) if level else None
+            job.citizenship, job.sponsorship = citizenship, sponsorship
+            job.eligibility_manual = True
+        values = {f: getattr(job, f) for f in ELIGIBILITY_FIELDS}
+    return jsonify(ok=True, manual=not body.get("reset"), **values)
 
 
 @app.get("/apply")

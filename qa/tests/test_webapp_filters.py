@@ -68,5 +68,5 @@ def test_the_table_sorts_newest_first_by_default():
     webapp.app.config["TESTING"] = True
     with webapp.app.test_client() as client:
         page = client.get("/").get_data(as_text=True)
-    assert "let sortKey = 'ageDays', sortDir = 1;" in page
+    assert "let sorts = [{k: 'ageDays', dir: 1}" in page
     assert 'data-k="ageDays" aria-sort="ascending"' in page

@@ -299,6 +299,17 @@ def derive(title: str | None, location: str | None,
     }
 
 
+ELIGIBILITY_FIELDS = ("clearance", "clearance_active", "polygraph", "citizenship", "sponsorship")
+
+
+def derived_for(job, fields: dict) -> dict:
+    """The derived fields to write to an existing job: the person's own
+    clearance/citizenship/visa corrections are never overwritten."""
+    if getattr(job, "eligibility_manual", None):
+        return {k: v for k, v in fields.items() if k not in ELIGIBILITY_FIELDS}
+    return fields
+
+
 def _eligibility(title, description, requirements) -> dict:
     from backend.core.eligibility import parse
     return parse(title, description, requirements)

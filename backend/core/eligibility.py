@@ -24,7 +24,8 @@ from backend.config.loader import PROJECT_ROOT
 
 LEVELS = ("Public Trust", "Secret", "Top Secret", "TS/SCI")
 
-_TS_SCI = re.compile(r"\bts\s*/\s*sci\b|\bts-sci\b|top\s*secret\s*/\s*sci|top\s+secret\s*\(\s*sci|"
+# TS/SCI as postings write it: TS/SCI, TS-SCI, TS.SCI, TS SCI, TS//SCI.
+_TS_SCI = re.compile(r"\bts\s*(?:/{1,2}|-|\.|\s)\s*sci\b|top\s*secret\s*/\s*sci|top\s+secret\s*\(\s*sci|"
                      r"top\s+secret\s+(?:with|w/|and|plus)\s+sci\b", re.I)
 _TOP_SECRET = re.compile(r"\btop[\s-]+secret\b|\bTS\b(?=[^.\n]{0,25}\bclearance\b)|\bclearance\s+type\s*:\s*(?:ts|top)\b", re.I)
 # "Secret" alone means Vault secrets as often as a clearance: only in clearance words.
@@ -38,13 +39,14 @@ _OBTAIN = re.compile(r"\b(?:ability|able|eligib\w*|willing\w*)\s+(?:and\s+eligib
                      r"\bmust\s+be\s+(?:able\s+to\s+)?obtain\b|\bclearable\b", re.I)
 # A field-style statement ("Clearance: TS/SCI", "CLEARANCE TS/SCI Full Poly") is a requirement.
 _FIELD = re.compile(r"\b(?:clearance\s*(?:level)?|required)\s*:?\s*-?\s*(?:must\s+have\s+)?(?:an?\s+)?(?:active\s+)?"
-                    r"(?:ts\s*/\s*sci|top\s+secret|secret)\b", re.I)
+                    r"(?:ts\s*(?:/{1,2}|-|\.|\s)\s*sci|top\s+secret|secret)\b", re.I)
 _CLEARANCE_WORDS = re.compile(r"clearance|\bsecret\b|\bts\b|\bsci\b|public\s+trust", re.I)
-_ACTIVE = re.compile(r"\b(?:active|current|existing|in[\s-]place)\b[^.\n]{0,40}\b(?:clearance|secret|ts|trust)\b|"
+_ACTIVE = re.compile(r"\b(?:active|current|existing|in[\s-]place)\b[^\n]{0,40}?\b(?:clearance|secret|ts|trust)\b|"
                      r"\b(?:must|required\s+to)\s+(?:possess|hold|have)\b[^.\n]{0,40}\bclearance\b|"
                      r"\bclearance\s+required\b|"
-                     r"\b(?:ts\s*/\s*sci|top\s+secret|secret\s+clearance|public\s+trust)\b[^.\n]{0,50}\brequired\b", re.I)
-_POLY = re.compile(r"\b(?:full[\s-]scope|ci|counter[\s-]?intelligence|lifestyle)\s+poly(?:graph)?\b|\bpolygraph\b", re.I)
+                     r"\b(?:ts\s*(?:/{1,2}|-|\.|\s)\s*sci|top\s+secret|secret\s+clearance|public\s+trust)\b[^.\n]{0,50}\brequired\b", re.I)
+_POLY = re.compile(r"\b(?:full[\s-]scope|ci|counter[\s-]?intelligence|lifestyle)\s+poly(?:graph)?\b|\bpolygraph\b|"
+                   r"\bfsp\b|\bw/?\s*poly\b|\bwith\s+(?:a\s+)?poly\b", re.I)
 
 _CITIZEN = re.compile(
     r"\b(?:u\.?\s?s\.?|united\s+states)\s+citizen(?:ship)?\b[^.\n]{0,40}\b(?:required|only|is\s+a\s+must)\b|"

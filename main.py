@@ -326,8 +326,9 @@ def cmd_reparse(cfg, args) -> int:
             # A re-scrape cannot do this: content_hash covers only title,
             # location and description, so a row whose text has not changed is
             # never rewritten and these columns would stay empty forever.
-            for column, value in derive(job.title, job.location,
-                                        job.description, job.requirements).items():
+            from backend.core.jobfields import derived_for
+            for column, value in derived_for(job, derive(job.title, job.location,
+                                                         job.description, job.requirements)).items():
                 if getattr(job, column) != value:
                     setattr(job, column, value)
                     touched = True

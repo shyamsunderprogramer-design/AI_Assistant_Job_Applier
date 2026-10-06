@@ -125,6 +125,28 @@
   <button class="chip" id="f-eligible" aria-pressed="false" title="Hides jobs whose posting needs a clearance you don't hold, US citizenship you don't have, or won't sponsor a visa you need — from your profile">I'm eligible</button>
   <button class="chip" id="f-new" aria-pressed="false">Not yet applied</button>
   <button class="chip" id="f-fresh" aria-pressed="false">Under 3 months</button>
+  <select id="f-clr" class="efilter" aria-label="Clearance">
+    <option value="">Any clearance</option>
+    <option value="none">No clearance asked</option>
+    <option value="ok">None, or can obtain</option>
+    <option value="hold">Must already hold</option>
+    <option value="trust">Public Trust</option>
+    <option value="secret">Secret</option>
+    <option value="ts">Top Secret</option>
+    <option value="tssci">TS/SCI</option>
+  </select>
+  <select id="f-ctz" class="efilter" aria-label="Citizenship">
+    <option value="">Any citizenship</option>
+    <option value="none">No citizenship rule</option>
+    <option value="gc">Open to green card</option>
+    <option value="us">US citizens only</option>
+  </select>
+  <select id="f-visa" class="efilter" aria-label="Visa sponsorship">
+    <option value="">Any visa</option>
+    <option value="yes">Sponsors visas</option>
+    <option value="notno">Doesn't refuse sponsorship</option>
+    <option value="no">Won't sponsor</option>
+  </select>
   <select id="board" aria-label="Board">
     <option value="">Any board</option>
     <option value="greenhouse">Greenhouse</option>
@@ -160,6 +182,16 @@
   <button class="chip" id="f-clear">Clear</button>
   <span class="count" id="count"></span>
 </div>
+<div class="rulebar" id="rulebar">
+  <span class="sub">Filter by</span>
+  <span class="rule"><select class="efilter rule-col" data-n="0" aria-label="Filter 1: column"><option value="">Choose a column…</option><option value="score">Fit</option><option value="ageDays">Age</option><option value="workplace">Where</option><option value="expMin">Experience</option><option value="payMin">Salary</option><option value="company">Company</option><option value="title">Role</option><option value="clr">Clearance</option><option value="citizen">Citizen</option><option value="visa">Visa</option><option value="board">Board</option><option value="status">Status</option></select><span class="rule-val" id="rv0"></span></span>
+  <span class="rule"><select class="efilter rule-col" data-n="1" aria-label="Filter 2: column"><option value="">Choose a column…</option><option value="score">Fit</option><option value="ageDays">Age</option><option value="workplace">Where</option><option value="expMin">Experience</option><option value="payMin">Salary</option><option value="company">Company</option><option value="title">Role</option><option value="clr">Clearance</option><option value="citizen">Citizen</option><option value="visa">Visa</option><option value="board">Board</option><option value="status">Status</option></select><span class="rule-val" id="rv1"></span></span>
+  <span class="rule"><select class="efilter rule-col" data-n="2" aria-label="Filter 3: column"><option value="">Choose a column…</option><option value="score">Fit</option><option value="ageDays">Age</option><option value="workplace">Where</option><option value="expMin">Experience</option><option value="payMin">Salary</option><option value="company">Company</option><option value="title">Role</option><option value="clr">Clearance</option><option value="citizen">Citizen</option><option value="visa">Visa</option><option value="board">Board</option><option value="status">Status</option></select><span class="rule-val" id="rv2"></span></span>
+  <button class="btn primary" id="rules-go">Go</button>
+  <button class="btn" id="rules-reset">Reset</button>
+  <span class="sub" id="rules-note"></span>
+</div>
+
 
 <div class="tw">
   <table>
@@ -171,6 +203,9 @@
       <th data-k="payMin">Salary</th>
       <th data-k="company">Company</th>
       <th data-k="title">Role</th>
+      <th data-k="clrRank" title="Security clearance the posting asks for: must hold before starting, or can be obtained after">Clearance</th>
+      <th data-k="citizen" title="US citizenship the posting requires">Citizen</th>
+      <th data-k="visa" title="What the posting says about visa sponsorship">Visa</th>
       <th data-k="board">Board</th>
       <th data-k="status">Status</th>
     </tr></thead>
@@ -203,14 +238,18 @@ const ROWS = RAW.map(r => ({...r,
 
 const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
                recent:false, board:'', today:false, week:false, pay150:false,
-               reach:false, eligible:false};
+               reach:false, eligible:false, clr:'', ctz:'', visa:'', rules:[]};
 // Years of experience the derived profile says you have. Used by the
 // "Within my experience" filter, which hides roles asking for more.
 const MY_YEARS = {{ my_years or 'null' }};
 // Newest first. A posting that went up an hour ago is the one worth opening
 // -- it has the fewest applicants ahead of it -- and the quality filters
 // ("70%+", "Within my experience") are there to keep the list relevant.
-let sortKey = 'ageDays', sortDir = 1;
+// Up to three sorts, applied in order: the second breaks ties in the first, the third in the second.
+let sorts = [{k: 'ageDays', dir: 1}];
+// Text sorts A-Z first; numbers biggest first, except age, where newest (smallest) leads.
+const TEXT_KEYS = ['company', 'title', 'board', 'workplace', 'status', 'citizen', 'visa'];
+const firstDir = k => TEXT_KEYS.includes(k) || k === 'ageDays' ? 1 : -1;
 
 function visible() {
   const q = state.q.trim().toLowerCase();
@@ -231,15 +270,39 @@ function visible() {
     if (state.reach && MY_YEARS !== null && r.expMin !== null
         && r.expMin > MY_YEARS) return false;
     if (state.eligible && r.eligible === false) return false;
+    if (state.clr) {
+      const level = (r.clr || '').replace(/\+poly| \(obtain\)/g, '');
+      const hold = r.clrRank >= 10;
+      if (state.clr === 'none' && r.clr) return false;
+      if (state.clr === 'ok' && hold) return false;
+      if (state.clr === 'hold' && !hold) return false;
+      if ({trust: 'Trust', secret: 'Secret', ts: 'TS', tssci: 'TS/SCI'}[state.clr] !== undefined
+          && level !== {trust: 'Trust', secret: 'Secret', ts: 'TS', tssci: 'TS/SCI'}[state.clr]) return false;
+    }
+    if (state.ctz === 'none' && r.citizen) return false;
+    if (state.ctz === 'gc' && r.citizen === 'US only') return false;
+    if (state.ctz === 'us' && r.citizen !== 'US only') return false;
+    if (state.visa === 'yes' && r.visa !== 'Sponsors') return false;
+    if (state.visa === 'notno' && r.visa === 'No sponsor') return false;
+    if (state.visa === 'no' && r.visa !== 'No sponsor') return false;
     if (state.board && r.board !== state.board) return false;
+    for (const rule of state.rules) if (!RULES[rule.col].test(r, rule.val)) return false;
     return true;
   }).sort((a, b) => {
-    const A = a[sortKey], B = b[sortKey];
-    // Unknowns sink either way: a role with no published salary is not the
-    // cheapest one, and should not lead an ascending sort.
-    if (A === null || A === undefined || A === '') return 1;
-    if (B === null || B === undefined || B === '') return -1;
-    return typeof A === 'string' ? sortDir * A.localeCompare(B) : sortDir * (A - B);
+    // With nothing chosen, newest first.
+    for (const {k, dir} of sorts) {
+      if (!k) continue;
+      const A = a[k], B = b[k];
+      const noA = A === null || A === undefined || A === '', noB = B === null || B === undefined || B === '';
+      // Unknowns sink either way: a role with no published salary is not the
+      // cheapest one, and should not lead an ascending sort.
+      if (noA && noB) continue;
+      if (noA) return 1;
+      if (noB) return -1;
+      const c = typeof A === 'string' ? dir * A.localeCompare(B) : dir * (A - B);
+      if (c) return c;
+    }
+    return 0;
   });
 }
 
@@ -259,9 +322,10 @@ function render() {
           : `<span class="sc sc-${band(r.score)}">${r.score}</span>`}</td>
       <td class="num age"></td><td class="num dim w"></td><td class="num dim e"></td>
       <td class="num y"></td><td class="co"></td>
-      <td class="ti"><a></a>${(r.tags || []).map(g => `<span class="etag etag-${g.k}"></span>`).join('')}${r.repeats > 1
+      <td class="ti"><a></a>${r.repeats > 1
         ? `<span class="rep" title="This employer has posted the same role ${r.repeats} times. Shown once, newest first.">×${r.repeats}</span>`
         : ''}</td>
+      <td class="elig clr"></td><td class="elig ctz"></td><td class="elig visa"></td>
       <td><span class="b b-${r.board}"></span></td>
       <td><span class="pill ${cls(r.status)}"></span></td>`;
     const age = tr.querySelector('.age');
@@ -271,9 +335,16 @@ function render() {
     tr.querySelector('.e').textContent = r.experience;
     tr.querySelector('.y').textContent = r.salary;
     tr.querySelector('.co').textContent = r.company;
+    tr.querySelector('.co').title = r.company;
     const a = tr.querySelector('.ti a');
     a.textContent = r.title; a.href = '/job/' + r.id;
-    tr.querySelectorAll('.etag').forEach((el, i) => { el.textContent = r.tags[i].t; });
+    const clr = tr.querySelector('.clr');
+    clr.textContent = r.clr || '';
+    if (r.clrRank >= 10) clr.classList.add('el-bar');
+    if (r.clr) clr.title = r.clrRank >= 10 ? 'Must already hold this clearance' : 'Can be obtained after hiring, or only preferred';
+    const ctz = tr.querySelector('.ctz'); ctz.textContent = r.citizen || ''; if (r.citizen) ctz.classList.add('el-bar');
+    const visa = tr.querySelector('.visa'); visa.textContent = r.visa || '';
+    visa.classList.add(r.visa === 'No sponsor' ? 'el-bar' : r.visa ? 'el-good' : 'el-none');
     if (r.eligible === false) { tr.classList.add('ineligible'); tr.title = 'Not for you: ' + r.not_eligible_because.join(', '); }
     tr.querySelector('.b').textContent = r.board;
     tr.querySelector('.pill').textContent = r.status;
@@ -292,6 +363,8 @@ $('q').addEventListener('input', e => { state.q = e.target.value; render(); });
   }));
 
 $('board').addEventListener('change', e => { state.board = e.target.value; render(); });
+[['f-clr', 'clr'], ['f-ctz', 'ctz'], ['f-visa', 'visa']].forEach(([id, k]) =>
+  $(id).addEventListener('change', e => { state[k] = e.target.value; render(); }));
 
 $('f-clear').addEventListener('click', () => {
   // Reset every key in `state` rather than a hand-written list. The list had
@@ -301,6 +374,8 @@ $('f-clear').addEventListener('click', () => {
     state[k] = (typeof state[k] === 'boolean') ? false : '';
   }
   $('q').value = ''; $('board').value = '';
+  ['f-clr', 'f-ctz', 'f-visa'].forEach(id => { $(id).value = ''; });
+  resetRules();
   document.querySelectorAll('.chip[aria-pressed]').forEach(c =>
     c.setAttribute('aria-pressed','false'));
   render();
@@ -311,14 +386,15 @@ document.querySelectorAll('thead th[data-k]').forEach(th => {
   th.style.cursor = 'pointer';
   const go = () => {
     const k = th.dataset.k;
-    if (k === sortKey) sortDir = -sortDir;
-    else { sortKey = k; sortDir = ['company','title','board','workplace','status'].includes(k) ? 1 : -1; }
+    // A heading click sets the first sort; the other two stay as chosen.
+    if (k === sorts[0].k) sorts[0].dir = -sorts[0].dir;
+    else sorts[0] = {k, dir: firstDir(k)};
     document.querySelectorAll('thead th[data-k]').forEach(o => {
       o.removeAttribute('aria-sort');
       const ar = o.querySelector('.ar'); if (ar) ar.remove();
     });
-    th.setAttribute('aria-sort', sortDir < 0 ? 'descending' : 'ascending');
-    th.insertAdjacentHTML('beforeend', ` <span class="ar">${sortDir < 0 ? '▼' : '▲'}</span>`);
+    th.setAttribute('aria-sort', sorts[0].dir < 0 ? 'descending' : 'ascending');
+    th.insertAdjacentHTML('beforeend', ` <span class="ar">${sorts[0].dir < 0 ? '▼' : '▲'}</span>`);
     render();
   };
   th.addEventListener('click', go);
@@ -577,6 +653,62 @@ pollProbe();
   }
 });
 
+render();
+
+// -- Filter by: pick a column, then one of its values; Go applies all three ---------------
+const STATUSES = {{ statuses|tojson }};
+const BOARDS = [...new Set(ROWS.map(r => r.board))].sort();
+const level = r => (r.clr || '').replace(/\+poly| \(obtain\)/g, '');
+const RULES = {
+  score: {opts: [['90', '90%+'], ['80', '80%+'], ['70', '70%+'], ['60', '60%+'], ['low', 'Under 60%'], ['none', 'Not scored']],
+          test: (r, v) => v === 'none' ? r.score === null : v === 'low' ? (r.score !== null && r.score < 60)
+                                                           : (r.score !== null && r.score >= +v)},
+  ageDays: {opts: [['1', 'Today'], ['7', 'This week'], ['31', 'This month'], ['92', 'Under 3 months'], ['old', 'Older than 3 months']],
+            test: (r, v) => v === 'old' ? (r.ageDays !== null && r.ageDays > 92) : (r.ageDays !== null && r.ageDays <= +v)},
+  workplace: {opts: [['remote', 'Remote'], ['hybrid', 'Hybrid'], ['onsite', 'Onsite'], ['', 'Not stated']],
+              test: (r, v) => (r.workplace || '') === v},
+  expMin: {opts: [['3', 'Up to 3 yrs'], ['5', 'Up to 5 yrs'], ['8', 'Up to 8 yrs'], ['10', 'Up to 10 yrs'], ['any', 'Stated'], ['none', 'Not stated']],
+           test: (r, v) => v === 'none' ? r.expMin === null : v === 'any' ? r.expMin !== null : (r.expMin !== null && r.expMin <= +v)},
+  payMin: {opts: [['100000', '$100K+'], ['150000', '$150K+'], ['200000', '$200K+'], ['any', 'Published'], ['none', 'Not published']],
+           test: (r, v) => v === 'none' ? r.payMin === null : v === 'any' ? r.payMin !== null : (r.payMin !== null && r.payMin >= +v)},
+  company: {text: 'contains…', test: (r, v) => (r.company || '').toLowerCase().includes(v.toLowerCase())},
+  title: {text: 'contains…', test: (r, v) => (r.title || '').toLowerCase().includes(v.toLowerCase())},
+  clr: {opts: [['none', 'No clearance asked'], ['ok', 'None, or can obtain'], ['hold', 'Must already hold'],
+               ['Trust', 'Public Trust'], ['Secret', 'Secret'], ['TS', 'Top Secret'], ['TS/SCI', 'TS/SCI']],
+        test: (r, v) => v === 'none' ? !r.clr : v === 'ok' ? !(r.clrRank >= 10) : v === 'hold' ? r.clrRank >= 10 : level(r) === v},
+  citizen: {opts: [['none', 'No citizenship rule'], ['gc', 'Open to green card'], ['us', 'US citizens only']],
+            test: (r, v) => v === 'none' ? !r.citizen : v === 'gc' ? r.citizen !== 'US only' : r.citizen === 'US only'},
+  visa: {opts: [['yes', 'Sponsors visas'], ['notno', "Doesn't refuse sponsorship"], ['no', "Won't sponsor"]],
+         test: (r, v) => v === 'yes' ? r.visa === 'Sponsors' : v === 'notno' ? r.visa !== 'No sponsor' : r.visa === 'No sponsor'},
+  board: {opts: BOARDS.map(b => [b, b]), test: (r, v) => r.board === v},
+  status: {opts: STATUSES.map(s => [s, s]), test: (r, v) => r.status === v},
+};
+const escAttr = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+document.querySelectorAll('.rule-col').forEach(sel => sel.addEventListener('change', () => {
+  const rule = RULES[sel.value], box = $('rv' + sel.dataset.n);
+  box.innerHTML = !rule ? '' : rule.text
+    ? `<input type="search" class="efilter rule-text" placeholder="${rule.text}">`
+    : `<select class="efilter rule-pick">${rule.opts.map(([v, l]) => `<option value="${escAttr(v)}">${escAttr(l)}</option>`).join('')}</select>`;
+  const field = box.querySelector('input, select');
+  if (field) field.focus();
+  if (field && field.tagName === 'INPUT') field.addEventListener('keydown', e => { if (e.key === 'Enter') $('rules-go').click(); });
+}));
+function readRules() {
+  return [...document.querySelectorAll('.rule-col')].map(sel => {
+    const field = $('rv' + sel.dataset.n).querySelector('input, select');
+    return sel.value && field && (field.value !== '' || RULES[sel.value].opts) ? {col: sel.value, val: field.value} : null;
+  }).filter(r => r && !(RULES[r.col].text && !r.val.trim()));
+}
+$('rules-go').addEventListener('click', () => {
+  state.rules = readRules();
+  $('rules-note').textContent = state.rules.length ? `${state.rules.length} filter${state.rules.length > 1 ? 's' : ''} on` : '';
+  render();
+});
+function resetRules() {
+  document.querySelectorAll('.rule-col').forEach(sel => { sel.value = ''; $('rv' + sel.dataset.n).innerHTML = ''; });
+  state.rules = []; $('rules-note').textContent = '';
+}
+$('rules-reset').addEventListener('click', () => { resetRules(); render(); });
 render();
 </script>
 {% endblock %}

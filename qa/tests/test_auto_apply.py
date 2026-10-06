@@ -197,3 +197,25 @@ def test_eligibility_follows_the_profile():
     assert eligible(Posting(citizenship="US citizen or green card"), {"us_citizen": False, "green_card": True})[0]
     assert eligible(Posting(citizenship="US citizen"), {})[0]      # unanswered: never hidden
     assert eligible(ts, {})[0] and not eligible(ts, {"security_clearance": "None"})[0]
+
+
+@pytest.mark.parametrize("text", ["Active and current TS.SCI w FSP through MD", "TS SCI with CI Poly required",
+                                  "Clearance: TS//SCI Full Scope Polygraph"])
+def test_ts_sci_is_read_however_it_is_written(text):
+    p = parse("", text, "")
+    assert p["clearance"] == "TS/SCI" and p["clearance_active"] and p["polygraph"]
+
+
+def test_typescript_is_not_a_clearance():
+    assert parse("", "TypeScript (TS) and Vault secrets", "")["clearance"] is None
+
+
+def test_a_persons_correction_survives_re_reading():
+    from backend.core.jobfields import derived_for
+
+    class Row:
+        eligibility_manual = True
+    fields = {"clearance": "Secret", "sponsorship": "no", "workplace": "remote"}
+    assert derived_for(Row(), fields) == {"workplace": "remote"}
+    Row.eligibility_manual = None
+    assert derived_for(Row(), fields) == fields
