@@ -133,6 +133,17 @@ class Applicant:
         if "state" in words or "province" in words:
             return str(self.location.get("state") or "").strip() or None
 
+        # "Select which best describes your right to work in the US": a status, not a yes/no.
+        # Answered only from what the person stated; otherwise left for them.
+        if ("right to work" in text or "work authori" in text or "citizenship status" in text
+                or "employment eligibility" in text) and ("describe" in text or "status" in text or "select" in text):
+            if self.authorisation.get("us_citizen") is True:
+                return "U.S. Citizen"
+            if self.authorisation.get("green_card") is True:
+                return "Permanent Resident"
+            if self.authorisation.get("requires_sponsorship") is True:
+                return "Visa"
+            return None
         if "sponsor" in text:
             needs = self.authorisation.get("requires_sponsorship")
             return None if needs is None else ("Yes" if needs else "No")

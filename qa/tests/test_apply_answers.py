@@ -106,12 +106,14 @@ def test_answers_given_by_hand_are_used_on_the_next_form(db, ready, monkeypatch)
     assert answers.load() == {"desired salary": "$170,000"}
 
 
-def test_a_skipped_form_teaches_nothing(db, ready, monkeypatch):
+def test_a_closed_tab_still_keeps_what_the_person_typed(db, ready, monkeypatch):
+    """Answers typed before closing the tab are the person's own; company-specific ones are not kept."""
     add_job()
     monkeypatch.setattr(greenhouse, "watch_submission",
-                        lambda page, timeout_s, **kw: ("skipped", {"Desired Salary*": "$1"}))
+                        lambda page, timeout_s, **kw: ("skipped", {"Desired Salary*": "$170,000",
+                                                                    "Why do you want to work at Acme?": "x"}))
     runner.run(ready, limit=5, browser_factory=lambda: Context(captcha=True))
-    assert answers.load() == {}
+    assert answers.load() == {"desired salary": "$170,000"}
 
 
 def test_address_fields_are_left_to_the_profile():

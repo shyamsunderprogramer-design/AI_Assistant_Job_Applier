@@ -399,5 +399,13 @@ def _settle(outcome, job, verdict, how, url, kept, resume_note, letter, result, 
                     + "; ".join(learned[:4]))
     elif verdict == "skipped":
         say("   Skipped (tab closed) — it stays in the queue for next time.")
+        # What the person typed before closing is still theirs: general answers
+        # ("5+ years of Kubernetes?") are kept, so the same question is not asked
+        # again. Company-specific ones ("Why five9?") are never reused.
+        if answers:
+            from backend.apply.answers import remember
+            learned = remember(answers, company=job.company)
+            if learned:
+                say(f"   Kept {len(learned)} of your answers for next time: " + "; ".join(learned[:4]))
     else:
         say("   No submission in the time allowed — moving on; it stays in the queue.")

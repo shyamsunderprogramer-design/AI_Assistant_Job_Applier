@@ -219,3 +219,28 @@ def test_a_persons_correction_survives_re_reading():
     assert derived_for(Row(), fields) == {"workplace": "remote"}
     Row.eligibility_manual = None
     assert derived_for(Row(), fields) == fields
+
+
+# -- the dry run's findings -------------------------------------------------------------
+
+@pytest.mark.parametrize("options,want,pick", [
+    (["i am a u.s. citizen or national", "i am a lawful permanent resident", "i will require sponsorship"], "u.s. citizen", 0),
+    (["us citizen", "not a us citizen"], "u.s. citizen", 0),
+    (["green card holder", "us citizen", "h-1b visa"], "permanent resident", 0),
+    (["i do not require sponsorship", "i will require visa sponsorship"], "visa", 1),
+    (["citizen", "citizen of another country"], "u.s. citizen", None),   # two say it: leave it to the person
+])
+def test_right_to_work_options_are_matched_by_meaning(options, want, pick):
+    from backend.apply.greenhouse import status_option
+    assert status_option(options, want) == pick
+
+
+def test_right_to_work_comes_from_the_profile_only():
+    from backend.apply.profile import Applicant
+    label = "Select which best describes your right to work in the US"
+    a = Applicant.__new__(Applicant)
+    a.authorisation = {"us_citizen": True}
+    a.links, a.location, a.employment, a.answers = {}, {}, {}, {}
+    assert a._from_profile(label) == "U.S. Citizen"
+    a.authorisation = {}
+    assert a._from_profile(label) is None

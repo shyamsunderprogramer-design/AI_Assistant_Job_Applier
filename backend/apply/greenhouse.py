@@ -176,6 +176,38 @@ def _evidence_dir(job_id: int) -> Path:
     return path
 
 
+# A right-to-work status, matched by what the option says, since every employer
+# words it differently ("I am a U.S. citizen", "US Citizen or National").
+STATUS_WORDS = {
+    "u.s. citizen": (("citizen",), ("not a", "non-citizen", "non citizen", "noncitizen", "not citizen", "other than")),
+    "permanent resident": (("permanent resident", "green card", "lawful permanent"), ("not a", "non-")),
+    "visa": (("visa", "sponsor", "h-1b", "h1b"), ("not require", "do not", "don't", "will not", "no sponsorship")),
+}
+
+
+def status_option(texts: list[str], want: str) -> int | None:
+    """The one option that says this status, or None when none or several do."""
+    say, never = STATUS_WORDS[want]
+    hits = [i for i, t in enumerate(texts) if any(s in t for s in say) and not any(n in t for n in never)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _choose_status(page, element, want: str, settle_ms: int) -> bool:
+    try:
+        element.click()
+        page.wait_for_timeout(settle_ms)
+        options = page.query_selector_all("[role=option]")
+        index = status_option([(o.inner_text() or "").strip().lower() for o in options], want)
+        if index is None:
+            element.press("Escape")
+            return False
+        options[index].click()
+        return True
+    except Exception as exc:
+        log.debug("Status dropdown %r could not be answered: %s", want, exc)
+        return False
+
+
 def _choose(page, element, answer: str, *, settle_ms: int = 700) -> bool:
     """Pick the dropdown option that says `answer`. False, and nothing chosen,
     when no option does.
@@ -188,6 +220,8 @@ def _choose(page, element, answer: str, *, settle_ms: int = 700) -> bool:
     want = answer.strip().lower()
     if not want:
         return False
+    if want in STATUS_WORDS:
+        return _choose_status(page, element, want, settle_ms)
     declining = want == "decline"
     try:
         element.click()
