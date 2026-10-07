@@ -381,10 +381,14 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
     except Exception as exc:
         log.debug("Greenhouse %s: no screenshot (%s)", job_id, exc)
 
+    # -- the person presses Submit: show them where it is ----------------
+    if not (submit and not result.needs_person):
+        show_submit(page, scroll=not result.needs_person)
+
     # -- submit, only when everything says it is safe to ------------------
     if submit and not result.needs_person:
         try:
-            button = page.query_selector("button[type=submit], input[type=submit]")
+            button = page.query_selector(SUBMIT_SELECTOR)
             if button is not None:
                 button.click()
                 page.wait_for_timeout(4000)
@@ -402,6 +406,30 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
                  job_id, len(result.required_blank), "; ".join(result.required_blank[:2]))
 
     return result
+
+
+SUBMIT_SELECTOR = "button[type=submit], input[type=submit]"
+
+
+def show_submit(page, scroll: bool = True) -> bool:
+    """Outline the Submit button, and bring it into view when nothing above it needs the person.
+
+    The form ran to about 6,600 pixels with the button at the very bottom, and a
+    person finishing it by hand did not find it. Only the button's look changes.
+    """
+    try:
+        return bool(page.evaluate(
+            """([selector, scroll]) => {
+                 const b = document.querySelector(selector);
+                 if (!b) return false;
+                 b.style.outline = '4px solid #f59e0b';
+                 b.style.outlineOffset = '4px';
+                 if (scroll) b.scrollIntoView({block: 'center', behavior: 'smooth'});
+                 return true;
+               }""", [SUBMIT_SELECTOR, scroll]))
+    except Exception as exc:
+        log.debug("Submit button not shown: %s", exc)
+        return False
 
 
 def captcha_is_invisible(html: str) -> bool:

@@ -320,3 +320,30 @@ def test_preferred_first_name_is_the_first_name():
     a.personal = {"first_name": "Sam"}
     assert a._from_profile("Preferred First Name") == "Sam"
     assert a._from_profile("Please provide your preferred first name or nickname") == "Sam"
+
+
+def test_the_submit_button_is_outlined_and_brought_into_view():
+    """The five9 form ran ~6,600px with Submit at the very bottom; a person did not find it."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    manager = sync_api.sync_playwright().start()
+    try:
+        browser = manager.chromium.launch()
+    except Exception as exc:
+        manager.stop()
+        pytest.skip(f"no Chromium: {exc}")
+    try:
+        from backend.apply.greenhouse import show_submit
+        page = browser.new_page(viewport={"width": 1000, "height": 700})
+        page.set_content('<form><div style="height:6000px">questions</div>'
+                         '<button type="submit">Submit application</button></form>')
+        assert show_submit(page, scroll=False)
+        assert page.evaluate("scrollY") == 0                                      # questions left: stay put
+        assert "solid" in page.eval_on_selector("button", "b => b.style.outline")
+        show_submit(page)
+        page.wait_for_timeout(800)
+        assert page.evaluate("scrollY") > 5000
+        page.set_content("<p>no form</p>")
+        assert show_submit(page) is False
+    finally:
+        browser.close()
+        manager.stop()

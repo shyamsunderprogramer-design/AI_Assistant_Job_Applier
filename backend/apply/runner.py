@@ -365,7 +365,8 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
         if result.required_blank:
             waiting.append("required: " + ", ".join(result.required_blank[:4]))
         say(f"   Waiting for you — finish {'; '.join(waiting) or 'the form'}, "
-            f"then press Submit. Close the tab to skip this one.")
+            f"then press Submit — the \"Submit application\" button at the very bottom of the form, "
+            f"outlined in orange. Close the tab to skip this one.")
         verdict, answers = greenhouse.watch_submission(page, wait_s)
         how = "you"
 
