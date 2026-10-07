@@ -30,3 +30,12 @@ def _no_real_answer_bank(tmp_path, monkeypatch):
     from backend.apply import answers
 
     monkeypatch.setattr(answers, "BANK_PATH", tmp_path / "answers.yaml")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_chat_plans(monkeypatch):
+    """Model fallbacks never ask the real Claude/ChatGPT tools, and "busy" is not
+    remembered from one test into the next."""
+    from ml.resume import llm
+    monkeypatch.setattr(llm, "_BUSY_UNTIL", {})
+    monkeypatch.setattr(llm, "other_plans", lambda provider, cfg=None: [])

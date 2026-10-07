@@ -50,6 +50,8 @@ class Draft:
     changes: list[dict] = field(default_factory=list)
     accepted: bool = True
     problem: str = ""
+    # What the model itself left out, before any line was cut for space: a refit starts here.
+    model_omitted: list = field(default_factory=list)
 
 
 def guess_title(jd_text: str) -> str:
@@ -78,6 +80,45 @@ def evidence_lines(report) -> set[str]:
     """The resume lines that show a requirement the posting has (direct or related)."""
     return {e["text"] for m in report.matches if m.status in ("direct", "related")
             for e in (m.evidence or []) if e.get("text")}
+
+
+def required_proof(report) -> list[set[str]]:
+    """For each required item the resume shows directly, the lines that show it."""
+    return [{e["text"] for e in m.evidence if e.get("text")}
+            for m in report.matches
+            if m.status == "direct" and (m.requirement or {}).get("priority") == "required" and m.evidence]
+
+
+def _same_line(text: str) -> str:
+    return " ".join((text or "").lower().lstrip("-•*·▪◦–— ").split())[:80]
+
+
+def keep_required_wording(result, report) -> list[str]:
+    """Undo a rewrite that drops the only words proving a required item.
+
+    The rewritten bullet said the same work in other words, and "incident
+    response" -- required, shown directly on the resume -- was in none of them.
+    The bullet goes back to the person's own wording; returns the lines undone.
+    """
+    from ml.tailoring.synonyms import mentions
+    rewrites = {_same_line(b.get("original")): b for b in result.bullets or [] if b.get("original")}
+    undone = []
+    for m in report.matches:
+        req = m.requirement or {}
+        if m.status != "direct" or req.get("priority") != "required":
+            continue
+        names = req.get("any_of") or [req.get("normalized") or ""]
+
+        def says(text):
+            return any(n and mentions(text or "", n) for n in names)
+        proof = [e["text"] for e in m.evidence or [] if e.get("text") and says(e["text"])]
+        if not proof or any(_same_line(p) not in rewrites or says(rewrites[_same_line(p)].get("tailored"))
+                            for p in proof):
+            continue
+        bullet = rewrites.pop(_same_line(proof[0]))
+        result.bullets.remove(bullet)
+        undone.append(proof[0])
+    return undone
 
 
 def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_model: bool = True,
@@ -110,15 +151,39 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_
                          "This draft uses the resume's own wording, selected for the posting.")
         result = TailorResult(summary=None)
         draft.result = result
+    if result.bullets:
+        keep_required_wording(result, report)
+    draft.model_omitted = list(result.omitted or [])
     if max_pages:
         try:
             fit_to_pages(base, result, jd_text, max_pages=max_pages,
                          pages=lambda b, r: _pages(b, r, header), keep=evidence_lines(report),
-                         focus_terms=focus or None)
+                         focus_terms=focus or None, proof=required_proof(report))
         except Exception:
             pass
     draft.changes = changes(base, result, header)
     return draft
+
+
+def refit(draft: Draft, jd_text: str, report, focus: list[str], max_pages: int = 2) -> Draft:
+    """The same rewrite fitted to the pages again, keeping the lines that carry `focus`.
+
+    No model call: a term the resume has but the draft lost was usually cut for
+    space ("platform" gone from a Platform Engineer resume, 94% -> 91%), and the
+    line that carries it is already written. A whole new rewrite took 40 s to 5 min.
+    """
+    import copy
+
+    from ml.resume.fit import fit_to_pages
+    result = copy.deepcopy(draft.result)
+    result.omitted = copy.deepcopy(draft.model_omitted)
+    fit_to_pages(draft.base, result, jd_text, max_pages=max_pages,
+                 pages=lambda b, r: _pages(b, r, draft.header), keep=evidence_lines(report),
+                 focus_terms=focus or None, proof=required_proof(report))
+    again = copy.copy(draft)
+    again.result = result
+    again.changes = changes(draft.base, result, draft.header)
+    return again
 
 
 def _pages(base, result, header) -> int:

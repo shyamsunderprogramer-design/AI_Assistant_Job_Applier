@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass, field
 
 from ml.tailoring.synonyms import canonical
 
+MAX_ITEMS = 60
 CATEGORIES = ("skill", "tool", "responsibility", "experience", "education", "certification", "version")
 PREFERRED = re.compile(r"\b(preferred|nice[- ]to[- ]have|bonus|a plus|is a plus|plus\b|ideally|desired|"
                        r"desirable|optional|good to have|advantageous)", re.I)
@@ -40,10 +41,17 @@ Return ONLY JSON: {"requirements": [ ... ]}, each item:
   {"original":   "<the employer's exact words for this one item, copied from the posting>",
    "normalized": "<a short plain name for it, e.g. 'kubernetes', '5+ years devops', 'bachelor's degree in computer science'>",
    "category":   "skill" | "tool" | "responsibility" | "experience" | "education" | "certification" | "version",
-   "context":    "<the full sentence or bullet it came from, copied exactly>"}
+   "context":    "<the full sentence or bullet it came from, copied exactly>",
+   "any_of":     ["<only when the posting offers alternatives: each one's short plain name>"]}
 
 Rules:
-- One item per separate requirement. Split a sentence that lists several tools or skills into one item each, all with the same context.
+- One item per separate requirement. Split a sentence that lists several tools or skills the candidate
+  needs ALL of ("Terraform, Ansible and Kubernetes") into one item each, all with the same context.
+- When the posting offers ALTERNATIVES -- "Go, TypeScript, Python, or similar", "such as AWS or GCP",
+  "one or more of", "e.g." -- return ONE item: "original" is the whole phrase, "any_of" lists each choice.
+- A duty is one item, not one per object: "Design, build and maintain platform services, APIs, CLIs and
+  controllers" is ONE responsibility.
+- Most postings have 15 to 45 requirements. Never return more than 60; merge near-duplicates.
 - "original" must be copied exactly from the posting -- never paraphrased.
 - Include duties ("responsibility"), years ("experience"), degrees ("education"), certifications, and named versions ("version", e.g. "Java 17").
 - Leave out pay, benefits, company description, legal and equal-opportunity text.
@@ -59,6 +67,7 @@ class Requirement:
     priority: str                     # required | preferred
     context: str
     also: list[str] = field(default_factory=list)   # the same thing worded elsewhere in the posting
+    any_of: list[str] = field(default_factory=list)  # alternatives: any one of them meets it
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -139,9 +148,22 @@ def extract(jd: str, cfg=None, use_model: bool = True) -> tuple[list[Requirement
             if priority == "required":
                 kept.priority = "required"          # asked for as required anywhere: required
             continue
-        req = Requirement(f"r{len(reqs) + 1}", original, term, category, priority, context)
+        choices = [canonical(str(c)) for c in item.get("any_of") or [] if str(c).strip()]
+        req = Requirement(f"r{len(reqs) + 1}", original, term, category, priority, context,
+                          any_of=list(dict.fromkeys(choices)) if len(choices) > 1 else [])
         reqs.append(req)
         by_term[term] = req
+    if len(reqs) > MAX_ITEMS:
+        # Over-split postings (175 items from one, every "API" and "CLI" its own duty)
+        # bury what matters. Tools, skills, years and degrees are kept; duties fill the rest.
+        named = [r for r in reqs if r.category != "responsibility"][:MAX_ITEMS]
+        duties = [r for r in reqs if r.category == "responsibility"][:MAX_ITEMS - len(named)]
+        keep = {r.id for r in named + duties}
+        notes.append(f"The posting was read as {len(reqs)} requirements; the {MAX_ITEMS} kept are its "
+                     f"tools, skills, years and degrees first, then its main duties.")
+        reqs = [r for r in reqs if r.id in keep]
+        for n, r in enumerate(reqs, start=1):
+            r.id = f"r{n}"
     return reqs, notes
 
 

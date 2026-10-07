@@ -66,13 +66,17 @@ def requirements_shown(reqs, resume_file: Path) -> float:
 
 
 def best_draft(make, jd_text: str, progress=lambda note: None, target: int = TARGET,
-               rounds: int = ROUNDS, company: str | None = None):
+               rounds: int = ROUNDS, company: str | None = None, refit=None):
     """Draft up to `rounds` times, aiming at `target`; returns (best draft, its ATS, rounds used).
 
     `make(extra_guidance, focus_terms)` writes one draft; focus terms are kept
     when the draft is fitted to its pages. The goal is the target or the
     original resume's own match, whichever is higher: stopping at 80% let a
     92% resume come back at 85%.
+
+    `refit(draft, focus)` fits the same rewrite to the pages again, keeping the
+    lines with the terms it lost. It costs no model call, so it is tried before
+    every new round, and a round is only written when it falls short.
     """
     best, best_ats, used = None, None, 0
     extra, focus, goal = "", [], target
@@ -87,6 +91,18 @@ def best_draft(make, jd_text: str, progress=lambda note: None, target: int = TAR
             best, best_ats = draft, ats
         if (best_ats["after"] or 0) >= goal:
             break
+        if refit is not None and ats["fixable"]:
+            progress(f"keeping the lines with {', '.join(ats['fixable'][:4])}")
+            try:
+                again = refit(draft, list(dict.fromkeys(focus + ats["fixable"])))
+                again_ats = ats_of(again, jd_text, company)
+            except Exception:
+                again, again_ats = None, None
+            if again_ats and (again_ats["after"] or 0) > (best_ats["after"] or 0):
+                best, best_ats = again, again_ats
+                ats = again_ats
+            if (best_ats["after"] or 0) >= goal:
+                break
         if not draft.accepted and n > 1:
             break                      # the guard turned the rewrite down; another will too
         if not ats["fixable"] and not ats["concepts"]:

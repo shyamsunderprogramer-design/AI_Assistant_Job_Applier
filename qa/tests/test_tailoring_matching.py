@@ -166,3 +166,46 @@ def test_a_degree_in_a_biography_is_not_a_requirement():
     bio = "Before Acme, our founder was a professor and did a math PhD at a university."
     assert not [i for i in _by_rules(bio) if i["category"] == "education"]
     assert [i for i in _by_rules("- Bachelor's degree in Computer Science or equivalent.") if i["category"] == "education"]
+
+
+def test_alternatives_are_met_by_any_one_of_them():
+    """"Go, TypeScript, Python, or similar": the resume's Python meets it."""
+    r = Requirement("r1", "Go, TypeScript, Python, or similar", "go or typescript or python", "skill",
+                    "required", "Languages such as Go, TypeScript, Python, or similar.",
+                    any_of=["go", "typescript", "python"])
+    m = status(match([r], RESUME, None, use_model=False), "r1")
+    assert m.status in ("direct", "unclear") and "python" in m.explanation.lower()
+    missing = Requirement("r2", "Rust or Haskell", "rust or haskell", "skill", "required", "Rust or Haskell.",
+                          any_of=["rust", "haskell"])
+    assert status(match([missing], RESUME, None, use_model=False), "r2").status == "not_found"
+
+
+def test_alternatives_from_the_model_become_one_requirement(monkeypatch):
+    jd = ("Requirements:\n- Build platform services in languages such as Go, TypeScript, Python, or similar.\n"
+          "- Experience with Terraform and Kubernetes.\n")
+    reply = {"requirements": [
+        {"original": "Go, TypeScript, Python, or similar", "normalized": "programming language",
+         "category": "skill", "context": "Build platform services in languages such as Go, TypeScript, Python, or similar.",
+         "any_of": ["Go", "TypeScript", "Python"]},
+        {"original": "Terraform", "normalized": "terraform", "category": "tool", "context": "Experience with Terraform and Kubernetes."},
+        {"original": "Kubernetes", "normalized": "kubernetes", "category": "tool", "context": "Experience with Terraform and Kubernetes."}]}
+
+    class Reply:
+        text = json.dumps(reply)
+    monkeypatch.setattr("ml.resume.llm.complete", lambda *a, **k: Reply())
+    reqs, _ = extract(jd, None)
+    assert [len(r.any_of) for r in reqs] == [3, 0, 0]
+
+
+def test_an_over_split_posting_is_capped_with_its_tools_kept(monkeypatch):
+    duties = [f"duty number {i} for the platform" for i in range(80)]
+    jd = "Requirements:\n" + "\n".join(f"- {d}." for d in duties) + "\n- Experience with Terraform.\n"
+    reply = {"requirements": [{"original": d, "normalized": d, "category": "responsibility", "context": d} for d in duties]
+             + [{"original": "Terraform", "normalized": "terraform", "category": "tool", "context": "Experience with Terraform."}]}
+
+    class Reply:
+        text = json.dumps(reply)
+    monkeypatch.setattr("ml.resume.llm.complete", lambda *a, **k: Reply())
+    reqs, notes = extract(jd, None)
+    assert len(reqs) == requirements.MAX_ITEMS and any(r.normalized == "terraform" for r in reqs)
+    assert [r.id for r in reqs][:2] == ["r1", "r2"] and any("81 requirements" in n for n in notes)

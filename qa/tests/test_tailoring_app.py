@@ -56,7 +56,7 @@ def test_a_whole_run_without_a_model(tmp_path, no_word, no_network, monkeypatch)
     (tmp_path / "run").mkdir()
     result = pipeline.run(tmp_path / "run", resume, JD, None, None,
                           progress=lambda s, note="": stages.append(s), use_model=False)
-    assert stages == list(pipeline.STAGES)
+    assert list(dict.fromkeys(stages)) == list(pipeline.STAGES)          # in order; a stage may report progress
     assert resume.read_bytes() == before                                   # the upload is never changed
     statuses = {m["requirement"]["normalized"]: m["status"] for m in result["report"]["matches"]}
     assert statuses["kubernetes"] == "direct" and statuses["rust"] == "not_found"
@@ -167,3 +167,45 @@ def test_a_job_run_puts_its_files_where_the_job_page_looks(tmp_path, no_word, no
     pipeline.place_for_job(folder, target)
     assert target.exists() and target.with_suffix(".pdf").exists()
     assert pipeline.job_run(42) == "run" and pipeline.job_of_run(folder)["job_id"] == 42
+
+
+def test_a_lost_term_is_won_back_by_refitting_before_another_model_round(monkeypatch):
+    """A draft short of the goal is refitted (no model) first; only if that fails is it rewritten."""
+    from ml.tailoring import rounds
+    made, refits = [], []
+
+    class D:
+        accepted = True
+
+        def __init__(self, after):
+            self.after = after
+
+    def make(extra, focus):
+        made.append(focus)
+        return D(91)
+
+    def refit(draft, focus):
+        refits.append(focus)
+        return D(95)
+    monkeypatch.setattr(rounds, "ats_of", lambda d, jd, company=None:
+                        {"before": 94, "after": d.after, "fixable": ["platform"] if d.after < 94 else [],
+                         "concepts": []})
+    best, ats, used = rounds.best_draft(make, "jd", refit=refit)
+    assert ats["after"] == 95 and used == 1 and len(made) == 1 and refits == [["platform"]]
+
+
+def test_a_rewrite_that_loses_a_required_items_only_proof_is_undone():
+    from types import SimpleNamespace as NS
+
+    from ml.resume.tailor import TailorResult
+    from ml.tailoring.draft import keep_required_wording
+    line = "Led incident response for P1 outages across 40 services, cutting MTTR by 35%."
+    result = TailorResult(summary=None)
+    result.bullets = [{"original": "- " + line, "tailored": "Restored P1 outages across 40 services, cutting MTTR 35%."},
+                      {"original": "Built Terraform modules.", "tailored": "Built Terraform modules for AWS."}]
+    report = NS(matches=[NS(status="direct", evidence=[{"text": line}],
+                            requirement={"priority": "required", "normalized": "incident response"}),
+                         NS(status="direct", evidence=[{"text": "Built Terraform modules."}],
+                            requirement={"priority": "required", "normalized": "terraform"})])
+    assert keep_required_wording(result, report) == [line]
+    assert [b["original"] for b in result.bullets] == ["Built Terraform modules."]   # still says Terraform: kept

@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -226,10 +227,23 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
     """
     provider = provider_name(cfg)
     try:
+        if _resting(provider):
+            raise ProviderBusy(f"{provider} said it was busy a few minutes ago")
         return _dispatch(provider, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
     except ProviderBusy as exc:
+        _BUSY_UNTIL[provider] = time.monotonic() + BUSY_REST_S
         if not _setting(cfg, "resume.fallback_to_local", True):
             raise
+        # Another plan the person is signed in to answers in about a minute; the
+        # Ollama cloud models took five (a 15-minute tailoring run, 7 Oct 2026).
+        for other in other_plans(provider, cfg):
+            log.warning("%s is busy (%s) — writing with %s instead",
+                        provider, str(exc).split(":")[0][:80], other)
+            try:
+                return _dispatch(other, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
+            except (ProviderBusy, ProviderUnavailable) as again:
+                if isinstance(again, ProviderBusy):
+                    _BUSY_UNTIL[other] = time.monotonic() + BUSY_REST_S
         failed = model_name(cfg) if provider == "ollama" else ""
         last = exc
         for backup in fallback_models(cfg, skip=failed):
@@ -240,6 +254,34 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
             except ProviderBusy as again:
                 failed, last = backup, again
         raise last
+
+
+# A provider that said it was busy is left alone this long: asking again on every
+# call costs a refusal each time, or a whole timeout when "busy" was a hang.
+BUSY_REST_S = 600
+_BUSY_UNTIL: dict[str, float] = {}
+PLAN_PROVIDERS = {"claude-code": "claude", "chatgpt": "chatgpt", "gemini": "gemini"}
+
+
+def _resting(provider: str) -> bool:
+    return _BUSY_UNTIL.get(provider, 0) > time.monotonic()
+
+
+def other_plans(provider: str, cfg=None) -> list[str]:
+    """The other chat plans signed in on this Mac and not resting, to try before Ollama."""
+    if not _setting(cfg, "resume.fallback_to_plans", True):
+        return []
+    from ml.resume import plans
+    out = []
+    for name, tool in PLAN_PROVIDERS.items():
+        if name == provider or _resting(name):
+            continue
+        try:
+            if plans.status(tool)["signed_in"]:
+                out.append(name)
+        except Exception:
+            continue
+    return out
 
 
 def _dispatch(provider, system, user, cfg, *, max_tokens, want_json) -> Completion:

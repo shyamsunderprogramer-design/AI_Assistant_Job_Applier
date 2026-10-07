@@ -191,8 +191,24 @@ def _snippet(text: str, n: int = 90) -> str:
     return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + "…"
 
 
+RANK = {"direct": 3, "related": 2, "unclear": 1}
+
+
 def rule_match(req: Requirement, model: ResumeModel) -> tuple[str, list[str], str] | None:
     """(status, fact ids, explanation) from the rules, or None when rules cannot tell."""
+    if req.any_of:
+        # "Go, TypeScript, Python, or similar": any one of them meets it.
+        from dataclasses import replace
+        best, which = None, ""
+        for choice in req.any_of:
+            got = rule_match(replace(req, normalized=choice, original=choice, any_of=[]), model)
+            if got and (best is None or RANK.get(got[0], 0) > RANK.get(best[0], 0)):
+                best, which = got, choice
+            if best and best[0] == "direct":
+                break
+        if best is None:
+            return None
+        return best[0], best[1], f"Any one of “{req.original}” is asked for; {which}: {best[2]}"
     if req.category == "experience":
         return years_match(req, model)
     if req.category == "education":
@@ -239,8 +255,9 @@ def _verify(req: Requirement, model: ResumeModel, status: str, ids: list[str]) -
         return "not_found", [], " (No resume line was cited, so it is reported as not found.)"
     if status == "direct" and req.category in RULE_CATEGORIES:
         texts = [model.fact(i).text for i in ids]
-        if not any(mentions(t, req.normalized) or implied_by(t, req.normalized) for t in texts):
-            if any(related_reason(t, req.normalized) for t in texts):
+        names = req.any_of or [req.normalized]          # any one of the alternatives will do
+        if not any(mentions(t, n) or implied_by(t, n) for t in texts for n in names):
+            if any(related_reason(t, n) for t in texts for n in names):
                 status, note = "related", " (Lowered to related: the cited lines name a similar tool, not this one.)"
             else:
                 status, note = "unclear", " (Lowered to unclear: the cited lines do not name it.)"

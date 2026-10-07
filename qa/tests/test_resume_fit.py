@@ -152,3 +152,21 @@ BS Computer Science, State University     2010 – 2014
     text = text_of(base, result)
     assert "Splunk" in text                               # the only line with it stays
     assert text.count("Jenkins") == 2                     # a repeat goes instead
+
+
+def test_the_last_proof_of_a_required_item_is_not_cut_for_space():
+    """The posting never names the wiki line, so the ranking cuts it --
+    unless the posting requires it and that line is the resume's only proof."""
+    wiki = "Wrote the onboarding wiki for new starters in the finance department."
+    base, result, _ = fit()
+    assert "onboarding wiki" not in text_of(base, result)
+
+    base, result = parse_text(MASTER), TailorResult(summary=None)
+    pages = fit_to_pages(base, result, JD, max_pages=2, pages=pages_of(60), proof=[{wiki}])
+    assert pages <= 2 and "onboarding wiki" in text_of(base, result)
+
+
+def test_proof_gives_way_when_the_page_limit_cannot_be_met_otherwise():
+    every = [{l.lstrip("- ")} for l in MASTER.splitlines() if l.startswith("- ")]
+    base, result = parse_text(MASTER), TailorResult(summary=None)
+    assert fit_to_pages(base, result, JD, max_pages=2, pages=pages_of(60), proof=every) <= 2

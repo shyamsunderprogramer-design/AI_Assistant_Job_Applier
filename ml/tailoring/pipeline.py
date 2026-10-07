@@ -90,7 +90,7 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         lambda extra, focus: drafting.create(resume_file, jd_text, report, cfg, use_model=use_model,
                                              extra=extra, focus=focus),
         jd_text, progress=lambda note: progress(STAGES[4], note), rounds=rounds.ROUNDS if use_model else 1,
-        company=company)
+        company=company, refit=lambda d, focus: drafting.refit(d, jd_text, report, focus))
     # A header that says "LinkedIn" as a linked word keeps the link: the
     # writer draws a LinkedIn address as that word, linked.
     linkedin = next((l for l in model.contact.get("links", []) if "linkedin.com" in l.lower()), None)

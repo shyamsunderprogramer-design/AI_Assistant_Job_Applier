@@ -271,7 +271,7 @@ def count_pages(base, result) -> int:
 def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
                  company: str | None = None, max_pages: int = 2,
                  pages=count_pages, focus_terms: list[str] | None = None,
-                 keep: set[str] | None = None) -> int:
+                 keep: set[str] | None = None, proof: list[set[str]] | None = None) -> int:
     """Trim `result` in place so the rendered resume fits `max_pages`.
 
     Returns the page count it ends at (it may exceed the limit if the
@@ -280,6 +280,12 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     model's own omissions never take them, and the page trim takes them last.
     Without it a tailored resume showed fewer requirements than the original
     (25% -> 21%): lines were dropped for space that were the evidence.
+
+    `proof` holds, per REQUIRED item, the lines that show it. The last one left
+    of each is never cut for space unless the pages cannot be met otherwise:
+    ranked by keyword weight, a required skill the posting names once
+    (TypeScript, GKE, mentoring) lost to a sixth Kubernetes line, and four
+    required items vanished from a resume that had all of them (91% -> 73%).
     """
     if max_pages <= 0:
         return pages(base, result)
@@ -292,6 +298,15 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     by_text = {l.text: l for l in lines}
     keys = {_key(k) for k in keep or ()}
     evidence = {l.text for l in lines if _key(l.text) in keys}
+    # Each required item's proof, as the candidate lines that carry it.
+    proofs = [found for found in ({l.text for l in lines if l.children is None and _key(l.text) in {_key(x) for x in group}}
+                                  for group in proof or ()) if found]
+    strict = True
+
+    def sole_proof(line: Line) -> bool:
+        """Is this the last kept line showing some required item?"""
+        return strict and any(line.text in group and not any(t != line.text and t not in dropped for t in group)
+                              for group in proofs)
 
     # The model's own omissions go first, as far as the per-role floor allows.
     asked = {(e.get("original") or "").strip() for e in result.omitted if isinstance(e, dict)}
@@ -327,28 +342,36 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     for line in queue:
         if kept_words <= budget:
             break
-        if _protected(line, dropped, lines):
+        if _protected(line, dropped, lines) or sole_proof(line):
             continue
         dropped.add(line.text)
         kept_words -= line.words
     apply()
     current = pages(base, result)
 
-    remaining = [l for l in queue if l.text not in dropped]
-    while current > max_pages and remaining:
-        step = 0
-        for line in list(remaining):
-            remaining.remove(line)
-            if _protected(line, dropped, lines):
-                continue
-            dropped.add(line.text)
-            step += 1
-            if step == 3:
+    for attempt in ("keep proof", "last resort"):
+        # The last resort gives up the required items' proof, only when nothing else fits.
+        strict = attempt == "keep proof"
+        remaining = [l for l in queue if l.text not in dropped]
+        while current > max_pages and remaining:
+            step = 0
+            for line in list(remaining):
+                remaining.remove(line)
+                if _protected(line, dropped, lines) or sole_proof(line):
+                    continue
+                dropped.add(line.text)
+                step += 1
+                if step == 3:
+                    break
+            if step == 0:
                 break
-        if step == 0:
+            apply()
+            current = pages(base, result)
+        if current <= max_pages:
             break
-        apply()
-        current = pages(base, result)
+        if not strict:
+            break
+    strict = True
     if current > max_pages:
         log.warning("Resume still %d pages after trimming everything allowed", current)
         return current

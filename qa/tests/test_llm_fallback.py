@@ -94,3 +94,31 @@ def test_the_list_skips_what_is_not_installed(monkeypatch):
     cfg = Cfg({"resume.fallback_models": ["minimax-m3:cloud", "gemma4:e4b"],
                "resume.ollama.model": "glm-5.3-flash:cloud"})
     assert llm.fallback_models(cfg, skip="glm-5.3-flash:cloud") == ["gemma4:e4b"]
+
+
+def test_another_signed_in_plan_writes_before_the_slow_local_models(remote, monkeypatch):
+    tried = []
+
+    def dispatch(provider, *a, **k):
+        tried.append(provider)
+        if provider == "openrouter":
+            raise ProviderBusy("openrouter returned 429")
+        return Completion(text="{}", model="", provider=provider, usage=None)
+    monkeypatch.setattr(llm, "_dispatch", dispatch)
+    monkeypatch.setattr(llm, "other_plans", lambda provider, cfg=None: ["chatgpt"])
+    monkeypatch.setattr(llm, "fallback_models", lambda cfg=None, skip="": ["gemma4:e4b"])
+    assert llm.complete("s", "u", Cfg()).provider == "chatgpt"
+    assert tried == ["openrouter", "chatgpt"] and remote == []
+
+
+def test_a_busy_provider_is_not_asked_again_for_a_while(remote, monkeypatch):
+    tried = []
+
+    def dispatch(provider, *a, **k):
+        tried.append(provider)
+        raise ProviderBusy("usage limit reached")
+    monkeypatch.setattr(llm, "_dispatch", dispatch)
+    monkeypatch.setattr(llm, "fallback_models", lambda cfg=None, skip="": ["gemma4:e4b"])
+    llm.complete("s", "u", Cfg())
+    llm.complete("s", "u", Cfg())
+    assert tried == ["openrouter"] and remote == ["gemma4:e4b", "gemma4:e4b"]
