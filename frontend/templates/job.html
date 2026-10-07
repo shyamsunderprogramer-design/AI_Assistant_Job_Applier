@@ -281,6 +281,22 @@
   </ol>
 </section>
 
+{% if job.status in ('Applied', 'Interviewing') %}
+<section class="card" id="prep">
+  <div class="card-head">
+    <h2>Interview prep</h2>
+    <div class="row" style="gap:8px">
+      <a class="btn" id="prep-pdf" href="/job/{{ job.id }}/prep.pdf" target="_blank" rel="noopener" hidden>Prep PDF (links)</a>
+      <button class="btn primary" id="prep-make">Prepare for interview</button>
+    </div>
+  </div>
+  <p class="hint">Likely questions, scenario answers built from your own resume (STAR), topics to study with
+    links, and this company's interview pages. Takes about a minute. Links are added by the app, never invented.</p>
+  <div class="out" id="prep-out" hidden></div>
+  <div id="prep-body"></div>
+</section>
+{% endif %}
+
 
 <dialog class="place" id="place" aria-labelledby="place-title">
   <form method="dialog" id="place-form">
@@ -869,5 +885,38 @@ $('elig-form')?.addEventListener('submit', e => {
             citizenship: $('ef-ctz').value, sponsorship: $('ef-visa').value});
 });
 $('ef-reset')?.addEventListener('click', () => sendElig({reset: true}));
+
+// -- Interview prep (applied jobs) ------------------------------------------------------
+function showPrep(p) {
+  if (!p || !$('prep-body')) return;
+  const L = l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`;
+  const list = (title, items, fn) => items && items.length ? `<h3>${title}</h3><ol class="prep-list">${items.map(fn).join('')}</ol>` : '';
+  const ch = p.chance || {};
+  $('prep-body').innerHTML = `
+    <div class="prep-chance"><b>Chance for this role (estimate):</b> <span class="pill">${esc(ch.rating || '—')}</span> ${esc(ch.why || '')}</div>
+    <h3>This company</h3><div class="prep-links">${(p.company_links || []).map(L).join(' · ')}</div>
+    ${list('Likely questions', p.likely_questions, q => `<li>${esc(q.q)}<div class="hint">${esc(q.why || '')}</div></li>`)}
+    ${list('Scenario questions — STAR outlines from your resume', p.scenarios, s => `<li><b>${esc(s.q)}</b>
+       <div class="star"><span>S</span> ${esc(s.star?.situation)}<br><span>T</span> ${esc(s.star?.task)}<br>
+       <span>A</span> ${esc(s.star?.action)}<br><span>R</span> ${esc(s.star?.result)}</div>
+       ${s.from ? `<div class="hint">From your resume: “${esc(s.from)}”</div>` : ''}
+       ${s.check ? `<div class="hint bad">⚠ ${esc(s.check)}</div>` : ''}</li>`)}
+    ${list('Topics to study', p.topics, t => `<li><b>${esc(t.topic)}</b> — ${esc(t.why || '')}<div class="prep-links">${(t.links || []).map(L).join(' · ')}</div></li>`)}
+    ${list('Questions this kind of company asks', p.company_questions, q => `<li>${esc(q.q)}</li>`)}
+    ${list('Your strengths for this role', p.strengths, s => `<li>${esc(s)}</li>`)}
+    ${list('Gaps to be ready for', p.weaknesses, s => `<li>${esc(s)}</li>`)}
+    <div class="hint">Made ${esc((p.made || '').replace('T', ' ').slice(0, 16))} UTC.</div>`;
+  $('prep-pdf').hidden = false;
+  $('prep-make').textContent = 'Prepare again';
+}
+if ($('prep')) (async () => { const r = await ask(`/job/${JOB}/prep`); if (r.ok) showPrep(r.prep); })();
+$('prep-make')?.addEventListener('click', async e => {
+  const b = e.currentTarget; b.disabled = true;
+  show('prep-out', 'Preparing — reading the posting and your resume (about a minute)…');
+  const r = await ask(`/job/${JOB}/prep`, {method: 'POST'}, 600000);
+  b.disabled = false;
+  if (!r.ok) { show('prep-out', r.error, 'bad'); return; }
+  $('prep-out').hidden = true; showPrep(r.prep);
+});
 </script>
 {% endblock %}

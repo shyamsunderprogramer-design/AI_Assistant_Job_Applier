@@ -1410,6 +1410,51 @@ def job_eligibility(job_id: int):
     return jsonify(ok=True, manual=not body.get("reset"), **values)
 
 
+@app.get("/job/<int:job_id>/prep")
+def job_prep(job_id: int):
+    """The interview prep made for this job, if any."""
+    from ml.interview.prep import load
+    return jsonify(ok=True, prep=load(job_id))
+
+
+@app.post("/job/<int:job_id>/prep")
+def job_prep_make(job_id: int):
+    """Make the interview prep (one model call, about a minute) and its links-first PDF."""
+    from ml.interview.prep import SHOWN_FOR, prepare, write_pdf
+    from ml.resume.packet import packet_dir
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        if job.status not in SHOWN_FOR:
+            return jsonify(ok=False, error="Interview prep is for jobs you have applied to."), 400
+        session.expunge(job)
+    try:
+        prep = prepare(cfg(), job)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{str(exc)[:300]}"), 500
+    folder = packet_dir(cfg(), job.company, job.title, job.external_id or "", job_id=job.id)
+    try:
+        pdf = write_pdf(prep, folder / "interview-prep.pdf")
+        prep["pdf"] = str(pdf)
+    except Exception as exc:
+        prep["pdf_error"] = str(exc)[:200]
+    return jsonify(ok=True, prep=prep)
+
+
+@app.get("/job/<int:job_id>/prep.pdf")
+def job_prep_pdf(job_id: int):
+    from ml.resume.packet import packet_dir
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        pdf = packet_dir(cfg(), job.company, job.title, job.external_id or "", job_id=job.id) / "interview-prep.pdf"
+    if not pdf.exists():
+        return jsonify(ok=False, error="Make the prep first."), 404
+    return send_file(pdf, mimetype="application/pdf")
+
+
 @app.get("/apply")
 def apply_page():
     return render_template("apply.html")
