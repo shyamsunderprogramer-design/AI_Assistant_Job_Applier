@@ -6,7 +6,7 @@
 # hardcodes the interpreter, logs everything with timestamps, refuses to run
 # twice at once, and exits non-zero when a stage fails so the caller can alert.
 #
-#   devops/daily_pipeline.sh [daily|discover|enrich]
+#   devops/daily_pipeline.sh [daily|discover|enrich|backup|health]
 #
 # Prints a one-line JSON summary on stdout as its last line, for a scheduler
 # to branch on. Human-readable output goes to data/daily_run.log.
@@ -60,6 +60,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
+SUMMARY=""
 log "=== $TASK starting ==="
 case "$TASK" in
   daily)
@@ -87,6 +88,18 @@ case "$TASK" in
   enrich)
     bash data/companies_build/enrich_loop.sh >> "$LOG" 2>&1
     ;;
+  backup)
+    # Nightly: jobs.db and the person's own settings, to the Storage drive.
+    SUMMARY="$("$PY" devops/backup_db.py 2>> "$LOG")"
+    TASK_STATUS=$?
+    log "backup: $SUMMARY"
+    ;;
+  health)
+    # Weekly: what went wrong unattended. Shown at /health in the web app.
+    SUMMARY="$("$PY" devops/health_report.py 2>> "$LOG")"
+    TASK_STATUS=$?
+    log "health: $SUMMARY"
+    ;;
   *)
     echo "{\"ok\":false,\"error\":\"unknown task $TASK\"}"
     exit 1
@@ -103,7 +116,7 @@ if [ "$TASK" = "daily" ]; then
 fi
 
 # The summary is what a scheduler reads to decide whether to notify.
-SUMMARY="$("$PY" devops/run_summary.py "$TASK" "$STATUS" 2>/dev/null)"
+[ -n "$SUMMARY" ] || SUMMARY="$("$PY" devops/run_summary.py "$TASK" "$STATUS" 2>/dev/null)"
 [ -n "$SUMMARY" ] \
   || SUMMARY="{\"ok\":false,\"task\":\"$TASK\",\"exit\":$STATUS,\"error\":\"summary failed\"}"
 echo "$SUMMARY"
@@ -118,7 +131,11 @@ try:
     s = json.loads(os.environ["NOTIFY_SUMMARY"])
 except Exception:
     raise SystemExit(0)
-if not s.get("ok"):
+if s.get("task") == "health":
+    n = len(s.get("problems") or [])
+    print((f"Weekly health: {n} thing(s) to look at" if n else "Weekly health: all good")
+          + " — http://localhost:8770/health|" + ("Basso" if n else ""))
+elif not s.get("ok"):
     print(f"{s.get('task', 'run')} failed (exit {s.get('exit')}) — see data/daily_run.log|Basso")
 elif s.get("new_strong"):
     top = (s.get("highlights") or [{}])[0]

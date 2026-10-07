@@ -9,8 +9,10 @@ the home directory.
 | `…AI_Assistant_Job_Applier.daily` | 06:00 daily | scrape → score → export → digest |
 | `…AI_Assistant_Job_Applier.enrich` | 02:23 and 14:23 | continue website/careers enrichment |
 | `…AI_Assistant_Job_Applier.discover` | Sunday 03:07 | probe for new boards |
+| `…AI_Assistant_Job_Applier.backup` | 02:40 daily | jobs.db + your settings → `/Volumes/Storage/AI Job Applier backups/<date>/`, last 14 kept |
+| `…AI_Assistant_Job_Applier.health` | Sunday 09:30 | weekly health report → `data/reports/`, shown at `/health` |
 
-All three call `devops/daily_pipeline.sh <task>`, which takes a lock so two runs
+All of them call `devops/daily_pipeline.sh <task>`, which takes a lock so two runs
 can never overlap, logs to `data/daily_run.log`, and notifies only when there is
 something to say — a new strong match, or a failure.
 

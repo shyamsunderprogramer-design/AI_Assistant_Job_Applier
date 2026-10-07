@@ -2331,3 +2331,18 @@ def tailor_edit(run_id):
         place_for_job(folder, Path(owner["docx"]), Path(owner["packet"]) if owner.get("packet") else None)
     data.pop("folder", None)
     return jsonify(ok=True, **data)
+
+
+@app.get("/health")
+def health_report():
+    """The newest weekly health report; ?fresh=1 makes one now (a few seconds)."""
+    folder = PROJECT_ROOT / "data" / "reports"
+    if request.args.get("fresh"):
+        subprocess.run([sys.executable, str(PROJECT_ROOT / "devops" / "health_report.py")],
+                       cwd=PROJECT_ROOT, capture_output=True, timeout=120)
+    reports = sorted(folder.glob("health-*.html"))
+    if not reports:
+        if request.args.get("fresh"):
+            return "The health report could not be made — see data/daily_run.log.", 500
+        return redirect(url_for("health_report", fresh=1))
+    return send_file(reports[-1], mimetype="text/html", max_age=0)

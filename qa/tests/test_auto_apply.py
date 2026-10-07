@@ -244,3 +244,13 @@ def test_right_to_work_comes_from_the_profile_only():
     assert a._from_profile(label) == "U.S. Citizen"
     a.authorisation = {}
     assert a._from_profile(label) is None
+
+
+def test_holding_no_clearance_answers_no():
+    from backend.apply.profile import Applicant
+    a = Applicant.__new__(Applicant)
+    a.links, a.location, a.employment, a.answers = {}, {}, {}, {}
+    a.authorisation = {"security_clearance": "none"}
+    assert a._from_profile("Do you hold an active security clearance?") == "No"
+    a.authorisation = {"security_clearance": "Top Secret"}
+    assert a._from_profile("Do you hold an active security clearance?") == "Top Secret"

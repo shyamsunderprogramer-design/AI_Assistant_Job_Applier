@@ -153,7 +153,11 @@ class Applicant:
             return None if allowed is None else ("Yes" if allowed else "No")
         if "clearance" in text:
             value = self.authorisation.get("security_clearance")
-            return str(value).strip() if value else None
+            if value is None or not str(value).strip():
+                return None
+            from backend.core.eligibility import held_level
+            # "none" would never match a Yes/No dropdown; holding none is a plain No.
+            return "No" if held_level(str(value)) == 0 else str(value).strip()
 
         if "current company" in text or "current employer" in text:
             return str(self.employment.get("current_employer") or "").strip() or None
