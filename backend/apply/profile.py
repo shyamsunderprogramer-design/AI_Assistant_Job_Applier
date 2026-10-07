@@ -115,6 +115,9 @@ class Applicant:
         if not text:
             return None
 
+        if "preferred first name" in text or text.startswith("preferred name") or "nickname" in text:
+            # Unless the person says otherwise, the name they go by is their first name.
+            return self.first_name or None
         if "linkedin" in text:
             return str(self.links.get("linkedin") or "").strip() or None
         if "github" in text:

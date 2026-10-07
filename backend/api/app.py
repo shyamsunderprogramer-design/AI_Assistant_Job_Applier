@@ -1494,6 +1494,63 @@ def apply_answers():
     return jsonify(ok=True)
 
 
+def _not_eligible(applicant) -> dict[int, list[str]]:
+    """Ready applications the profile now rules out: never sent, so never asked about."""
+    from backend.apply.prepare import pending
+    from backend.core.eligibility import eligible
+    out = {}
+    with get_session() as session:
+        for e in pending():
+            job = session.get(Job, e["job_id"])
+            if job is not None:
+                ok, why = eligible(job, applicant.authorisation or {})
+                if not ok:
+                    out[job.id] = why
+    return out
+
+
+@app.get("/apply/questions")
+def questions_page():
+    return render_template("questions.html")
+
+
+@app.get("/apply/questions.json")
+def questions_data():
+    from backend.apply.prepare import pending, questionnaire
+    from backend.apply.profile import load as load_applicant
+    applicant = load_applicant(applicant_path())
+    blocked = _not_eligible(applicant)
+    data = questionnaire(applicant, exclude=set(blocked))
+    names = {e["job_id"]: f'{e["company"]} — {e["title"]}' for e in pending()}
+    data["not_eligible"] = [{"job_id": i, "job": names.get(i, str(i)), "why": w} for i, w in blocked.items()]
+    data["auto_submit"] = not applicant.stop_before_submit
+    return jsonify(ok=True, **data)
+
+
+@app.post("/apply/questions")
+def questions_save():
+    from backend.apply.prepare import answer_all
+    answers = (request.get_json(silent=True) or {}).get("answers")
+    if not isinstance(answers, list):
+        return jsonify(ok=False, error="Nothing to save."), 400
+    clean = [{"label": str(a.get("label") or ""), "value": str(a.get("value") or ""),
+              "job_ids": [int(i) for i in a.get("job_ids") or [] if str(i).isdigit()]}
+             for a in answers if isinstance(a, dict) and a.get("label")]
+    return jsonify(ok=True, saved=answer_all(clean))
+
+
+@app.post("/apply/auto-submit")
+def auto_submit_switch():
+    """The one switch: submit by itself when a form has nothing left for the person."""
+    import yaml
+    on = bool((request.get_json(silent=True) or {}).get("on"))
+    path = applicant_path()
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data.setdefault("apply", {})["stop_before_submit"] = not on
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return jsonify(ok=True, auto_submit=on)
+
+
 @app.post("/apply/skip/<int:job_id>")
 def apply_skip(job_id: int):
     from backend.apply.prepare import mark

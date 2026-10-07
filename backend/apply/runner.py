@@ -192,6 +192,16 @@ def record_application(job_id: int, entry: dict, *, audit_log: Path | None = Non
 
 # -- the run --------------------------------------------------------------
 
+def _eligible(job, applicant: Applicant, quiet: bool = False) -> bool:
+    """Checked again at apply time: a job prepared before the profile said otherwise
+    (a Top Secret role, prepared before "no clearance" was answered) must not go out."""
+    from backend.core.eligibility import eligible
+    ok, why = eligible(job, applicant.authorisation or {})
+    if not ok and not quiet:
+        say(f"Not applying to {job.company} — {job.title}: {', '.join(why)} (from your profile).")
+    return ok
+
+
 def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None,
                job_ids: list[int] | None = None):
     """What this run will apply to, and how many today's cap still allows."""
@@ -199,18 +209,20 @@ def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None,
         left = remaining_today(cfg, applicant, _applied_since(session, start_of_today_utc()))
         if job_ids:
             # The prepared ones, in the order they were chosen this morning.
-            jobs = [j for j in (session.get(Job, i) for i in job_ids) if j is not None and j.is_open]
+            jobs = [j for j in (session.get(Job, i) for i in job_ids)
+                    if j is not None and j.is_open and _eligible(j, applicant)]
             queue = build_queue(jobs, limit=min(len(jobs), left), max_per_company=len(jobs))
             order = {i: n for n, i in enumerate(job_ids)}
             queue.sort(key=lambda c: order.get(c.job_id, 0))
         elif job_id is not None:
             job = session.get(Job, job_id)
-            jobs = [job] if job is not None else []
+            jobs = [job] if job is not None and _eligible(job, applicant) else []
             queue = build_queue(jobs, limit=1)
         else:
             min_score = cfg.get("apply.min_score", cfg.get("resume.min_score", 0.45))
             queue = build_queue(
-                session.query(Job).filter(Job.is_open.is_(True)).all(),
+                [j for j in session.query(Job).filter(Job.is_open.is_(True)).all()
+                 if _eligible(j, applicant, quiet=True)],
                 limit=min(limit, left),
                 min_score=float(min_score) if min_score is not None else None,
                 last_applied=_last_applied_by_company(session),

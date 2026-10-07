@@ -68,6 +68,64 @@ def save_answers(job_id: int, answers: dict[str, str]) -> None:
     remember(given, company=entry.get("company", ""))      # reusable ones help every later form
 
 
+# -- one questionnaire for every ready application ----------------------------------
+
+def _still_open(entry: dict, applicant) -> list[dict]:
+    """This form's questions that nothing answers yet: the profile and the answer bank
+    may have learned some since the morning, and this form's own answers cover others."""
+    from backend.apply.answers import normalise
+    own = {normalise(k) for k in (entry.get("answers") or {})}
+    return [q for q in entry.get("questions") or []
+            if normalise(q["label"]) not in own
+            and (applicant is None or applicant.answer_for(q["label"]) is None)]
+
+
+def questionnaire(applicant=None, exclude: set[int] | frozenset = frozenset()) -> dict:
+    """Every ready application's open questions, with the ones several employers ask merged.
+
+    A question merges only when both its wording and its choices match: the same
+    words with different choices are different questions to answer.
+    """
+    from backend.apply.answers import normalise
+    groups: dict[tuple, dict] = {}
+    jobs = []
+    for e in pending():
+        if e["job_id"] in exclude:
+            continue
+        open_now = _still_open(e, applicant)
+        jobs.append({"job_id": e["job_id"], "company": e["company"], "title": e["title"],
+                     "open": len(open_now), "required": sum(1 for q in open_now if q.get("required"))})
+        for q in open_now:
+            key = (normalise(q["label"]), tuple(q.get("options") or ()))
+            g = groups.setdefault(key, {"label": q["label"], "options": list(key[1]),
+                                        "required": False, "jobs": []})
+            g["required"] = g["required"] or bool(q.get("required"))
+            g["jobs"].append({"job_id": e["job_id"], "company": e["company"]})
+    shared = [g for g in groups.values() if len(g["jobs"]) > 1]
+    own = [g for g in groups.values() if len(g["jobs"]) == 1]
+    shared.sort(key=lambda g: (not g["required"], -len(g["jobs"])))
+    by_job = {j["job_id"]: [] for j in jobs}
+    for g in own:
+        by_job[g["jobs"][0]["job_id"]].append(g)
+    for j in jobs:
+        j["questions"] = sorted(by_job[j["job_id"]], key=lambda g: not g["required"])
+    return {"shared": shared, "jobs": jobs}
+
+
+def answer_all(answers: list[dict]) -> int:
+    """Save each answer to every ready form it belongs to: [{label, value, job_ids}]."""
+    per_job: dict[int, dict[str, str]] = {}
+    for a in answers:
+        value = str(a.get("value") or "").strip()
+        if not value:
+            continue
+        for job_id in a.get("job_ids") or []:
+            per_job.setdefault(int(job_id), {})[str(a["label"])] = value
+    for job_id, given in per_job.items():
+        save_answers(job_id, given)
+    return sum(len(v) for v in per_job.values())
+
+
 # -- the questions a form asks ------------------------------------------------------
 
 def open_questions(job, applicant) -> list[dict]:

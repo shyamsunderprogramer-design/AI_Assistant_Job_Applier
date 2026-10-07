@@ -254,3 +254,69 @@ def test_holding_no_clearance_answers_no():
     assert a._from_profile("Do you hold an active security clearance?") == "No"
     a.authorisation = {"security_clearance": "Top Secret"}
     assert a._from_profile("Do you hold an active security clearance?") == "Top Secret"
+
+
+# -- one questionnaire for every ready application ---------------------------------------
+
+def _prepared(monkeypatch, tmp_path, entries):
+    import json
+    from backend.apply import prepare
+    monkeypatch.setattr(prepare, "PREPARED", tmp_path / "prepared.json")
+    monkeypatch.setattr("backend.apply.answers.BANK_PATH", tmp_path / "answers.yaml")
+    (tmp_path / "prepared.json").write_text(json.dumps({str(e["job_id"]): e for e in entries}))
+    return prepare
+
+
+def _entry(job_id, company, questions):
+    return {"job_id": job_id, "company": company, "title": "SRE", "state": "ready", "questions": questions}
+
+
+def test_questions_asked_by_several_employers_are_asked_once(monkeypatch, tmp_path):
+    age = {"label": "Are you 18 or older?*", "required": True, "options": ["Yes", "No"]}
+    prepare = _prepared(monkeypatch, tmp_path, [
+        _entry(1, "Acme", [age, {"label": "Why Acme?", "required": True, "options": []}]),
+        _entry(2, "Globex", [dict(age, label="Are you 18 or older?")]),
+        _entry(3, "Initech", [dict(age, options=["Yes", "No", "Prefer not to say"])]),   # other choices
+    ])
+    q = prepare.questionnaire()
+    assert len(q["shared"]) == 1 and [j["job_id"] for j in q["shared"][0]["jobs"]] == [1, 2]
+    assert [g["label"] for g in next(j for j in q["jobs"] if j["job_id"] == 1)["questions"]] == ["Why Acme?"]
+    assert len(next(j for j in q["jobs"] if j["job_id"] == 3)["questions"]) == 1
+
+
+def test_one_answer_reaches_every_form_and_clears_its_questions(monkeypatch, tmp_path):
+    age = {"label": "Are you 18 or older?", "required": True, "options": ["Yes", "No"]}
+    prepare = _prepared(monkeypatch, tmp_path, [_entry(1, "Acme", [age]), _entry(2, "Globex", [age])])
+    assert prepare.answer_all([{"label": age["label"], "value": "Yes", "job_ids": [1, 2]}]) == 2
+    data = prepare.load()
+    assert data["1"]["answers"] == {"Are you 18 or older?": "Yes"} and data["2"]["questions"] == []
+    q = prepare.questionnaire()
+    assert q["shared"] == [] and all(j["required"] == 0 for j in q["jobs"])
+
+
+def test_ineligible_applications_are_left_out(monkeypatch, tmp_path):
+    prepare = _prepared(monkeypatch, tmp_path, [_entry(1, "Acme", [{"label": "Q", "required": True, "options": []}])])
+    assert prepare.questionnaire(exclude={1})["jobs"] == []
+
+
+def test_apply_time_recheck_drops_a_job_the_profile_now_rules_out():
+    from backend.apply import runner
+
+    class Job:
+        company, title = "AFS", "Cloud Engineer"
+        clearance, clearance_active, polygraph, citizenship, sponsorship = "Top Secret", True, None, None, None
+
+    class Person:
+        authorisation = {"security_clearance": "none"}
+    assert runner._eligible(Job(), Person(), quiet=True) is False
+    Person.authorisation = {}
+    assert runner._eligible(Job(), Person(), quiet=True) is True
+
+
+def test_preferred_first_name_is_the_first_name():
+    from backend.apply.profile import Applicant
+    a = Applicant.__new__(Applicant)
+    a.links, a.location, a.employment, a.answers, a.authorisation = {}, {}, {}, {}, {}
+    a.personal = {"first_name": "Sam"}
+    assert a._from_profile("Preferred First Name") == "Sam"
+    assert a._from_profile("Please provide your preferred first name or nickname") == "Sam"

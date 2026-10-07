@@ -179,8 +179,13 @@ def test_a_declaration_the_profile_does_not_state_is_left(page, tmp_path):
     assert len(result.declarations) == 2 and len(waiting) == 2
 
 
-def test_an_account_page_named_in_the_progress_bar_is_never_filled(page, tmp_path):
+def test_an_account_page_named_in_the_progress_bar_is_never_filled(page, tmp_path, monkeypatch):
     """Live, the progress bar says "Create Account/Sign In" before the form draws."""
+    from backend.apply import accounts
+
+    def none_saved():
+        raise accounts.NoAccount()
+    monkeypatch.setattr(accounts, "credentials", none_saved)   # never the real Keychain
     page.set_content('<div data-automation-id="progressBar"><span data-automation-id="progressBarActiveStep">'
                      'current step 1 of 7<br>Create Account/Sign In</span></div>'
                      '<div data-automation-id="formField-email"><label for="em">Email Address*</label>'
