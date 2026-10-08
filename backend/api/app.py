@@ -1575,6 +1575,23 @@ def general_save():
     return jsonify(ok=True, answer=saved.get(str(body.get("id")), ""))
 
 
+@app.post("/apply/draft")
+def essay_draft():
+    """An AI draft for one essay question, from the person's resume. Kept as a draft, never sent."""
+    from backend.apply.essays import draft_for_application
+    body = request.get_json(silent=True) or {}
+    if not str(body.get("job_id", "")).isdigit() or not body.get("label"):
+        return jsonify(ok=False, error="Which question?"), 400
+    try:
+        drafts = draft_for_application(cfg(), int(body["job_id"]), [str(body["label"])], say=lambda s: None)
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {str(exc)[:200]}"), 500
+    got = drafts.get(str(body["label"]))
+    if not got:
+        return jsonify(ok=False, error="No draft came back. Try again, or check the writing model in Settings."), 502
+    return jsonify(ok=True, **got)
+
+
 @app.post("/apply/auto-submit")
 def auto_submit_switch():
     """The one switch: submit by itself when a form has nothing left for the person."""

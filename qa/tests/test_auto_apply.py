@@ -521,3 +521,27 @@ def test_employment_type_is_full_time_else_whatever_the_form_offers():
     assert pick_option(q, any_, ["Contract", "Contract-to-hire"]) == 0          # no full time: open to any
     assert pick_option(q, "Full time only", ["Contract", "Contract-to-hire"]) is None
     assert pick_option("Employment type", any_, ["Full-Time", "Part-Time"]) == 0
+
+
+# -- essay drafts: from the resume, flagged, never sent unread --------------------------------
+
+def test_essay_questions_are_recognised():
+    from backend.apply.essays import is_essay
+    assert is_essay("Walk us through your experience operating production Kubernetes clusters — the scale.")
+    assert is_essay("Describe how you've worked with Terraform in a production environment.")
+    assert not is_essay("Desired Salary")
+    assert not is_essay("Are you at least 18 years old?")
+
+
+def test_a_draft_flags_numbers_the_resume_never_states(monkeypatch):
+    import json
+    from types import SimpleNamespace as NS
+    from backend.apply import essays
+    resume = "Ran EKS clusters for 40 services. Cut cloud spend 30% with FinOps reviews."
+    reply = {"answer": "I ran EKS for 40 services and cut spend 30%, across 12 clusters.",
+             "gaps": ["GPU node groups"]}
+    monkeypatch.setattr("ml.resume.llm.complete", lambda *a, **k: NS(text=json.dumps(reply)))
+    job = NS(title="Platform Engineer", company="Acme", description="Kubernetes")
+    got = essays.draft(None, job, "Walk us through your Kubernetes experience.", resume)
+    assert got["unsupported_numbers"] == ["12"] and got["gaps"] == ["GPU node groups"]
+    assert got["answer"].startswith("I ran EKS")

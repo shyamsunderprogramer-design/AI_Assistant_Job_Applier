@@ -332,3 +332,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .g-ex ul{margin:6px 0 0;padding-left:18px;font-size:13px;color:var(--ink-2);display:grid;gap:3px}
 .g-row select{max-width:28rem;width:100%}
 html:has(.savebar){scroll-padding-bottom:90px}
+.draft-row{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin:-2px 0 10px}
+.draft-row .sub{max-width:80ch}
+.draft-row .warn{color:var(--warn);font-weight:600}

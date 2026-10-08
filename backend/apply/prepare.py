@@ -106,7 +106,8 @@ def questionnaire(applicant=None, exclude: set[int] | frozenset = frozenset()) -
         for q in open_now:
             key = (normalise(q["label"]), tuple(q.get("options") or ()))
             g = groups.setdefault(key, {"label": q["label"], "options": list(key[1]),
-                                        "required": False, "jobs": []})
+                                        "required": False, "jobs": [],
+                                        "draft": (e.get("drafts") or {}).get(q["label"])})
             g["required"] = g["required"] or bool(q.get("required"))
             g["jobs"].append({"job_id": e["job_id"], "company": e["company"]})
     shared = [g for g in groups.values() if len(g["jobs"]) > 1]

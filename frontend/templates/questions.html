@@ -61,12 +61,16 @@ function field(g, i) {
   g.jobs.forEach(j => count[j.company] = (count[j.company] || 0) + 1);
   const names = Object.entries(count).map(([c, n]) => n > 1 ? `${c} ×${n}` : c).join(', ');
   const who = g.jobs.length > 1 ? `<span class="sub"> · ${g.jobs.length} applications: ${esc(names)}</span>` : '';
-  const long = /why|describe|tell us|explain|cover letter|additional information|anything else/i.test(g.label);
+  const long = /why|describe|tell us|walk us|explain|share|how have you|how do you|what did you|example|cover letter|additional information|anything else/i.test(g.label);
   const input = g.options.length
     ? `<select data-g="${i}"${must}><option value=""></option>${g.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
-    : (long ? `<textarea rows="4" data-g="${i}"${must}></textarea>`
+    : (long ? `<textarea rows="${g.draft ? 9 : 4}" data-g="${i}"${must}>${esc(g.draft ? g.draft.answer : '')}</textarea>`
             : `<input type="text" class="q-short" data-g="${i}"${must}>`);
-  return `<label class="apply-q"><span>${esc(g.label)}${req}${who}</span>${input}</label>`;
+  const essay = long && g.jobs.length === 1;
+  const note = g.draft ? draftNote(g.draft) : '';
+  return `<label class="apply-q"><span>${esc(g.label)}${req}${who}</span>${input}</label>`
+    + (essay ? `<div class="draft-row"><button class="btn small" type="button" data-draft="${i}">${g.draft ? 'Write again with AI' : 'Draft with AI'}</button>
+        <span class="sub" id="draft-say-${i}" role="status">${note}</span></div>` : '');
 }
 
 // What was typed but not yet saved, kept across a reload of the list.
@@ -77,6 +81,13 @@ function typed() {
     if (g && f.value.trim()) out[g.label + '|' + g.jobs.map(j => j.job_id).join(',')] = f.value;
   });
   return out;
+}
+
+function draftNote(d) {
+  const bits = ['<b>AI draft from your resume — read and edit it, then press Save answers.</b>'];
+  if ((d.unsupported_numbers || []).length) bits.push(`<span class="warn">Not on your resume: ${esc(d.unsupported_numbers.join(', '))} — check or remove.</span>`);
+  if ((d.gaps || []).length) bits.push('Your resume does not show: ' + esc(d.gaps.join('; ')) + '.');
+  return bits.join(' ');
 }
 
 async function load(keep = {}) {
@@ -121,6 +132,30 @@ async function load(keep = {}) {
     const v = keep[g.label + '|' + g.jobs.map(j => j.job_id).join(',')];
     if (v !== undefined) f.value = v;
   });
+  document.querySelectorAll('[data-draft]').forEach(b => b.onclick = async () => {
+    const i = Number(b.dataset.draft), g = groups[i], say = $('draft-say-' + i);
+    const box = document.querySelector(`[data-g="${i}"]`);
+    if (box.value.trim() && !g.draft && !confirmReplace(b)) return;
+    b.disabled = true; say.textContent = 'Writing from your resume… about a minute.';
+    try {
+      const res = await fetch('/apply/draft', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({job_id: g.jobs[0].job_id, label: g.label})});
+      const r = await res.json();
+      if (!res.ok || !r.ok) throw new Error(r.error || res.status);
+      box.value = r.answer; box.rows = 9; g.draft = r;
+      say.innerHTML = draftNote(r);
+      b.textContent = 'Write again with AI';
+    } catch (e) {
+      say.textContent = 'No draft: ' + (e.message || 'the app did not answer') + '. Your text is unchanged.';
+    } finally { b.disabled = false; }
+  });
+}
+
+// A typed answer is only replaced on a second press.
+function confirmReplace(b) {
+  if (b.dataset.armed) { delete b.dataset.armed; return true; }
+  b.dataset.armed = '1'; b.textContent = 'Replace your text? Press again';
+  return false;
 }
 
 // -- general questions ------------------------------------------------------------
