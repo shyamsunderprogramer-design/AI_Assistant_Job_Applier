@@ -511,3 +511,13 @@ def test_general_answers_are_saved_and_checked(tmp_path):
     with pytest.raises(ValueError):
         general.save("age18", "Maybe", path)
     assert general.save("age18", "", path) == {}
+
+
+def test_employment_type_is_full_time_else_whatever_the_form_offers():
+    from backend.apply.general import pick_option
+    q = "What type of employment are you open to?"
+    any_ = "Full time (open to any type)"
+    assert pick_option(q, any_, ["Part-time", "Contract", "Full time employment"]) == 2
+    assert pick_option(q, any_, ["Contract", "Contract-to-hire"]) == 0          # no full time: open to any
+    assert pick_option(q, "Full time only", ["Contract", "Contract-to-hire"]) is None
+    assert pick_option("Employment type", any_, ["Full-Time", "Part-Time"]) == 0

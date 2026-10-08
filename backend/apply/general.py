@@ -65,7 +65,8 @@ KINDS = (
          ("High school", "Associate's degree", "Bachelor's degree", "Master's degree", "Doctorate"),
          r"\bhighest\b.*\b(education|degree)\b|\blevel of education\b"),
     Kind("employment_type", "What type of employment are you open to?",
-         ("Full time employment", "Contract", "Part-time"), r"\btype of employment\b|\bemployment type\b"),
+         ("Full time (open to any type)", "Full time only", "Contract", "Part-time"),
+         r"\btype of employment\b|\bemployment type\b|\btypes? of (work|position|role)s? (are you )?(open|interested)"),
     Kind("relocate", "Are you willing to relocate for a role?", YES_NO, r"\brelocat"),
     Kind("onsite", "Can you work on-site or hybrid at the employer's office when the role requires it?", YES_NO,
          r"\bon-?site\b|\bin[- ]office\b|\bhybrid\b|\bdays (a|per) week in\b"),
@@ -186,6 +187,11 @@ def pick_option(label: str, given: str, options: list[str]) -> int | None:
         if given == "No":                    # "I have never worked at X" beats a later "not" elsewhere
             never = [i for i in hits if "never" in texts[i]]
             hits = never or hits
+    elif kind.id == "employment_type" and given.startswith("Full time"):
+        # Full time first; "open to any type" takes whatever the form offers when it has no full time.
+        hits = [i for i, t in enumerate(texts) if re.search(r"\bfull[- ]?time\b|\bpermanent\b", t)][:1]
+        if not hits and "any" in given:
+            hits = [i for i, t in enumerate(texts) if t and not re.search(r"\bselect\b|\bchoose\b", t)][:1]
     else:
         want = given.lower().split("'")[0].split()[0]          # "master's degree" -> "master"
         hits = [i for i, t in enumerate(texts) if want in t]
