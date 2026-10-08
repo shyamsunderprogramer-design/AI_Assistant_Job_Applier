@@ -13,8 +13,12 @@ the apply browser's own profile folder, `data/apply-browser/`, set up once
 with `main.py setup-helper` and kept between runs. That folder is theirs and
 is never committed.
 
-Playwright's bundled Chromium is used, not Google Chrome: Chrome stopped
-honouring --load-extension in 2025.
+With the extension, Playwright's bundled Chromium is used: Google Chrome
+stopped honouring --load-extension in 2025. Without it, the person's own Google
+Chrome app opens (setting apply.browser: chrome, the default), with a profile
+of its own in `data/apply-browser/chrome/` so a sign-in there is kept between
+runs. Their everyday Chrome profile is never used: Chrome refuses automation of
+it, and it would have to be closed first.
 """
 
 from __future__ import annotations
@@ -71,6 +75,15 @@ def prepare(cfg, *, chrome_dirs: list[Path] | None = None,
     return target
 
 
+CHROME_APP = Path("/Applications/Google Chrome.app")
+
+
+def wants_chrome(cfg) -> bool:
+    """Google Chrome unless the settings say chromium, and only if it is installed."""
+    chosen = str((cfg.get("apply.browser", "chrome") if cfg is not None else "chrome") or "chrome").lower()
+    return chosen == "chrome" and (CHROME_APP.exists() or shutil.which("google-chrome") is not None)
+
+
 # Fits a 13-inch laptop screen (about 1,100 points tall) with the menu bar and Dock.
 WINDOW_HEIGHT = 960
 
@@ -89,6 +102,17 @@ def launch(manager, cfg, *, user_agent: str, viewport: dict,
     # kept for callers; it sets only the window's starting width.
     window = [f"--window-size={(viewport or {}).get('width', 1280)},{WINDOW_HEIGHT}"]
     extension = prepare(cfg, browser_dir=browser_dir)
+    if extension is None and wants_chrome(cfg):
+        profile = (browser_dir or BROWSER_DIR) / "chrome"
+        profile.mkdir(parents=True, exist_ok=True)
+        try:
+            # Real Chrome tells sites its real version: no user agent is put on it.
+            context = manager.chromium.launch_persistent_context(
+                str(profile), channel="chrome", headless=False, no_viewport=True, args=window)
+            log.info("Applying in Google Chrome (its own profile in %s)", profile)
+            return None, context
+        except Exception as exc:
+            log.warning("Google Chrome would not open (%s) — using Chromium", str(exc).splitlines()[0][:120])
     if extension is None:
         browser = manager.chromium.launch(headless=False, args=window)
         return browser, browser.new_context(user_agent=user_agent, no_viewport=True)

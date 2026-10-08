@@ -371,9 +371,42 @@ def test_the_apply_window_has_no_fixed_page_size(monkeypatch):
     class Manager:
         chromium = Chromium()
     monkeypatch.setattr(helper, "prepare", lambda cfg, browser_dir=None: None)
+    monkeypatch.setattr(helper, "wants_chrome", lambda cfg: False)
     helper.launch(Manager(), None, user_agent="ua", viewport={"width": 1280, "height": 1400})
     assert seen["context"].get("no_viewport") is True and "viewport" not in seen["context"]
     assert f"--window-size=1280,{helper.WINDOW_HEIGHT}" in seen["launch"]["args"]
     monkeypatch.setattr(helper, "prepare", lambda cfg, browser_dir=None: helper.Path("/ext"))
     helper.launch(Manager(), None, user_agent="ua", viewport={"width": 1280, "height": 1400}, browser_dir=helper.Path("/tmp/x"))
     assert seen["persistent"].get("no_viewport") is True and "viewport" not in seen["persistent"]
+
+
+def test_google_chrome_opens_with_a_kept_profile_of_its_own(monkeypatch, tmp_path):
+    from backend.apply import helper
+    seen = {}
+
+    class Chromium:
+        def launch_persistent_context(self, profile, **kw):
+            seen.update(kw, profile=profile)
+            return "context"
+
+    class Manager:
+        chromium = Chromium()
+    monkeypatch.setattr(helper, "prepare", lambda cfg, browser_dir=None: None)
+    monkeypatch.setattr(helper, "wants_chrome", lambda cfg: True)
+    assert helper.launch(Manager(), None, user_agent="ua", viewport={"width": 1280}, browser_dir=tmp_path) == (None, "context")
+    assert seen["channel"] == "chrome" and seen["no_viewport"] is True and "user_agent" not in seen
+    assert seen["profile"] == str(tmp_path / "chrome")
+
+
+def test_chromium_when_chrome_is_not_wanted_or_missing(monkeypatch):
+    from backend.apply import helper
+
+    class Cfg(dict):
+        def get(self, k, d=None):
+            return super().get(k, d)
+    monkeypatch.setattr(helper, "CHROME_APP", helper.Path("/nowhere/Chrome.app"))
+    monkeypatch.setattr(helper.shutil, "which", lambda name: None)
+    assert helper.wants_chrome(Cfg()) is False
+    monkeypatch.setattr(helper, "CHROME_APP", helper.Path("/"))
+    assert helper.wants_chrome(Cfg()) is True
+    assert helper.wants_chrome(Cfg({"apply.browser": "chromium"})) is False
