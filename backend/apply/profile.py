@@ -115,6 +115,12 @@ class Applicant:
         stated = self._from_profile(label)
         if stated is not None:
             return stated
+        # A general question answered once ("Have you worked here before?" -> No),
+        # never "No" for an employer on the person's own resume.
+        from backend.apply import general
+        generic = general.answer(label, company=getattr(self.job, "company", None))
+        if generic is not None:
+            return generic
         from backend.apply.answers import normalise
         return self.answers.get(normalise(label)) or None
 

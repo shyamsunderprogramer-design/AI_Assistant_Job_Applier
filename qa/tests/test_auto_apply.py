@@ -458,3 +458,56 @@ def test_a_number_only_box_gets_the_middle_of_the_band():
     from backend.apply.salary import single_figure
     assert single_figure("$160,000 – $190,000") == "175000"
     assert single_figure("$185,000") == "185000"
+
+
+# -- general questions: answered once, used on every form ---------------------------------
+
+@pytest.mark.parametrize("label,kind", [
+    ("Have you been employed by Gemini in the past?", "worked_here"),
+    ("SpaceX & SpaceXAI Employment History", "worked_here"),
+    ("Have you ever been employed by Sanmar or an affiliate?", "worked_group"),
+    ("have you ever worked for a Roper company or any of its subsidiaries?", "worked_group"),
+    ("Do you now or have you previously worked for an InterSystems client?", "worked_client"),
+    ("Are you a current SanMar employee?", "current_employee"),
+    ("Were you referred by a current SanMar employee?", "referred"),
+    ("If you were referred by a current Five9 employee please enter the employee's name here:", None),
+    ("If yes, please explain when and, if employed, in what capacity.", None),
+    ("Are at least 18 years or older?", "age18"),
+    ("What is your highest level of completed education?", "education"),
+    ("2K Application/Data Privacy Consent", "consent"),
+    ("Desired Salary", None),
+])
+def test_each_wording_is_recognised_as_its_general_question(label, kind):
+    from backend.apply.general import kind_of
+    assert (kind_of(label).id if kind_of(label) else None) == kind
+
+
+def test_a_general_no_becomes_each_forms_own_choice():
+    from backend.apply.general import pick_option
+    spacex = ["I have never worked for SpaceX, SpaceXAI, xAI, X, or Twitter",
+              "I am a former SpaceX, SpaceXAI, xAI, X, or Twitter employee", "I am a current SpaceX employee"]
+    assert pick_option("SpaceX & SpaceXAI Employment History", "No", spacex) == 0
+    assert pick_option("Have you been employed by Gemini in the past?", "No", ["Yes", "No"]) == 1
+    assert pick_option("What is your highest level of completed education?", "Master's degree",
+                       ["High School", "Bachelor's Degree", "Master's Degree", "PhD"]) == 2
+    assert pick_option("Applicant Privacy Statement", "Yes", ["I have read and acknowledge the statement"]) == 0
+    assert pick_option("Applicant Privacy Statement", "Yes", ["Option A", "Option B"]) is None   # nothing says it: left
+
+
+def test_worked_here_is_never_no_for_an_employer_on_the_resume(tmp_path):
+    from backend.apply import general
+    saved = {"worked_here": "No", "current_employee": "No"}
+    mine = (("acme", "robotics"),)
+    q = "Have you been employed by Acme in the past?"
+    assert general.answer(q, company="Globex Inc.", saved=saved, employers=mine) == "No"
+    assert general.answer(q, company="Acme Robotics, Inc.", saved=saved, employers=mine) is None
+    assert general.answer("Are you a current Acme employee?", company="Acme Robotics", saved=saved, employers=mine) is None
+
+
+def test_general_answers_are_saved_and_checked(tmp_path):
+    from backend.apply import general
+    path = tmp_path / "g.yaml"
+    assert general.save("age18", "Yes", path) == {"age18": "Yes"}
+    with pytest.raises(ValueError):
+        general.save("age18", "Maybe", path)
+    assert general.save("age18", "", path) == {}

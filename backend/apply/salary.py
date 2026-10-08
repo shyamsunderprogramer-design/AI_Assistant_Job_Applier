@@ -129,8 +129,9 @@ def job_by_id(job_id: int):
     from types import SimpleNamespace
     path = PROJECT_ROOT / "data" / "jobs.db"
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
-        row = db.execute("SELECT title, salary_min, salary_max, salary_period, salary_currency FROM jobs WHERE id = ?",
-                         (job_id,)).fetchone()
+        row = db.execute("SELECT title, salary_min, salary_max, salary_period, salary_currency, company "
+                         "FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:
         return None
-    return SimpleNamespace(title=row[0], salary_min=row[1], salary_max=row[2], salary_period=row[3], salary_currency=row[4])
+    return SimpleNamespace(title=row[0], salary_min=row[1], salary_max=row[2], salary_period=row[3],
+                           salary_currency=row[4], company=row[5], id=job_id)

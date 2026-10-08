@@ -215,7 +215,7 @@ def _choose_status(page, element, want: str, settle_ms: int) -> bool:
         return False
 
 
-def _choose(page, element, answer: str, *, settle_ms: int = 700) -> bool:
+def _choose(page, element, answer: str, *, settle_ms: int = 700, label: str = "") -> bool:
     """Pick the dropdown option that says `answer`. False, and nothing chosen,
     when no option does.
 
@@ -243,6 +243,15 @@ def _choose(page, element, answer: str, *, settle_ms: int = 700) -> bool:
         else:
             pick = (next((o for o, t in texts if t == want), None)
                     or next((o for o, t in texts if t.startswith(want)), None))
+        if pick is None and label and not declining:
+            # A general answer ("No") in this form's own words ("I have never worked at X"):
+            # the full list, unfiltered, and only an option that clearly says the same thing.
+            from backend.apply.general import pick_option
+            element.fill("")
+            page.wait_for_timeout(settle_ms)
+            options = page.query_selector_all("[role=option]")
+            index = pick_option(label, answer, [(o.inner_text() or "").strip() for o in options])
+            pick = options[index] if index is not None else None
         if pick is None:
             element.press("Escape")
             return False
@@ -340,7 +349,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
             continue
         try:
             if _is_dropdown(element):
-                if not _choose(page, element, answer):
+                if not _choose(page, element, answer, label=label):
                     result.left_blank.append(label[:60])
                     if required:
                         result.required_blank.append(label[:60])

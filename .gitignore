@@ -41,6 +41,7 @@ backend/config/applicant.yaml
 backend/config/applicant.local.yaml
 # Screening answers learned from forms you finished: salary, legal answers.
 backend/config/answers.yaml
+backend/config/general_answers.yaml
 
 # Screenshots and logs from the apply runs: they show filled forms, so they
 # carry the same details.

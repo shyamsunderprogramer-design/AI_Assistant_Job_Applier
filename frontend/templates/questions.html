@@ -24,6 +24,14 @@
     waits for you to press Submit. Nothing is sent until you press <b>Start applying</b> on the Auto-apply page.</div>
 </section>
 
+<section class="card" aria-labelledby="general-title">
+  <div class="card-head"><h2 id="general-title">Answer once, used on every application</h2></div>
+  <div class="sub">The same questions in each employer's own words, grouped. Save an answer and every application
+    that asks it uses it, in that form's own choices. "Worked here before?" is never answered No for an employer on your resume.</div>
+  <div id="rehire"></div>
+  <div id="general"><p class="sub dim">Loading…</p></div>
+</section>
+
 <section class="card">
   <div class="card-head"><h2 id="status-title">Applications</h2></div>
   <div id="status"><p class="sub dim">Loading…</p></div>
@@ -115,6 +123,53 @@ async function load(keep = {}) {
   });
 }
 
+// -- general questions ------------------------------------------------------------
+async function loadGeneral() {
+  let d;
+  try {
+    const r = await fetch('/apply/general.json');
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) {
+    $('general').innerHTML = '<p class="load-error" role="alert">The general questions could not be loaded. ' +
+      '<button class="btn" id="g-retry" type="button">Try again</button></p>';
+    $('g-retry').onclick = loadGeneral;
+    return;
+  }
+  $('rehire').innerHTML = d.rehire.length ? `<div class="sub warn" role="note">You worked at ${d.rehire.map(r => esc(r.company)).join(', ')}
+    before, so those applications are left for you: apply through the employer's rehire or alumni route.</div>` : '';
+  if (!d.kinds.length) { $('general').innerHTML = '<p class="sub">No general questions in the ready applications.</p>'; return; }
+  $('general').innerHTML = d.kinds.map(k => {
+    const id = 'g-' + k.id;
+    const input = k.choices.length
+      ? `<select id="${id}"><option value="">Not answered</option>${k.choices.map(c =>
+          `<option${c === k.answer ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>`
+      : `<input type="text" class="q-short" id="${id}" value="${esc(k.answer)}">`;
+    return `<div class="g-row">
+      <label for="${id}" class="g-q"><b>${esc(k.question)}</b>
+        <span class="sub">Asked by ${k.count} application${k.count === 1 ? '' : 's'}${k.answer ? '' : ' · <span class="pill bad">not answered</span>'}</span></label>
+      <details class="g-ex"><summary>How employers word it</summary><ul>${k.examples.map(x =>
+        `<li><b>${esc(x.company)}:</b> ${esc(x.label)}</li>`).join('')}</ul></details>
+      <div class="row">${input}<button class="btn" type="button" data-gsave="${k.id}">Save</button>
+        <span class="sub" id="${id}-said" role="status"></span></div>
+    </div>`;
+  }).join('');
+  document.querySelectorAll('[data-gsave]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.gsave, said = $('g-' + id + '-said');
+    b.disabled = true; said.textContent = 'Saving…';
+    try {
+      const res = await fetch('/apply/general', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id, answer: $('g-' + id).value})});
+      const r = await res.json();
+      if (!res.ok || !r.ok) throw new Error(r.error || res.status);
+      said.textContent = r.answer ? 'Saved — used on every application that asks.' : 'Cleared.';
+      load(typed());                       // questions it now answers leave the lists below
+    } catch (e) {
+      said.textContent = 'Not saved: ' + (e.message || 'the app did not answer') + '. Try again.';
+    } finally { b.disabled = false; }
+  });
+}
+
 $('save').onclick = async () => {
   const answers = [];
   document.querySelectorAll('[data-g]').forEach(f => {
@@ -154,5 +209,6 @@ $('auto').onchange = async () => {
   }
 };
 load();
+loadGeneral();
 </script>
 {% endblock %}

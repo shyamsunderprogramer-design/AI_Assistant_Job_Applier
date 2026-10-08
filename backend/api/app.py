@@ -1539,6 +1539,42 @@ def questions_save():
     return jsonify(ok=True, saved=answer_all(clean))
 
 
+@app.get("/apply/general.json")
+def general_questions():
+    """Every general question the ready applications ask, how many ask it, and the saved answer."""
+    from backend.apply import general
+    from backend.apply.prepare import pending
+    saved = general.load()
+    seen: dict[str, dict] = {}
+    rehire = []
+    for e in pending():
+        for q in e.get("questions") or []:
+            kind = general.kind_of(q["label"])
+            if kind is None:
+                continue
+            s = seen.setdefault(kind.id, {"jobs": set(), "examples": []})
+            s["jobs"].add(e["job_id"])
+            if len(s["examples"]) < 3 and q["label"] not in [x["label"] for x in s["examples"]]:
+                s["examples"].append({"company": e["company"], "label": q["label"]})
+            if kind.about_employer and general.worked_at(e["company"]):
+                rehire.append({"job_id": e["job_id"], "company": e["company"], "title": e["title"]})
+    kinds = [{"id": k.id, "question": k.question, "choices": list(k.choices), "answer": saved.get(k.id, ""),
+              "count": len(seen[k.id]["jobs"]), "examples": seen[k.id]["examples"]}
+             for k in general.KINDS if k.id in seen]
+    return jsonify(ok=True, kinds=kinds, rehire=list({r["job_id"]: r for r in rehire}.values()))
+
+
+@app.post("/apply/general")
+def general_save():
+    from backend.apply import general
+    body = request.get_json(silent=True) or {}
+    try:
+        saved = general.save(str(body.get("id") or ""), str(body.get("answer") or ""))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, answer=saved.get(str(body.get("id")), ""))
+
+
 @app.post("/apply/auto-submit")
 def auto_submit_switch():
     """The one switch: submit by itself when a form has nothing left for the person."""

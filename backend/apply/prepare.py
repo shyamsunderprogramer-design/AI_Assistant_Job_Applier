@@ -76,14 +76,16 @@ def _still_open(entry: dict, applicant) -> list[dict]:
     from backend.apply.answers import normalise
     from backend.apply import salary
     own = {normalise(k) for k in (entry.get("answers") or {})}
-    job = None
-    if any(salary.is_salary_question(q["label"]) for q in entry.get("questions") or []):
-        job = salary.job_by_id(entry["job_id"])
-    # Desired salary is answered by the person's rule wherever the rule has a figure.
-    return [q for q in entry.get("questions") or []
-            if normalise(q["label"]) not in own
-            and not (job is not None and salary.is_salary_question(q["label"]) and salary.answer(job))
-            and (applicant is None or applicant.answer_for(q["label"]) is None)]
+    if applicant is None:
+        return [q for q in entry.get("questions") or [] if normalise(q["label"]) not in own]
+    # Answered for this job: salary by the person's rule, general questions by their
+    # general answers (checked against this employer), the rest by profile and bank.
+    before, applicant.job = applicant.job, salary.job_by_id(entry["job_id"])
+    try:
+        return [q for q in entry.get("questions") or []
+                if normalise(q["label"]) not in own and applicant.answer_for(q["label"]) is None]
+    finally:
+        applicant.job = before
 
 
 def questionnaire(applicant=None, exclude: set[int] | frozenset = frozenset()) -> dict:

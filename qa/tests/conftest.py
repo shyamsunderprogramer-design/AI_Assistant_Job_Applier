@@ -39,3 +39,11 @@ def _no_real_chat_plans(monkeypatch):
     from ml.resume import llm
     monkeypatch.setattr(llm, "_BUSY_UNTIL", {})
     monkeypatch.setattr(llm, "other_plans", lambda provider, cfg=None: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_real_general_answers(monkeypatch, tmp_path):
+    """General answers and resume employers come from the test, never the person's files."""
+    from backend.apply import general
+    monkeypatch.setattr(general, "STORE", tmp_path / "general_answers.yaml")
+    monkeypatch.setattr(general, "past_employers", lambda: ())
