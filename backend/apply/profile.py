@@ -55,6 +55,9 @@ class Applicant:
     # The person's own answers to screening questions (backend/apply/answers.py).
     answers: dict = field(default_factory=dict)
     path: str | None = None
+    # The job whose form is being filled, and the answers given for that job alone.
+    job: object = None
+    job_answers: dict = field(default_factory=dict)
 
     # -- the handful of fields every form wants ----------------------------
     @property
@@ -97,6 +100,18 @@ class Applicant:
         answer (backend/apply/answers.py) fills the gaps it leaves -- including
         a question the profile recognises but holds no value for, like salary.
         """
+        from backend.apply import salary
+        if salary.is_salary_question(label):
+            # Desired salary is per job: what the person typed for this job, else 80-95% of the
+            # posted maximum (or of the market's, when nothing is posted), else the profile's.
+            from backend.apply.answers import normalise
+            own = self.job_answers.get(normalise(label))
+            if own:
+                return own
+            if self.job is not None:
+                ruled = salary.answer(self.job)
+                if ruled:
+                    return ruled
         stated = self._from_profile(label)
         if stated is not None:
             return stated

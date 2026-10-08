@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Your details{% endblock %}
 {% block body %}
 <header class="top">
   <div>
@@ -7,7 +8,7 @@
       Stored in <code>backend/config/applicant.yaml</code> on this machine — gitignored,
       and never sent anywhere.</div>
   </div>
-  <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+  <a class="btn" href="{{ url_for('setup_form') }}">Back to Settings</a>
 </header>
 
 <form id="applicant" class="card">
@@ -15,28 +16,28 @@
   <fieldset class="fset">
     <legend>Who you are</legend>
     <div class="grid2">
-      <label>First name<input name="first_name" value="{{ a.personal.get('first_name','') }}" required></label>
-      <label>Last name<input name="last_name" value="{{ a.personal.get('last_name','') }}" required></label>
-      <label>Email<input name="email" type="email" value="{{ a.personal.get('email','') }}" required></label>
-      <label>Phone<input name="phone" value="{{ a.personal.get('phone','') }}" placeholder="+1 555 0100" required></label>
+      <label>First name<input name="first_name" autocomplete="given-name" value="{{ a.personal.get('first_name','') }}" required></label>
+      <label>Last name<input name="last_name" autocomplete="family-name" value="{{ a.personal.get('last_name','') }}" required></label>
+      <label>Email<input name="email" autocomplete="email" type="email" value="{{ a.personal.get('email','') }}" required></label>
+      <label>Phone<input name="phone" autocomplete="tel" type="tel" value="{{ a.personal.get('phone','') }}" placeholder="+1 555 0100" required></label>
     </div>
   </fieldset>
 
   <fieldset class="fset">
     <legend>Where you are</legend>
     <div class="grid2">
-      <label>City<input name="city" value="{{ a.location.get('city','') }}"></label>
-      <label>State<input name="state" value="{{ a.location.get('state','') }}" placeholder="MA"></label>
-      <label>ZIP<input name="postal_code" value="{{ a.location.get('postal_code','') }}"></label>
-      <label>Country<input name="country" value="{{ a.location.get('country','United States') }}"></label>
+      <label>City<input name="city" autocomplete="address-level2" value="{{ a.location.get('city','') }}"></label>
+      <label>State<input name="state" autocomplete="address-level1" value="{{ a.location.get('state','') }}" placeholder="MA"></label>
+      <label>ZIP<input name="postal_code" autocomplete="postal-code" value="{{ a.location.get('postal_code','') }}"></label>
+      <label>Country<input name="country" autocomplete="country-name" value="{{ a.location.get('country','United States') }}"></label>
     </div>
   </fieldset>
 
   <fieldset class="fset">
     <legend>Links</legend>
     <div class="grid2">
-      <label>LinkedIn<input name="linkedin" value="{{ a.links.get('linkedin','') }}" placeholder="https://linkedin.com/in/..."></label>
-      <label>GitHub<input name="github" value="{{ a.links.get('github','') }}" placeholder="https://github.com/..."></label>
+      <label>LinkedIn<input name="linkedin" autocomplete="url" value="{{ a.links.get('linkedin','') }}" placeholder="https://linkedin.com/in/..."></label>
+      <label>GitHub<input name="github" autocomplete="url" value="{{ a.links.get('github','') }}" placeholder="https://github.com/..."></label>
     </div>
   </fieldset>
 

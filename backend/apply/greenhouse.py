@@ -148,6 +148,13 @@ class FillResult:
         return " · ".join(parts)
 
 
+def _input_type(element) -> str:
+    try:
+        return (element.get_attribute("type") or "").lower()
+    except Exception:
+        return ""
+
+
 def _is_declaration(label: str) -> bool:
     text = (label or "").lower()
     return any(pattern in text for pattern in DECLARATION_PATTERNS)
@@ -339,6 +346,10 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
                         result.required_blank.append(label[:60])
                     continue
             else:
+                if " – " in answer and _input_type(element) == "number":
+                    # A box that takes only a number: "$160,000 – $190,000" becomes its middle.
+                    from backend.apply.salary import single_figure
+                    answer = single_figure(answer) or answer
                 element.fill(answer)
             result.filled[label[:60]] = answer
         except Exception as exc:

@@ -2397,9 +2397,13 @@ def health_report():
     if request.args.get("fresh"):
         subprocess.run([sys.executable, str(PROJECT_ROOT / "devops" / "health_report.py")],
                        cwd=PROJECT_ROOT, capture_output=True, timeout=120)
-    reports = sorted(folder.glob("health-*.html"))
+    reports = sorted(folder.glob("health-*.json"))
     if not reports:
         if request.args.get("fresh"):
-            return "The health report could not be made — see data/daily_run.log.", 500
+            return render_template("health.html", r=None), 500
         return redirect(url_for("health_report", fresh=1))
-    return send_file(reports[-1], mimetype="text/html", max_age=0)
+    try:
+        r = json.loads(reports[-1].read_text())
+    except (OSError, ValueError):
+        return render_template("health.html", r=None), 500
+    return render_template("health.html", r=r)

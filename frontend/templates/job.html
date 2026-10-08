@@ -4,7 +4,7 @@
 <header class="top">
   <div>
     <h1>{{ job.title }}</h1>
-    <div class="sub">{{ job.company }} · <a href="/">back to all roles</a></div>
+    <div class="sub"><a href="{{ url_for('index') }}">← All jobs</a> · {{ job.company }}</div>
   </div>
   <div class="row">
     <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open the application form</a>
@@ -15,7 +15,7 @@
   <span>{% if job.score is none %}<b>Not scored yet</b>
     {%- elif job.basis == 'title' %}<b title="This came from a job alert, which carries no job description. The score is measured against the title alone.">~{{ job.score }}% on title only</b>
     {%- else %}Fit <b>{{ job.score }}%</b>{% endif %}</span>
-  <span id="req-score" hidden>Requirements met <b id="req-num"></b>
+  <span id="req-score" hidden>Quick match <b id="req-num"></b>
     <a href="/tailor?job={{ job.id }}&start=1" title="Open Resume Tailoring with this posting filled in: full match report, gaps and a tailored resume">Tailor ↗</a></span>
   <span>Posted <b>{{ job.age }}</b></span>
   {% if job.workplace %}<span>Workplace <b>{{ job.workplace }}</b></span>{% endif %}
@@ -73,17 +73,17 @@
 {% if requirements %}
 <section class="card">
   <h2>What they ask for</h2>
-  <div class="jd">{{ requirements }}</div>
+  <div class="jd" tabindex="0" role="region" aria-label="Requirements from the posting">{{ requirements }}</div>
 </section>
 {% endif %}
 
 <section class="card">
   {% if requirements %}
   <details class="fold"><summary><h2 style="display:inline">Full posting</h2></summary>
-    <div class="jd">{{ description }}</div></details>
+    <div class="jd" tabindex="0" role="region" aria-label="The job posting">{{ description }}</div></details>
   {% else %}
   <h2>The posting</h2>
-  <div class="jd">{{ description }}</div>
+  <div class="jd" tabindex="0" role="region" aria-label="The job posting">{{ description }}</div>
   {% endif %}
 </section>
 
@@ -498,7 +498,7 @@ async function showRun(run, keptScore) {
   const problems = (d.checks || []).filter(c => c.severity === 'problem');
   $('req-result').innerHTML = `
     ${beforeAfter(d)}
-    <div class="ats-head"><b>Requirements met</b><span class="ats-nums"><b>${Math.round(d.score)}%</b></span></div>
+    <div class="ats-head"><b title="The AI reads each requirement and judges whether your resume shows it; related experience counts half.">Requirements met, as the AI reads your resume</b><span class="ats-nums"><b>${Math.round(d.score)}%</b></span></div>
     <div class="ats-bar"><span class="${d.score >= 75 ? 'good' : d.score >= 55 ? 'ok' : 'low'}" style="width:${d.score}%"></span></div>
     ${kept}
     <div class="ats-list">${count('direct')} shown directly · ${count('related')} related · ${count('unclear')} unclear · ${count('not_found')} not found</div>
@@ -524,7 +524,7 @@ function beforeAfter(d) {
   };
   return `<div class="ba"><div class="ba-title">Your resume → tailored resume</div>
     ${row('ATS keyword match', ba.ats, 'How many of the posting\'s keywords the resume text contains — what an ATS scans for')}
-    ${row('Requirements (strict check)', ba.requirements, 'Requirements the resume names outright, counted by the same strict rules on both. Requirements met below also credits related work, as the AI reads it.')}
+    ${row('Requirements named word for word', ba.requirements, 'Requirements the resume names outright, counted by the same strict rules on both. Requirements met below also credits related work, as the AI reads it.')}
     ${ba.pages ? `<div class="ba-row" title="The whole resume, then the tailored one, in the same layout"><span class="ba-label">Length</span>
       <span class="ba-num">${ba.pages[0]} pages</span><span class="ba-arrow">→</span><b class="ba-num">${ba.pages[1]} pages</b><span></span></div>` : ''}
     <div class="ba-foot">${ba.rewritten} line(s) rewritten in the posting's words · ${ba.rounds} round(s), aiming for ${ba.target}%</div></div>`;
@@ -714,7 +714,8 @@ countDone();
   const s = await ask(`/job/${JOB}/score`);
   if (!s.ok || s.score == null) return;
   $('req-num').textContent = Math.round(s.score) + '%';
-  $('req-score').title = s.note + (s.gaps && s.gaps.length ? '\nRequired, not shown: ' + s.gaps.join('; ') : '');
+  $('req-score').title = 'A quick check by rules alone: the tools and skills this posting names, found on your resume. '
+    + 'The careful AI reading is in the tailoring section below. ' + s.note + (s.gaps && s.gaps.length ? '\nRequired, not shown: ' + s.gaps.join('; ') : '');
   $('req-score').hidden = false;
 })();
 

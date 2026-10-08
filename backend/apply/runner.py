@@ -290,12 +290,15 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
                 break
             # This form's own answers, given on the Apply page, for this job only.
             saved = dict(applicant.answers)
+            applicant.job = job
             if job.id in ready:
                 from backend.apply.answers import normalise
-                applicant.answers.update({normalise(k): v for k, v in
-                                          (ready[job.id].get("answers") or {}).items()})
+                own = {normalise(k): v for k, v in (ready[job.id].get("answers") or {}).items()}
+                applicant.answers.update(own)
+                applicant.job_answers = own
             outcome = apply_one(cfg, page, job, applicant, head, auto=auto, tailor=tailor, wait_s=wait_s)
             applicant.answers.clear(); applicant.answers.update(saved)
+            applicant.job, applicant.job_answers = None, {}
             outcomes.append(outcome)
             if job.id in ready and outcome.result in ("submitted", "skipped"):
                 from backend.apply.prepare import mark

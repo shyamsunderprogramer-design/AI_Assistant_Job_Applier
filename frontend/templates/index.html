@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
 {% block body %}
 <header class="top">
   <div>
-    <h1>Job Search Console</h1>
+    <h1>Jobs</h1>
     <div class="sub">{{ rows|length }} open roles from company boards, ranked against your resume.</div>
   </div>
   <div class="row">
@@ -10,11 +11,6 @@
     <button class="btn" id="run-score">Re-score</button>
     <button class="btn" id="run-apply"
       title="Opens a browser, fills each Greenhouse form, and waits for you to press Submit">Apply to next 10</button>
-    <a class="btn" href="{{ url_for('apply_page') }}" title="Your best matches, prepared each morning: answer questions, then apply">Auto-apply</a>
-    <a class="btn" href="{{ url_for('tailor_page') }}" title="Tailor any resume to any job description">Tailor</a>
-    <a class="btn" href="{{ url_for('assistant_page') }}" title="Ask about your jobs; it proposes, you confirm">Chat</a>
-    <a class="btn" href="{{ url_for('health_report') }}" title="Weekly report: missed runs, failing boards, backups">Health</a>
-    <a class="btn" href="{{ url_for('setup_form') }}" title="Keys and settings kept out of the repo">Settings</a>
     <div class="statusbox idle" id="statusbox" aria-live="polite">
       <span class="sb-dot" id="sb-dot"></span>
       <div class="sb-body">
@@ -181,7 +177,7 @@
     <option value="workingnomads">Working Nomads</option>
   </select>
   <button class="chip" id="f-clear">Clear</button>
-  <span class="count" id="count"></span>
+  <span class="count" id="count" role="status"></span>
 </div>
 <div class="rulebar" id="rulebar">
   <span class="sub">Filter by</span>
@@ -194,8 +190,10 @@
 </div>
 
 
+<p class="sub phone-only">Swipe the table sideways to see every column.</p>
 <div class="tw">
   <table>
+    <caption class="sr-only">Open jobs, ranked against your resume. Press a column heading to sort.</caption>
     <thead><tr>
       <th data-k="score">Fit <span class="ar"></span></th>
       <th data-k="ageDays" aria-sort="ascending">Age <span class="ar">▲</span></th>
@@ -384,6 +382,8 @@ $('f-clear').addEventListener('click', () => {
 
 document.querySelectorAll('thead th[data-k]').forEach(th => {
   th.tabIndex = 0;
+  th.scope = 'col';
+  th.title = th.title || `Sort by ${th.textContent.trim()}`;
   th.style.cursor = 'pointer';
   const go = () => {
     const k = th.dataset.k;

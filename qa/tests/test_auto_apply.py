@@ -410,3 +410,51 @@ def test_chromium_when_chrome_is_not_wanted_or_missing(monkeypatch):
     monkeypatch.setattr(helper, "CHROME_APP", helper.Path("/"))
     assert helper.wants_chrome(Cfg()) is True
     assert helper.wants_chrome(Cfg({"apply.browser": "chromium"})) is False
+
+
+# -- desired salary: 80-95% of the posted maximum, else of the market's ----------------
+
+def _job(**kw):
+    from types import SimpleNamespace
+    base = dict(title="Senior DevOps Engineer", salary_min=None, salary_max=None, salary_period="year",
+                salary_currency="USD")
+    return SimpleNamespace(**{**base, **kw})
+
+
+def test_a_posted_salary_gives_80_to_95_percent_of_its_maximum():
+    from backend.apply import salary
+    assert salary.answer(_job(salary_min=150000, salary_max=200000)) == "$160,000 – $190,000"
+    assert salary.answer(_job(salary_min=90700, salary_max=252200)) == "$202,000 – $240,000"
+    assert salary.answer(_job(salary_min=60, salary_max=80, salary_period="hour")) == "$64 – $76 per hour"
+    # Never below the company's own minimum.
+    assert salary.answer(_job(salary_min=200000, salary_max=215000)) == "$200,000 – $204,000"
+    assert salary.answer(_job(salary_min=198000, salary_max=200000)) == "$198,000"
+
+
+def test_no_posted_salary_uses_the_market_for_the_same_kind_of_role():
+    from backend.apply import salary
+    rows = tuple((salary.family(t), salary.level(t), m, "year", "USD")
+                 for t, m in [("Senior DevOps Engineer", 180000 + i * 5000) for i in range(9)]
+                 + [("Junior DevOps Engineer", 90000)] * 20 + [("Senior Data Analyst", 400000)] * 20)
+    b = salary.band(_job(), rows)
+    assert b["basis"].startswith("market: 9") and (b["low"], b["high"]) == (160000, 190000)
+    assert salary.band(_job(title="Senior Tax Accountant"), rows) is None          # no market for it
+    few = rows[:3]
+    assert salary.band(_job(), few) is None                                        # too few to call a market
+
+
+def test_salary_is_per_job_and_the_persons_own_answer_wins():
+    from backend.apply.profile import Applicant
+    a = Applicant(employment={"desired_salary": "$170,000"})
+    assert a.answer_for("Desired Salary*") == "$170,000"                           # no job: the profile
+    a.job = _job(salary_max=200000)
+    assert a.answer_for("Desired Salary*") == "$160,000 – $190,000"
+    a.job_answers = {"desired salary": "$185,000"}
+    assert a.answer_for("Desired Salary*") == "$185,000"
+    assert a.answer_for("What is your current salary?") != "$160,000 – $190,000"     # not a desired-salary question
+
+
+def test_a_number_only_box_gets_the_middle_of_the_band():
+    from backend.apply.salary import single_figure
+    assert single_figure("$160,000 – $190,000") == "175000"
+    assert single_figure("$185,000") == "185000"

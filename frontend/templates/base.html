@@ -3,13 +3,72 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Job Search Console{% endblock %}</title>
+<title>{% block title %}Jobs{% endblock %} · Job Applier</title>
+<script>
+  // The theme the person picked, applied before the page draws so it never flashes.
+  try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
 </head>
 <body>
-<div class="wrap">{% block body %}{% endblock %}</div>
+<a class="skip" href="#main">Skip to content</a>
+{% set here = request.endpoint %}
+{% set sections = [
+  ('index', 'Jobs', ('index', 'job_detail')),
+  ('apply_page', 'Auto-apply', ('apply_page',)),
+  ('questions_page', 'Questions', ('questions_page',)),
+  ('tailor_page', 'Tailor', ('tailor_page',)),
+  ('assistant_page', 'Assistant', ('assistant_page',)),
+  ('health_report', 'Health', ('health_report',)),
+  ('setup_form', 'Settings', ('setup_form', 'applicant_form')),
+] %}
+<header class="appbar">
+  <div class="appbar-in">
+    <a class="brand" href="{{ url_for('index') }}" aria-label="Job Applier, all jobs">
+      <span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Job Applier</span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      {% for endpoint, label, owns in sections %}
+        <a href="{{ url_for(endpoint) }}"{% if here in owns %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <button class="theme-btn" id="theme-btn" type="button" aria-label="Colour theme: automatic. Press to change.">
+      <span aria-hidden="true" id="theme-icon">◐</span>
+    </button>
+  </div>
+</header>
+<main class="wrap" id="main" tabindex="-1">{% block body %}{% endblock %}</main>
+<script>
+(() => {
+  // Automatic (follows the Mac) → light → dark → automatic.
+  const order = ['auto', 'light', 'dark'], icon = {auto: '◐', light: '☀', dark: '☾'};
+  const btn = document.getElementById('theme-btn');
+  let now = document.documentElement.dataset.theme || 'auto';
+  const show = () => {
+    document.getElementById('theme-icon').textContent = icon[now];
+    btn.setAttribute('aria-label', `Colour theme: ${now === 'auto' ? 'automatic' : now}. Press to change.`);
+    btn.title = `Theme: ${now === 'auto' ? 'automatic' : now}`;
+  };
+  btn.addEventListener('click', () => {
+    now = order[(order.indexOf(now) + 1) % order.length];
+    if (now === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = now;
+    try { now === 'auto' ? localStorage.removeItem('theme') : localStorage.setItem('theme', now); } catch (e) {}
+    show();
+  });
+  show();
+})();
+// The sticky filter bar's height, so table headings can stick just under it.
+(() => {
+  const bar = document.querySelector('.bar');
+  if (!bar) return;
+  const set = () => document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px');
+  set();
+  if ('ResizeObserver' in window) new ResizeObserver(set).observe(bar); else addEventListener('resize', set);
+})();
+</script>
 </body>
 </html>

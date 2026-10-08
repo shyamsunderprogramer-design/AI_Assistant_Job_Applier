@@ -11,7 +11,6 @@
   <div class="row">
     <a class="btn primary" href="{{ url_for('questions_page') }}" title="Answer every application's questions on one page">Answer questions</a>
     <a class="btn" href="{{ url_for('setup_form') }}#account">Job-site account</a>
-    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
   </div>
 </header>
 
@@ -24,7 +23,7 @@
     </div>
   </div>
   <div class="sub" id="account-note"></div>
-  <div class="out" id="run-out" hidden></div>
+  <div class="out" id="run-out" role="log" aria-live="polite" hidden></div>
   <div id="ready-list"><p class="sub dim">Loading…</p></div>
 </section>
 
@@ -33,14 +32,24 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 
 async function load() {
-  const d = await (await fetch('/apply/prepared')).json();
+  let d;
+  try {
+    const r = await fetch('/apply/prepared');
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) {
+    $('ready-list').innerHTML = '<p class="load-error" role="alert">The ready list could not be loaded. ' +
+      '<button class="btn" id="retry" type="button">Try again</button></p>';
+    $('retry').onclick = () => { $('ready-list').innerHTML = '<p class="sub dim">Loading…</p>'; load(); };
+    return;
+  }
   $('account-note').innerHTML = d.account.saved
     ? `Workday and similar sites: signs in as <b>${esc(d.account.email)}</b> (password in your Keychain).`
     : 'No job-site account saved — on Workday you will sign in yourself. <a href="/setup#account">Save one</a>.';
   $('ready-title').textContent = `Ready to apply (${d.items.length})`;
   $('start').disabled = !d.items.length;
   if (!d.items.length) {
-    $('ready-list').innerHTML = '<p class="sub">Nothing ready yet. The morning run prepares the day\'s best matches, or press <b>Prepare now</b>.</p>';
+    $('ready-list').innerHTML = '<p class="sub">Nothing ready yet. The morning run prepares the day\'s best matches, or press <b>Prepare now</b>. You can also pick jobs yourself on the <a href="/">Jobs page</a>.</p>';
     return;
   }
   $('ready-list').innerHTML = d.items.map(e => {
@@ -49,8 +58,10 @@ async function load() {
     const qs = (e.questions || []).map((q, i) => `
       <label class="apply-q"><span>${esc(q.label)}${q.required ? ' <span class="pill bad">required</span>' : ''}</span>
         ${q.options && q.options.length
-          ? `<select data-job="${e.job_id}" data-label="${esc(q.label)}"><option value=""></option>${q.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
-          : `<textarea rows="2" data-job="${e.job_id}" data-label="${esc(q.label)}"></textarea>`}
+          ? `<select data-job="${e.job_id}" data-label="${esc(q.label)}"${q.required ? ' aria-required="true"' : ''}><option value=""></option>${q.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
+          : (/why|describe|tell us|explain|cover letter|additional information|anything else/i.test(q.label)
+            ? `<textarea rows="3" data-job="${e.job_id}" data-label="${esc(q.label)}"${q.required ? ' aria-required="true"' : ''}></textarea>`
+            : `<input type="text" class="q-short" data-job="${e.job_id}" data-label="${esc(q.label)}"${q.required ? ' aria-required="true"' : ''}>`)}
       </label>`).join('');
     return `<div class="apply-item">
       <div class="apply-top">
@@ -68,13 +79,20 @@ async function load() {
     </div>`;
   }).join('');
   document.querySelectorAll('[data-skip]').forEach(b => b.onclick = async () => {
-    await fetch(`/apply/skip/${b.dataset.skip}`, {method: 'POST'}); load(); });
+    b.disabled = true;
+    try { const r = await fetch(`/apply/skip/${b.dataset.skip}`, {method: 'POST'}); if (!r.ok) throw new Error(r.status); load(); }
+    catch (e) { b.disabled = false; b.textContent = 'Skip — try again'; }
+  });
   document.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
     const answers = {};
     document.querySelectorAll(`[data-job="${b.dataset.save}"]`).forEach(f => { if (f.value.trim()) answers[f.dataset.label] = f.value; });
-    await fetch('/apply/answers', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({job_id: Number(b.dataset.save), answers})});
-    load();
+    b.disabled = true;
+    try {
+      const r = await fetch('/apply/answers', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({job_id: Number(b.dataset.save), answers})});
+      if (!r.ok) throw new Error(r.status);
+      load();
+    } catch (e) { b.disabled = false; b.textContent = 'Not saved — press again'; }
   });
   document.querySelectorAll('[data-folder]').forEach(a => a.onclick = e => {
     e.preventDefault(); navigator.clipboard?.writeText(a.dataset.folder); a.textContent = 'folder path copied'; });
@@ -82,11 +100,15 @@ async function load() {
 
 async function runTask(task, button, label) {
   button.disabled = true;
-  const r = await (await fetch(`/run/${task}`, {method: 'POST'})).json();
+  let r;
+  try { r = await (await fetch(`/run/${task}`, {method: 'POST'})).json(); }
+  catch (e) { r = {ok: false, error: 'The app did not answer, so nothing started. Try again.'}; }
   $('run-out').hidden = false;
   $('run-out').textContent = r.ok ? `${label}…` : (r.error || r.note || 'Could not start.');
+  if (!r.ok) { button.disabled = false; return; }
   const poll = setInterval(async () => {
-    const s = await (await fetch(`/run/${task}/status`)).json();
+    let s;
+    try { s = await (await fetch(`/run/${task}/status`)).json(); } catch (e) { return; }   // try again next tick
     if (s.tail) $('run-out').textContent = s.tail.split('\n').slice(-12).join('\n');
     if (!s.running) { clearInterval(poll); button.disabled = false; load(); }
   }, 2500);

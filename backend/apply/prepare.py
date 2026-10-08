@@ -74,9 +74,15 @@ def _still_open(entry: dict, applicant) -> list[dict]:
     """This form's questions that nothing answers yet: the profile and the answer bank
     may have learned some since the morning, and this form's own answers cover others."""
     from backend.apply.answers import normalise
+    from backend.apply import salary
     own = {normalise(k) for k in (entry.get("answers") or {})}
+    job = None
+    if any(salary.is_salary_question(q["label"]) for q in entry.get("questions") or []):
+        job = salary.job_by_id(entry["job_id"])
+    # Desired salary is answered by the person's rule wherever the rule has a figure.
     return [q for q in entry.get("questions") or []
             if normalise(q["label"]) not in own
+            and not (job is not None and salary.is_salary_question(q["label"]) and salary.answer(job))
             and (applicant is None or applicant.answer_for(q["label"]) is None)]
 
 
@@ -200,7 +206,11 @@ def prepare_one(cfg, job, applicant, say=print) -> dict:
         except Exception as exc:
             entry["notes"].append(f"No cover letter ({str(exc)[:120]}).")
     entry["letter"] = (packet.path / LETTER_FILE).exists()
-    entry["questions"] = open_questions(job, applicant)
+    applicant.job = job                           # so desired salary is answered by the rule
+    try:
+        entry["questions"] = open_questions(job, applicant)
+    finally:
+        applicant.job = None
     asked = len(entry["questions"])
     say(f"  ready: {job.company[:30]} — {job.title[:50]}"
         + (f" · {asked} question(s) for you" if asked else ""))

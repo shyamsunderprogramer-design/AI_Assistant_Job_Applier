@@ -6,22 +6,20 @@
     <h1>Application questions</h1>
     <div class="sub">Every question your ready applications ask that your profile doesn't answer.
       Questions several employers ask are shown once — your answer goes to all of them.
-      When an application has nothing left, it can be sent without you.</div>
-  </div>
-  <div class="row">
-    <a class="btn" href="{{ url_for('apply_page') }}">Auto-apply</a>
-    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
+      When an application has nothing left, it can be sent without you.
+      <b>Desired salary</b> is answered for you: 80–95% of the posted maximum, or of the market's for similar roles when nothing is posted.</div>
   </div>
 </header>
 
 <section class="card">
   <div class="card-head">
     <h2>Submit by itself</h2>
-    <label class="row" style="gap:8px;cursor:pointer">
-      <input type="checkbox" id="auto"> <b id="auto-label">Off</b>
+    <label class="switch">
+      <input type="checkbox" role="switch" id="auto" aria-describedby="auto-help">
+      <span>Submit applications by itself</span> <span class="state" id="auto-label" aria-hidden="true">Off</span>
     </label>
   </div>
-  <div class="sub">When on, an application is submitted for you only if every question is answered,
+  <div class="sub" id="auto-help">When on, an application is submitted for you only if every question is answered,
     no CAPTCHA puzzle is showing, and your profile says you can take the job. Anything else still
     waits for you to press Submit. Nothing is sent until you press <b>Start applying</b> on the Auto-apply page.</div>
 </section>
@@ -38,9 +36,9 @@
 
 <div id="per-job"></div>
 
-<div class="row" style="position:sticky;bottom:0;padding:10px 0;background:var(--ground);gap:10px">
+<div class="row savebar">
   <button class="btn primary" id="save">Save answers</button>
-  <span class="sub" id="saved"></span>
+  <span class="sub" id="saved" role="status"></span>
 </div>
 
 <script>
@@ -50,20 +48,41 @@ let groups = [];
 
 function field(g, i) {
   const req = g.required ? ' <span class="pill bad">required</span>' : '';
+  const must = g.required ? ' aria-required="true"' : '';
   const count = {};
   g.jobs.forEach(j => count[j.company] = (count[j.company] || 0) + 1);
   const names = Object.entries(count).map(([c, n]) => n > 1 ? `${c} ×${n}` : c).join(', ');
   const who = g.jobs.length > 1 ? `<span class="sub"> · ${g.jobs.length} applications: ${esc(names)}</span>` : '';
   const long = /why|describe|tell us|explain|cover letter|additional information|anything else/i.test(g.label);
   const input = g.options.length
-    ? `<select data-g="${i}"><option value=""></option>${g.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
-    : (long ? `<textarea rows="4" data-g="${i}"></textarea>`
-            : `<input type="text" data-g="${i}" style="font:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)">`);
+    ? `<select data-g="${i}"${must}><option value=""></option>${g.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
+    : (long ? `<textarea rows="4" data-g="${i}"${must}></textarea>`
+            : `<input type="text" class="q-short" data-g="${i}"${must}>`);
   return `<label class="apply-q"><span>${esc(g.label)}${req}${who}</span>${input}</label>`;
 }
 
-async function load() {
-  const d = await (await fetch('/apply/questions.json')).json();
+// What was typed but not yet saved, kept across a reload of the list.
+function typed() {
+  const out = {};
+  document.querySelectorAll('[data-g]').forEach(f => {
+    const g = groups[Number(f.dataset.g)];
+    if (g && f.value.trim()) out[g.label + '|' + g.jobs.map(j => j.job_id).join(',')] = f.value;
+  });
+  return out;
+}
+
+async function load(keep = {}) {
+  let d;
+  try {
+    const r = await fetch('/apply/questions.json');
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) {
+    $('status').innerHTML = '<p class="load-error" role="alert">The questions could not be loaded. ' +
+      '<button class="btn" id="retry" type="button">Try again</button></p>';
+    $('retry').onclick = () => { $('status').innerHTML = '<p class="sub dim">Loading…</p>'; load(keep); };
+    return;
+  }
   $('auto').checked = d.auto_submit;
   $('auto-label').textContent = d.auto_submit ? 'On' : 'Off';
   groups = [...d.shared];
@@ -78,7 +97,7 @@ async function load() {
     </div>`).join('')
     + (d.not_eligible.length ? `<div class="sub warn" style="margin-top:8px">Won't be sent (from your profile): `
        + d.not_eligible.map(n => `${esc(n.job)} — ${esc(n.why.join(', '))}`).join('; ') + '</div>' : '')
-    || '<p class="sub">Nothing ready. The morning run prepares applications, or press Prepare now on the Auto-apply page.</p>';
+    || '<p class="sub">Nothing ready yet. The morning run prepares applications, or press <b>Prepare now</b> on the <a href="/apply">Auto-apply page</a>.</p>';
 
   $('shared-card').hidden = !d.shared.length;
   $('shared-title').textContent = `Asked by several employers (${d.shared.length})`;
@@ -89,6 +108,11 @@ async function load() {
     return `<section class="card"><div class="card-head"><h2>${esc(j.company)}</h2>
       <span class="sub">${esc(j.title)}</span></div>${html}</section>`;
   }).join('');
+  document.querySelectorAll('[data-g]').forEach(f => {
+    const g = groups[Number(f.dataset.g)];
+    const v = keep[g.label + '|' + g.jobs.map(j => j.job_id).join(',')];
+    if (v !== undefined) f.value = v;
+  });
 }
 
 $('save').onclick = async () => {
@@ -99,16 +123,35 @@ $('save').onclick = async () => {
     answers.push({label: g.label, value: f.value, job_ids: g.jobs.map(j => j.job_id)});
   });
   if (!answers.length) { $('saved').textContent = 'Nothing typed yet.'; return; }
-  const r = await (await fetch('/apply/questions', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({answers})})).json();
-  $('saved').textContent = r.ok ? `Saved ${r.saved} answer(s).` : (r.error || 'Could not save.');
-  load();
+  const keep = typed();
+  $('save').disabled = true; $('saved').textContent = 'Saving…';
+  try {
+    const res = await fetch('/apply/questions', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({answers})});
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(r.error || res.status);
+    $('saved').textContent = `Saved ${r.saved} answer(s).`;
+    load();
+  } catch (e) {
+    // Nothing typed is lost: the fields keep their values until a save goes through.
+    $('saved').textContent = 'Not saved — the app did not answer. Your answers are still here; press Save answers again.';
+    load(keep);
+  } finally { $('save').disabled = false; }
 };
 
 $('auto').onchange = async () => {
-  const r = await (await fetch('/apply/auto-submit', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({on: $('auto').checked})})).json();
-  $('auto-label').textContent = r.auto_submit ? 'On' : 'Off';
+  const want = $('auto').checked;
+  try {
+    const res = await fetch('/apply/auto-submit', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({on: want})});
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(res.status);
+    $('auto').checked = r.auto_submit;
+    $('auto-label').textContent = r.auto_submit ? 'On' : 'Off';
+  } catch (e) {
+    $('auto').checked = !want;              // the setting did not change, so the switch does not either
+    $('saved').textContent = 'The switch could not be changed — the app did not answer. Try again.';
+  }
 };
 load();
 </script>

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Health{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Health</h1>
+    <div class="sub">{% if r %}The week {{ r['from'] }} to {{ r['to'] }}: what ran unattended, what failed, and whether your data is backed up.
+      Made every Sunday morning.{% else %}The weekly health report could not be read.{% endif %}</div>
+  </div>
+  <div class="row"><a class="btn" href="{{ url_for('health_report', fresh=1) }}">Make a fresh report</a></div>
+</header>
+
+{% if not r %}
+<section class="card"><p class="load-error" role="alert">No report could be made or read. The details are in
+  <code>data/daily_run.log</code>. Press <b>Make a fresh report</b> to try again.</p></section>
+{% else %}
+<section class="card" aria-labelledby="verdict-h">
+  <h2 id="verdict-h">{% if r.problems %}{{ r.problems|length }} thing{{ 's' if r.problems|length != 1 }} to look at{% else %}All good — nothing needs you{% endif %}</h2>
+  {% if r.problems %}
+  <ul class="health-list">{% for p in r.problems %}<li><span class="pill bad">Problem</span> {{ p }}</li>{% endfor %}</ul>
+  {% else %}<p class="sub"><span class="pill good">OK</span> Every morning run finished, scraping failures stayed low, and the backup is recent.</p>{% endif %}
+</section>
+
+{% set b = r.backup %}
+<div class="stats health-stats">
+  <div class="stat"><span class="k">New jobs found</span><span class="v">{{ r.found.values()|sum }}</span></div>
+  <div class="stat"><span class="k">Open now</span><span class="v">{{ r.open }}</span></div>
+  <div class="stat"><span class="k">Closed this week</span><span class="v">{{ r.closed }}</span></div>
+  <div class="stat"><span class="k">Applied this week</span><span class="v">{{ r.applied }}</span></div>
+  <div class="stat"><span class="k">Ready to apply</span><span class="v">{{ '—' if r.prepared is none else r.prepared }}</span></div>
+  <div class="stat"><span class="k">Last backup</span><span class="v">{% if b %}{{ b.hours|round|int }}h ago{% else %}none{% endif %}</span>
+    {% if b %}<span class="note">{{ b.mb }} MB · {{ b.count }} kept</span>{% endif %}</div>
+  <div class="stat"><span class="k">Free on Storage</span><span class="v">{{ r.free_gb }} GB</span></div>
+</div>
+
+<section class="card">
+  <h2>Morning runs</h2>
+  <div class="t-table-wrap"><table class="t-table">
+    <caption class="sr-only">Each morning's run: result and how long it took</caption>
+    <thead><tr><th scope="col">Day</th><th scope="col">Result</th><th scope="col" class="num">Took</th></tr></thead>
+    <tbody>{% for day, run in r.runs.items() %}<tr>
+      <td class="nowrap">{{ day }}</td>
+      <td>{% if run is none %}<span class="pill muted">Did not start</span>
+        {% elif run.exit is none %}<span class="pill">Still running</span>
+        {% elif run.exit == 0 %}<span class="pill good">OK</span>
+        {% elif run.failed %}<span class="pill review">Partly failed</span> {{ run.failed|join(', ') }}
+        {% else %}<span class="pill bad">Failed</span> exit {{ run.exit }}{% endif %}</td>
+      <td class="num">{% if run and run.exit is not none %}{{ '%.1f'|format(run.hours) }} h{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Scraping</h2>
+  <div class="t-table-wrap"><table class="t-table">
+    <caption class="sr-only">Job boards scraped each day, failures and new jobs</caption>
+    <thead><tr><th scope="col">Day</th><th scope="col" class="num">Boards</th><th scope="col" class="num">Failed</th>
+      <th scope="col" class="num">Rate</th><th scope="col" class="num">New jobs</th></tr></thead>
+    <tbody>{% for x in r.scrapes %}<tr>
+      <td class="nowrap">{{ x.day }}</td><td class="num">{{ x.boards }}</td><td class="num">{{ x.failed }}</td>
+      <td class="num">{% if x.boards %}{{ '%.1f'|format(100 * x.failed / x.boards) }}%{% endif %}</td><td class="num">{{ x.new }}</td>
+    </tr>{% else %}<tr><td colspan="5" class="sub">No scraping this week.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Boards failing 3+ times</h2>
+  {% if r.failing %}
+  <div class="t-table-wrap"><table class="t-table">
+    <caption class="sr-only">Job boards that failed three or more times this week</caption>
+    <thead><tr><th scope="col">Source</th><th scope="col">Board</th><th scope="col" class="num">Failures</th><th scope="col">Last error</th></tr></thead>
+    <tbody>{% for x in r.failing %}<tr><td>{{ x.source }}</td><td>{{ x.board }}</td><td class="num">{{ x.failures }}</td><td>{{ x.error }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="sub">None — every board answered at least most of the week.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Your applications</h2>
+  {% if r.statuses %}
+  <div class="t-table-wrap"><table class="t-table">
+    <thead><tr><th scope="col">Status</th><th scope="col" class="num">Jobs</th></tr></thead>
+    <tbody>{% for k, v in r.statuses|dictsort %}<tr><td>{{ k }}</td><td class="num">{{ v }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="sub">No applications marked yet.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

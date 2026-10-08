@@ -7,9 +7,6 @@
     <div class="sub">Upload a resume and a job description. The builder finds what the job asks for,
       matches it to evidence in the resume, and writes a tailored copy. The uploaded file is never changed.</div>
   </div>
-  <div class="row">
-    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
-  </div>
 </header>
 
 <section class="card" id="inputs">
@@ -21,7 +18,7 @@
         <button class="btn" type="button" id="pick-resume">{% if saved %}Use another{% else %}Choose .docx or .pdf{% endif %}</button>
         <span class="t-name" id="resume-name">{% if saved %}Your saved resume ({{ saved }}){% else %}No file chosen{% endif %}</span>
       </div>
-      <div class="t-error" id="error-resume" hidden></div>
+      <div class="t-error" id="error-resume" role="alert" hidden></div>
     </div>
     <div class="t-field" id="field-job">
       <label class="t-label" for="jd-text">Job description</label>
@@ -31,7 +28,7 @@
         <button class="btn" type="button" id="pick-jd">Or upload it as a file</button>
         <span class="t-name" id="jd-name"></span>
       </div>
-      <div class="t-error" id="error-job" hidden></div>
+      <div class="t-error" id="error-job" role="alert" hidden></div>
     </div>
   </div>
   <div class="row" style="margin-top:14px">
@@ -41,8 +38,9 @@
 </section>
 
 <section class="card" id="progress" hidden>
+  <p class="hint" id="stage-count" role="status"></p>
   <ol class="t-stages" id="stages"></ol>
-  <div class="t-error" id="error-run" hidden></div>
+  <div class="t-error" id="error-run" role="alert" hidden></div>
 </section>
 
 <section class="card" id="results" hidden>
@@ -57,15 +55,15 @@
   <div id="ba"></div>
   <div class="t-warn" id="extraction" hidden></div>
   <div class="t-tabs" role="tablist">
-    <button class="t-tab on" data-tab="resume">Tailored Resume</button>
-    <button class="t-tab" data-tab="report">Match Report</button>
-    <button class="t-tab" data-tab="alignment">Alignment Summary</button>
-    <button class="t-tab" data-tab="versions">Version Checks</button>
-    <button class="t-tab" data-tab="changes">Changes Made</button>
-    <button class="t-tab" data-tab="gaps">Gaps</button>
+    <button class="t-tab on" data-tab="resume" role="tab" id="tab-resume" aria-controls="panel-resume" aria-selected="true">Tailored Resume</button>
+    <button class="t-tab" data-tab="report" role="tab" id="tab-report" aria-controls="panel-report" aria-selected="false" tabindex="-1">Match Report</button>
+    <button class="t-tab" data-tab="alignment" role="tab" id="tab-alignment" aria-controls="panel-alignment" aria-selected="false" tabindex="-1">Alignment Summary</button>
+    <button class="t-tab" data-tab="versions" role="tab" id="tab-versions" aria-controls="panel-versions" aria-selected="false" tabindex="-1">Version Checks</button>
+    <button class="t-tab" data-tab="changes" role="tab" id="tab-changes" aria-controls="panel-changes" aria-selected="false" tabindex="-1">Changes Made</button>
+    <button class="t-tab" data-tab="gaps" role="tab" id="tab-gaps" aria-controls="panel-gaps" aria-selected="false" tabindex="-1">Gaps</button>
   </div>
 
-  <div class="t-panel" data-panel="resume">
+  <div class="t-panel" data-panel="resume" role="tabpanel" id="panel-resume" aria-labelledby="tab-resume" tabindex="0">
     <div class="row" style="margin-bottom:10px">
       <span class="hint">Preview:</span>
       <button class="chip on" data-view="docx">Word document</button>
@@ -83,15 +81,15 @@
     </div>
   </div>
 
-  <div class="t-panel" data-panel="report" hidden>
+  <div class="t-panel" data-panel="report" role="tabpanel" id="panel-report" aria-labelledby="tab-report" tabindex="0" hidden>
     <p class="hint" id="score-note"></p>
     <div class="t-table-wrap"><table class="t-table" id="report-table"></table></div>
     <p class="t-formula" id="formula"></p>
   </div>
-  <div class="t-panel" data-panel="alignment" hidden><div id="alignment"></div></div>
-  <div class="t-panel" data-panel="versions" hidden><div id="versions"></div></div>
-  <div class="t-panel" data-panel="changes" hidden><div id="changes"></div></div>
-  <div class="t-panel" data-panel="gaps" hidden><div id="gaps"></div></div>
+  <div class="t-panel" data-panel="alignment" role="tabpanel" id="panel-alignment" aria-labelledby="tab-alignment" tabindex="0" hidden><div id="alignment"></div></div>
+  <div class="t-panel" data-panel="versions" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" tabindex="0" hidden><div id="versions"></div></div>
+  <div class="t-panel" data-panel="changes" role="tabpanel" id="panel-changes" aria-labelledby="tab-changes" tabindex="0" hidden><div id="changes"></div></div>
+  <div class="t-panel" data-panel="gaps" role="tabpanel" id="panel-gaps" aria-labelledby="tab-gaps" tabindex="0" hidden><div id="gaps"></div></div>
 </section>
 
 <script>
@@ -126,31 +124,59 @@ function showError(file, message) {
   const box = $(file === 'job' ? 'error-job' : file === 'resume' ? 'error-resume' : 'error-run');
   box.textContent = message; box.hidden = false;
   $(file === 'job' ? 'field-job' : 'field-resume')?.classList.toggle('t-bad', file === 'job' || file === 'resume');
+  const input = file === 'job' ? $('jd-text') : file === 'resume' ? $('pick-resume') : null;
+  if (input) { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', box.id); }
 }
 function clearError(file) {
   $(file === 'job' ? 'error-job' : 'error-resume').hidden = true;
   $(file === 'job' ? 'field-job' : 'field-resume').classList.remove('t-bad');
+  const input = file === 'job' ? $('jd-text') : $('pick-resume');
+  input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby');
 }
 
 // -- the run ---------------------------------------------------------------------
 $('create').onclick = async () => {
   ['resume', 'job'].forEach(clearError); $('error-run').hidden = true;
+  // Said here, before anything is sent: a missing resume or posting.
+  const hasResume = $('resume').files[0] || SAVED;
+  const words = $('jd-text').value.trim().split(/\s+/).filter(Boolean).length;
+  const hasJob = $('jd-file').files[0] || words >= 15;
+  if (!hasResume) showError('resume', 'Choose a resume (.docx or .pdf) first.');
+  if (!hasJob) showError('job', words ? 'That is too short to be a job posting. Paste the whole posting, or upload it as a file.'
+                                      : 'Paste the job posting here, or upload it as a file.');
+  if (!hasResume || !hasJob) { (!hasResume ? $('pick-resume') : $('jd-text')).focus(); return; }
   const form = new FormData();
   if ($('resume').files[0]) form.append('resume', $('resume').files[0]);
   else if (SAVED) form.append('use_saved', '1');
   if ($('jd-file').files[0]) form.append('jd_file', $('jd-file').files[0]);
   form.append('jd_text', $('jd-text').value);
   $('create').disabled = true;
-  const r = await (await fetch('/tailor/start', {method: 'POST', body: form})).json();
-  if (!r.ok) { showError(r.file, r.error); $('create').disabled = false; return; }
+  let r;
+  try { r = await (await fetch('/tailor/start', {method: 'POST', body: form})).json(); }
+  catch (e) { r = {ok: false, file: 'run', error: 'The app did not answer, so nothing started. Check it is running, then press Create again.'}; }
+  if (!r.ok) {
+    showError(r.file, r.error);
+    if (r.file !== 'job' && r.file !== 'resume') { $('progress').hidden = false; $('error-run').textContent = r.error; $('error-run').hidden = false; }
+    $('create').disabled = false; return;
+  }
   RUN = r.run; $('results').hidden = true; $('progress').hidden = false;
   history.replaceState(null, '', `?run=${RUN}`);       // come back to this result later
   follow();
 };
 
 async function follow() {
-  const s = await (await fetch(`/tailor/${RUN}/status`)).json();
+  let s;
+  try { s = await (await fetch(`/tailor/${RUN}/status`)).json(); }
+  catch (e) { setTimeout(follow, 4000); return; }                   // the app restarting: ask again shortly
   const names = s.stages || [];
+  if (!names.length && !s.done) {
+    // A run that stopped before it wrote its stages (the app restarted under it): say so, stop asking.
+    $('progress').hidden = false;
+    $('error-run').textContent = 'This run did not finish. Press Create tailored resume to start a new one.';
+    $('error-run').hidden = false; $('create').disabled = false; return;
+  }
+  $('stage-count').textContent = s.done ? (s.error ? '' : `All ${names.length} stages done.`)
+    : `Stage ${Math.min(s.stage + 1, names.length)} of ${names.length}: ${names[s.stage] || ''}`;
   $('stages').innerHTML = names.map((name, i) => {
     const state = s.error && i === names.indexOf(s.error.stage) ? 'fail'
                 : i < s.stage || (s.done && !s.error) ? 'done' : i === s.stage && !s.done ? 'now' : '';
@@ -194,9 +220,20 @@ async function load() {
 }
 
 // -- tabs ------------------------------------------------------------------------
-document.querySelectorAll('.t-tab').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.t-tab').forEach(x => x.classList.toggle('on', x === b));
+const TABS = [...document.querySelectorAll('.t-tab')];
+function showTab(b, focus) {
+  TABS.forEach(x => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-selected', on); x.tabIndex = on ? 0 : -1; });
   document.querySelectorAll('.t-panel').forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+  if (focus) b.focus();
+}
+TABS.forEach((b, i) => {
+  b.onclick = () => showTab(b);
+  b.onkeydown = e => {
+    const to = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1}[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    showTab(TABS[(to + TABS.length) % TABS.length], true);
+  };
 });
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
   VIEW = b.dataset.view;
@@ -314,7 +351,7 @@ function beforeAfter(d) {
   };
   return `<div class="ba"><div class="ba-title">Your resume → tailored resume</div>
     ${row('ATS keyword match', ba.ats, 'How many of the posting\'s keywords the resume text contains — what an ATS scans for')}
-    ${row('Requirements (strict check)', ba.requirements, 'Requirements the resume names outright, counted by the same strict rules on both. Requirements met below also credits related work, as the AI reads it.')}
+    ${row('Requirements named word for word', ba.requirements, 'Requirements the resume names outright, counted by the same strict rules on both. Requirements met below also credits related work, as the AI reads it.')}
     ${ba.pages ? `<div class="ba-row" title="The whole resume, then the tailored one, in the same layout"><span class="ba-label">Length</span>
       <span class="ba-num">${ba.pages[0]} pages</span><span class="ba-arrow">→</span><b class="ba-num">${ba.pages[1]} pages</b><span></span></div>` : ''}
     <div class="ba-foot">${ba.rewritten} line(s) rewritten in the posting's words · ${ba.rounds} round(s), aiming for ${ba.target}%</div></div>`;

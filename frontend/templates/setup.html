@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Settings{% endblock %}
 {% block body %}
 <header class="top">
   <div>
@@ -7,7 +8,6 @@
       written to <code>{{ env_file }}</code> on this machine — gitignored, never
       committed, never sent anywhere.</div>
   </div>
-  <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
 </header>
 
 <section class="card" id="account">
@@ -47,6 +47,8 @@
     tool did it in one step.</p>
 
   <form id="writing">
+    <fieldset class="picks-set">
+    <legend class="sr-only">Which model writes your resume</legend>
     <div class="picks">
       {% for o in writing.options %}
       <label class="pick {{ 'on' if o.name == writing.chosen }}">
@@ -78,6 +80,7 @@
       </label>
       {% endfor %}
     </div>
+    </fieldset>
 
     <label class="wide" style="margin-top:12px">
       <span class="sub">Model name — blank uses that provider's default</span>

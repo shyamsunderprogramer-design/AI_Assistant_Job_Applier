@@ -160,10 +160,11 @@ def render(r: dict) -> str:
     scr = [(x["day"], x["boards"], x["failed"], f"{x['failed'] / x['boards']:.1%}" if x["boards"] else "", x["new"])
            for x in r["scrapes"]]
     return f"""<!doctype html><meta charset=utf-8><title>Health {e(r['to'])}</title>
-<style>body{{font:14px -apple-system,system-ui,sans-serif;max-width:820px;margin:24px auto;padding:0 16px;color:#1d1d1f;background:#fff}}
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>table{{display:block;overflow-x:auto}}body{{font:14px -apple-system,system-ui,sans-serif;max-width:820px;margin:24px auto;padding:0 16px;color:#1d1d1f;background:#fff}}
 h1{{font-size:20px}}h2{{font-size:15px;margin-top:22px}}table{{border-collapse:collapse;width:100%}}
 td,th{{border-bottom:1px solid #e5e5ea;padding:4px 8px;text-align:left}}.ok{{color:#1a7f37;font-weight:600}}
-.bad{{color:#b42318}}.dim{{color:#8e8e93}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}}
+.bad{{color:#b42318}}.dim{{color:#62626a}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}}
 .grid div{{background:#f5f5f7;border-radius:8px;padding:8px}}.grid b{{display:block;font-size:18px}}
 @media(prefers-color-scheme:dark){{body{{background:#1c1c1e;color:#f2f2f7}}.grid div{{background:#2c2c2e}}td,th{{border-color:#3a3a3c}}}}</style>
 <h1>Weekly health · {e(r['from'])} → {e(r['to'])}</h1>
@@ -191,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
     out = args.out or REPORTS / f"health-{r['to']}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(r))
+    # The figures as data too: the web app draws them in its own pages (/health).
+    out.with_suffix(".json").write_text(json.dumps(r, indent=1, default=str))
     print(json.dumps({"ok": not r["problems"], "task": "health", "report": str(out), "problems": r["problems"]}))
     return 0
 

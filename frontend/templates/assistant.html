@@ -10,7 +10,6 @@
   </div>
   <div class="row">
     <button class="btn" id="new-chat" title="Start a fresh conversation">New conversation</button>
-    <a class="btn" href="{{ url_for('index') }}">Back to jobs</a>
   </div>
 </header>
 
@@ -21,8 +20,10 @@
 {% endif %}
 
 <section class="card chat">
-  <div id="log" class="chat-log" aria-live="polite">
+  <div id="log" class="chat-log" role="log" aria-live="polite" aria-label="Conversation">
     {% if not pending %}
+    <p class="sub chat-empty">No conversation yet. Ask about your jobs, resumes or applications — it can look things up and
+      suggest changes, and nothing changes until you press Confirm.</p>
     <div class="chat-hint">Try: <button class="chip" data-say="Which of my strong matches were posted this week?">Strong matches this week</button>
       <button class="chip" data-say="How is the job search going — what is running and how far along?">What is running</button>
       <button class="chip" data-say="Show my best Workday matches and tell me which to apply to first.">Best Workday matches</button></div>
@@ -36,9 +37,11 @@
     {% endfor %}
   </div>
   <form id="ask" class="chat-ask">
-    <textarea id="msg" rows="2" placeholder="Ask anything about your job search…" {{ 'disabled' if not installed }}></textarea>
+    <label for="msg" class="sr-only">Message to the assistant</label>
+    <textarea id="msg" rows="2" placeholder="Ask anything about your job search…" aria-describedby="msg-hint" {{ 'disabled' if not installed }}></textarea>
     <button class="btn primary" id="send" {{ 'disabled' if not installed }}>Send</button>
   </form>
+  <p class="hint" id="msg-hint">Enter sends · Shift+Enter starts a new line</p>
 </section>
 
 <script>
