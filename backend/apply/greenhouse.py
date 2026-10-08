@@ -531,7 +531,12 @@ def browser_page(playwright, *, headless: bool = False):
     person on nearly every Greenhouse form, and a window they can see and
     finish in is the whole workflow, not a debugging aid.
     """
-    browser = playwright.chromium.launch(headless=headless)
-    context = browser.new_context(user_agent=USER_AGENT,
-                                  viewport={"width": 1280, "height": 1600})
+    if headless:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(user_agent=USER_AGENT, viewport={"width": 1280, "height": 1600})
+    else:
+        # A window a person scrolls: the page follows the window (see helper.launch).
+        from backend.apply.helper import WINDOW_HEIGHT
+        browser = playwright.chromium.launch(headless=False, args=[f"--window-size=1280,{WINDOW_HEIGHT}"])
+        context = browser.new_context(user_agent=USER_AGENT, no_viewport=True)
     return browser, context.new_page()

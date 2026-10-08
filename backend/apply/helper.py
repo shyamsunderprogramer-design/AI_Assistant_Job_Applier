@@ -71,6 +71,10 @@ def prepare(cfg, *, chrome_dirs: list[Path] | None = None,
     return target
 
 
+# Fits a 13-inch laptop screen (about 1,100 points tall) with the menu bar and Dock.
+WINDOW_HEIGHT = 960
+
+
 def launch(manager, cfg, *, user_agent: str, viewport: dict,
            browser_dir: Path | None = None):
     """(browser, context) for applying.
@@ -79,14 +83,19 @@ def launch(manager, cfg, *, user_agent: str, viewport: dict,
     survives, and no separate browser object. Without: a fresh browser each
     run, as before.
     """
+    # A person finishes these forms, so the page follows the real window. A fixed
+    # 1400-pixel viewport in a ~1000-point window put the bottom of every page --
+    # where Submit is -- below the window, out of reach of scrolling. `viewport` is
+    # kept for callers; it sets only the window's starting width.
+    window = [f"--window-size={(viewport or {}).get('width', 1280)},{WINDOW_HEIGHT}"]
     extension = prepare(cfg, browser_dir=browser_dir)
     if extension is None:
-        browser = manager.chromium.launch(headless=False)
-        return browser, browser.new_context(user_agent=user_agent, viewport=viewport)
+        browser = manager.chromium.launch(headless=False, args=window)
+        return browser, browser.new_context(user_agent=user_agent, no_viewport=True)
     profile = (browser_dir or BROWSER_DIR) / "profile"
     profile.mkdir(parents=True, exist_ok=True)
     context = manager.chromium.launch_persistent_context(
-        str(profile), headless=False, user_agent=user_agent, viewport=viewport,
-        args=[f"--disable-extensions-except={extension}", f"--load-extension={extension}"])
+        str(profile), headless=False, user_agent=user_agent, no_viewport=True,
+        args=[*window, f"--disable-extensions-except={extension}", f"--load-extension={extension}"])
     log.info("Apply browser has the helper extension from %s", extension.name)
     return None, context

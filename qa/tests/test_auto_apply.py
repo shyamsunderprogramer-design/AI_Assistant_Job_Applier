@@ -347,3 +347,33 @@ def test_the_submit_button_is_outlined_and_brought_into_view():
     finally:
         browser.close()
         manager.stop()
+
+
+def test_the_apply_window_has_no_fixed_page_size(monkeypatch):
+    """A 1400-tall page in a ~1000-point window hid the bottom of every form, Submit included."""
+    from backend.apply import helper
+    seen = {}
+
+    class Browser:
+        def new_context(self, **kw):
+            seen["context"] = kw
+            return "context"
+
+    class Chromium:
+        def launch(self, **kw):
+            seen["launch"] = kw
+            return Browser()
+
+        def launch_persistent_context(self, profile, **kw):
+            seen["persistent"] = kw
+            return "context"
+
+    class Manager:
+        chromium = Chromium()
+    monkeypatch.setattr(helper, "prepare", lambda cfg, browser_dir=None: None)
+    helper.launch(Manager(), None, user_agent="ua", viewport={"width": 1280, "height": 1400})
+    assert seen["context"].get("no_viewport") is True and "viewport" not in seen["context"]
+    assert f"--window-size=1280,{helper.WINDOW_HEIGHT}" in seen["launch"]["args"]
+    monkeypatch.setattr(helper, "prepare", lambda cfg, browser_dir=None: helper.Path("/ext"))
+    helper.launch(Manager(), None, user_agent="ua", viewport={"width": 1280, "height": 1400}, browser_dir=helper.Path("/tmp/x"))
+    assert seen["persistent"].get("no_viewport") is True and "viewport" not in seen["persistent"]
