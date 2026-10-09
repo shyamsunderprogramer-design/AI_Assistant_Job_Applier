@@ -228,6 +228,10 @@ def degree_option(texts: list[str], degree: str) -> int | None:
     if level is None:
         return None
     hits = [i for i, t in enumerate(texts) if level in t.lower()]
+    if not hits:
+        # Abbreviated lists (Abercrombie: "BS", "MS", "MBA"): the degree's initials.
+        initials = "".join(w[0] for w in re.findall(r"[a-z]+", degree.lower()) if w not in ("of", "in", "the"))
+        hits = [i for i, t in enumerate(texts) if re.sub(r"[^a-z]", "", t.lower()) == initials]
     if len(hits) > 1:                      # "Master of Science" over "Master of Arts"
         tail = [i for i in hits if any(w in texts[i].lower() for w in re.findall(r"[a-z]{4,}", degree.lower())
                                        if w not in ("master", "bachelor", "doctor"))]
@@ -269,20 +273,51 @@ def _choose_dropdown(page, el, answer: str, label: str = "") -> bool:
         return False
 
 
+NOT_FOUND = {"school": "School Not Found", "field of study": "Degree Not Found"}
+
+
+def _words_in(option: str, answer: str) -> bool:
+    """Every significant word of the answer is in the option: "Computer Science" in
+    "Computer and Information Science"."""
+    want = [w for w in re.findall(r"[a-z]+", answer.lower()) if w not in ("of", "and", "the", "in")]
+    have = set(re.findall(r"[a-z]+", option.lower()))
+    return bool(want) and all(w in have for w in want)
+
+
+def _search_prompt(page, el, query: str) -> tuple[list, list[str]]:
+    from backend.apply.accounts import _click
+    _click(page, el)
+    el.fill(query)
+    el.press("Enter")
+    opts, texts = [], []
+    for _ in range(8):                          # a school search can take a few seconds
+        page.wait_for_timeout(750)
+        opts = _options(page, '[data-automation-id="promptOption"], [role="option"]')
+        texts = [o.inner_text().strip() for o in opts]
+        if texts:
+            break
+    real = [(o, t) for o, t in zip(opts, texts) if t and not t.lower().startswith("no items")]
+    return [o for o, _ in real], [t for _, t in real]
+
+
 def _choose_prompt(page, el, answer: str, label: str = "") -> bool:
+    """Search a Workday list for the answer: the whole answer, then its first word;
+    an option that says it exactly, or holds every word of it; else the form's own
+    "School Not Found" entry, which Workday asks for when a school is not listed."""
     from backend.apply.accounts import _click
     try:
-        _click(page, el)
-        el.fill(answer)
-        el.press("Enter")
-        opts, texts = [], []
-        for _ in range(8):                      # a school search can take a few seconds
-            page.wait_for_timeout(750)
-            opts = _options(page, '[data-automation-id="promptOption"], [role="option"]')
-            texts = [o.inner_text() for o in opts]
-            if texts:
+        queries = [answer] + [w for w in answer.split()[:1] if len(w) > 3 and w != answer]
+        fallback = next((v for k, v in NOT_FOUND.items() if k in _bare(label).lower()), None)
+        hit, opts, texts = None, [], []
+        for query in queries + ([fallback] if fallback else []):
+            opts, texts = _search_prompt(page, el, query)
+            hit = _pick(texts, query if query == fallback else answer)
+            if hit is None and query != fallback:
+                close = [i for i, t in enumerate(texts) if _words_in(t, answer)]
+                hit = close[0] if close else None
+            if hit is not None:
                 break
-        hit = _pick(texts, answer)
+            el.fill("")
         if hit is None:
             log.info("Workday %r: no option says %r — options: %s", label, answer,
                      "; ".join(t.strip() for t in texts)[:400] or "none shown")
