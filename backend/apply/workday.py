@@ -242,9 +242,12 @@ def _options(page, selector: str) -> list:
 
 
 def _choose_dropdown(page, el, answer: str, label: str = "") -> bool:
+    from backend.apply.accounts import _click
     try:
-        el.click()
-        page.wait_for_timeout(600)
+        if not _click(page, el):
+            log.info("Workday %r: the dropdown would not open", label)
+            return False
+        page.wait_for_timeout(800)
         opts = _options(page, '[role="listbox"] [role="option"]')
         texts = [o.inner_text() for o in opts]
         hit = _pick(texts, answer)
@@ -258,31 +261,39 @@ def _choose_dropdown(page, el, answer: str, label: str = "") -> bool:
         if hit is None:
             page.keyboard.press("Escape")
             return False
-        opts[hit].click()
+        _click(page, opts[hit])
         page.wait_for_timeout(400)
         return True
     except Exception as exc:
-        log.debug("Workday dropdown %r: %s", answer, exc)
+        log.info("Workday dropdown %r = %r: %s", label, answer, str(exc).splitlines()[0][:160])
         return False
 
 
-def _choose_prompt(page, el, answer: str) -> bool:
+def _choose_prompt(page, el, answer: str, label: str = "") -> bool:
+    from backend.apply.accounts import _click
     try:
-        el.click()
+        _click(page, el)
         el.fill(answer)
         el.press("Enter")
-        page.wait_for_timeout(1500)
-        opts = _options(page, '[data-automation-id="promptOption"], [role="option"]')
-        hit = _pick([o.inner_text() for o in opts], answer)
+        opts, texts = [], []
+        for _ in range(8):                      # a school search can take a few seconds
+            page.wait_for_timeout(750)
+            opts = _options(page, '[data-automation-id="promptOption"], [role="option"]')
+            texts = [o.inner_text() for o in opts]
+            if texts:
+                break
+        hit = _pick(texts, answer)
         if hit is None:
+            log.info("Workday %r: no option says %r — options: %s", label, answer,
+                     "; ".join(t.strip() for t in texts)[:400] or "none shown")
             el.fill("")
             page.keyboard.press("Escape")
             return False
-        opts[hit].click()
+        _click(page, opts[hit])
         page.wait_for_timeout(400)
         return True
     except Exception as exc:
-        log.debug("Workday prompt %r: %s", answer, exc)
+        log.info("Workday prompt %r = %r: %s", label, answer, str(exc).splitlines()[0][:160])
         return False
 
 
@@ -368,7 +379,7 @@ def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResul
             if f["kind"] == "dropdown":
                 done = _choose_dropdown(page, el, answer, label)
             elif f["kind"] == "prompt":
-                done = _choose_prompt(page, el, answer)
+                done = _choose_prompt(page, el, answer, label)
             else:
                 el.fill(answer)
                 done = True
@@ -420,6 +431,16 @@ def current_step(page) -> str:
     lines = [l.strip() for l in _text(page, '[data-automation-id="progressBarActiveStep"]').splitlines()]
     lines = [l for l in lines if l and not re.match(r"current step \d+ of \d+$", l, re.I)]
     return lines[-1] if lines else ""
+
+
+def step_ready(page) -> bool:
+    """The step has drawn its form: a Save and Continue (or Submit) button and no loading placeholder."""
+    try:
+        if page.query_selector('[data-automation-id="loadingSpinner"], [aria-busy="true"]'):
+            return False
+    except Exception:
+        pass
+    return _next_button(page) is not None or on_review(page)
 
 
 def _next_button(page):
@@ -555,6 +576,11 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
             if step not in done_steps and len(done_steps) < STEP_LIMIT:
                 page.wait_for_timeout(1500)          # let the step finish drawing
                 if signing_in(page) or current_step(page) != step:
+                    continue
+                if not step_ready(page):
+                    # Still the loading placeholder (Abercrombie, Oct 2026): filling now
+                    # would mark the step done with nothing in it. Look again next round.
+                    page.wait_for_timeout(POLL_MS)
                     continue
                 done_steps.add(step)
                 waiting = fill_step(page, applicant, resume, result)
