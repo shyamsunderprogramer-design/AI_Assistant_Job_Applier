@@ -217,12 +217,16 @@ def _options(page, selector: str) -> list:
     return [o for o in page.query_selector_all(selector) if o.is_visible()]
 
 
-def _choose_dropdown(page, el, answer: str) -> bool:
+def _choose_dropdown(page, el, answer: str, label: str = "") -> bool:
     try:
         el.click()
         page.wait_for_timeout(600)
         opts = _options(page, '[role="listbox"] [role="option"]')
-        hit = _pick([o.inner_text() for o in opts], answer)
+        texts = [o.inner_text() for o in opts]
+        hit = _pick(texts, answer)
+        if hit is None and label:
+            from backend.apply import general     # "Company website" -> "Abercrombie Careers Website"
+            hit = general.pick_option(label, answer, texts)
         if hit is None:
             page.keyboard.press("Escape")
             return False
@@ -270,6 +274,26 @@ def _upload(page, el, path: Path) -> bool:
         return False
 
 
+def _check_radio(page, tag: str) -> bool:
+    """Pick one radio option and confirm it took. A forced `check` on Workday's
+    radios can pass without the page seeing it (Abercrombie, Oct 2026), so click
+    like a person -- the input, then its label -- and read the state back."""
+    el = page.query_selector(f'[data-ja="{tag}"]')
+    if el is None:
+        return False
+    for click in (lambda: el.click(),
+                  lambda: el.evaluate("e => (document.querySelector(`label[for=\"${CSS.escape(e.id)}\"]`) || e).click()"),
+                  lambda: el.check(force=True)):
+        try:
+            click()
+            page.wait_for_timeout(300)
+            if el.is_checked():
+                return True
+        except Exception as exc:
+            log.debug("Workday radio: %s", exc)
+    return False
+
+
 def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResult) -> list[str]:
     """Fill what this step asks that the profile answers. Returns what is left for the person."""
     if signing_in(page):
@@ -314,7 +338,7 @@ def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResul
         done = False
         try:
             if f["kind"] == "dropdown":
-                done = _choose_dropdown(page, el, answer)
+                done = _choose_dropdown(page, el, answer, label)
             elif f["kind"] == "prompt":
                 done = _choose_prompt(page, el, answer)
             else:
@@ -344,12 +368,11 @@ def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResul
             else:
                 result.left_blank.append(label[:60])
             continue
-        try:
-            el = page.query_selector(f'[data-ja="{group[hit]["i"]}"]')
-            el.check(force=True)
+        if _check_radio(page, group[hit]["i"]):
             result.filled[label[:60]] = answer
-        except Exception as exc:
-            log.debug("Workday radio %r: %s", label, exc)
+        else:
+            if group[0]["required"]:
+                result.required_blank.append(label[:60])
             waiting.append(label[:60])
     return waiting
 

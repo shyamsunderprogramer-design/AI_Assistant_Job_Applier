@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.apply import accounts, prepare
+from backend.apply import accounts, general, prepare
 
 
 class MemoryKeyring:
@@ -552,3 +552,12 @@ def test_hedging_sentences_are_caught():
     text = "I ran EKS for 40 services. My resume does not document GPU work. I cut spend 30%."
     assert hedges(text) == ["My resume does not document GPU work."]
     assert hedges("I ran EKS for 40 services.") == []
+
+
+def test_how_did_you_hear_is_one_general_question():
+    label = "How Did You Hear About Us?"
+    options = ["Abercrombie Careers Website", "Indeed", "LinkedIn", "Employee Referral", "Job Board / Other"]
+    assert general.kind_of(label).id == "heard"
+    assert general.pick_option(label, "Company website", options) == 0
+    assert general.pick_option(label, "Job board", options) == 4
+    assert general.pick_option(label, "Glassdoor", options) is None     # not offered: the person picks

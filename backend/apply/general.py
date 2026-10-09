@@ -70,6 +70,9 @@ KINDS = (
     Kind("relocate", "Are you willing to relocate for a role?", YES_NO, r"\brelocat"),
     Kind("onsite", "Can you work on-site or hybrid at the employer's office when the role requires it?", YES_NO,
          r"\bon-?site\b|\bin[- ]office\b|\bhybrid\b|\bdays (a|per) week in\b"),
+    Kind("heard", "How did you hear about the jobs you apply to?",
+         ("Company website", "Job board", "LinkedIn", "Indeed", "Glassdoor"),
+         r"\bhow did you (hear|find|learn) (about|of)\b|\bwhere did you (hear|find|learn)\b"),
     Kind("start", "When can you start a new job?", (), r"\bstart date\b|\bavailable to start\b|\bearliest start\b|\bnotice period\b"),
     Kind("consent", "Do you accept employers' applicant privacy notices, data-processing consents and "
                     "background-check acknowledgements?",
@@ -192,6 +195,10 @@ def pick_option(label: str, given: str, options: list[str]) -> int | None:
         hits = [i for i, t in enumerate(texts) if re.search(r"\bfull[- ]?time\b|\bpermanent\b", t)][:1]
         if not hits and "any" in given:
             hits = [i for i, t in enumerate(texts) if t and not re.search(r"\bselect\b|\bchoose\b", t)][:1]
+    elif kind.id == "heard":
+        words = {"Company website": r"\b(company|career|careers|corporate)\b.*\b(website|site|page)\b|\bwebsite\b",
+                 "Job board": r"\bjob (board|site|posting)s?\b|\bonline job\b"}.get(given, re.escape(given.lower()))
+        hits = [i for i, t in enumerate(texts) if re.search(words, t)]
     else:
         want = given.lower().split("'")[0].split()[0]          # "master's degree" -> "master"
         hits = [i for i, t in enumerate(texts) if want in t]
