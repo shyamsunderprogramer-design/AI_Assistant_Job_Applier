@@ -178,6 +178,14 @@ def value_for(label: str, applicant: Applicant) -> str | None:
         return None
     if "country" in words and "phone" not in words:
         return str(applicant.location.get("country") or "").strip() or None
+    school = applicant.education[0] if applicant.education else {}
+    short = len(text) <= 40                 # a field's name, not a question ("did you finish high school?")
+    if short and "high" not in words and words & {"school", "university", "college"}:
+        return str(school.get("school") or "").strip() or None
+    if short and "degree" in words and not words & {"level", "highest", "have", "do", "required"}:
+        return str(school.get("degree") or "").strip() or None
+    if short and ("field of study" in text or "major" in words):
+        return str(school.get("field") or "").strip() or None
     demo = applicant.demographics
     if "gender" in words or "sex" in words:
         return str(demo.get("gender") or "").strip() or None
@@ -211,6 +219,22 @@ def _pick(texts: list[str], answer: str) -> int | None:
     return min(starts, key=lambda i: len(low[i])) if starts else None
 
 
+def degree_option(texts: list[str], degree: str) -> int | None:
+    """ "Master of Science" -> "Master's Degree" / "MS - Master of Science"; None when unsure."""
+    level = next((lvl for lvl, pat in (("master", r"\bmaster|\bm\.?s\b|\bm\.?tech"),
+                                       ("bachelor", r"\bbachelor|\bb\.?s\b|\bb\.?tech|\bb\.?e\b"),
+                                       ("doctor", r"\bdoctor|\bph\.?d"), ("associate", r"\bassociate"))
+                  if re.search(pat, degree.lower())), None)
+    if level is None:
+        return None
+    hits = [i for i, t in enumerate(texts) if level in t.lower()]
+    if len(hits) > 1:                      # "Master of Science" over "Master of Arts"
+        tail = [i for i in hits if any(w in texts[i].lower() for w in re.findall(r"[a-z]{4,}", degree.lower())
+                                       if w not in ("master", "bachelor", "doctor"))]
+        hits = tail or hits
+    return hits[0] if len(hits) == 1 else None
+
+
 # -- acting on one field ---------------------------------------------------------
 
 def _options(page, selector: str) -> list:
@@ -224,9 +248,13 @@ def _choose_dropdown(page, el, answer: str, label: str = "") -> bool:
         opts = _options(page, '[role="listbox"] [role="option"]')
         texts = [o.inner_text() for o in opts]
         hit = _pick(texts, answer)
+        if hit is None and _bare(label).lower() == "degree":
+            hit = degree_option(texts, answer)
         if hit is None and label:
             from backend.apply import general     # "Company website" -> "Abercrombie Careers Website"
             hit = general.pick_option(label, answer, texts)
+        if hit is None:
+            log.info("Workday %r: no option says %r — options: %s", label, answer, "; ".join(t.strip() for t in texts)[:400])
         if hit is None:
             page.keyboard.press("Escape")
             return False

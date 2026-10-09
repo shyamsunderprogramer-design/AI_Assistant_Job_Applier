@@ -93,6 +93,17 @@ demographics:
   hispanic_latino: "decline"
 
 # ---------------------------------------------------------------------------
+# EDUCATION, highest first. Workday asks for school, degree and field of
+# study; resumes rarely state the field, so it is asked here.
+# ---------------------------------------------------------------------------
+education:
+  - school: "Example State University"
+    degree: "Master of Science"
+    field: "Computer Science"
+    from: 2020
+    to: 2022
+
+# ---------------------------------------------------------------------------
 # HOW FAR THE APPLY STEP MAY GO.
 #
 # `stop_before_submit: true` fills the whole form, uploads the documents,

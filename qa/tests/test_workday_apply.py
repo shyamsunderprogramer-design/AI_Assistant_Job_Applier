@@ -196,3 +196,16 @@ def test_an_account_page_named_in_the_progress_bar_is_never_filled(page, tmp_pat
                                     say=said.append)
     assert page.input_value("#em") == "" and result.filled == {}
     assert verdict == "timeout" and any("Sign in" in s for s in said)
+
+
+def test_education_fields_come_from_the_profile_and_questions_do_not():
+    from backend.apply.profile import Applicant
+    from backend.apply.workday import degree_option, value_for
+    a = Applicant(education=[{"school": "Example State University", "degree": "Master of Science",
+                              "field": "Computer Science"}])
+    assert value_for("School or University", a) == "Example State University"
+    assert value_for("Degree", a) == "Master of Science"
+    assert value_for("Field of Study", a) == "Computer Science"
+    assert value_for("Did you graduate from high school or obtain a GED?", a) != "Example State University"
+    assert degree_option(["Associate's Degree", "Bachelor's Degree", "Master's Degree"], "Master of Science") == 2
+    assert degree_option(["MA - Master of Arts", "MS - Master of Science"], "Master of Science") == 1
