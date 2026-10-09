@@ -120,6 +120,18 @@ candidate fits. Four rules, and they matter more than the rewrite being clever:
    line does, leave the term out. Never add a tool, language or product the
    line does not already name.
 
+8. GOOGLE XYZ ORDER, WHEN THE BULLET ALREADY HAS ITS Y. "Accomplished
+   [X] as measured by [Y] by doing [Z]": lead with the result, then its
+   measure, then how. Apply it only to a bullet whose original already
+   states a result AND a number; reorder its own words, keep every figure
+   (rule 2) and its tense (rule 1). A bullet with no number keeps its shape:
+   never invent a measure to complete the formula.
+
+  Original : Built observability with Prometheus and Grafana, achieving 38%
+             faster MTTR and proactive anomaly detection.
+  GOOD     : Cut MTTR 38% and caught anomalies early by building
+             observability with Prometheus and Grafana.
+
 Do not end several bullets with the same phrase. Repetition across bullets
 reads as a template and is worse than leaving them alone.
 

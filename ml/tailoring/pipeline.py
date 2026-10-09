@@ -68,6 +68,14 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         raise StageError(STAGES[1], "No work history could be found in the resume. Check that it is the "
                                     "right file, or upload a .docx.", "resume")
 
+    # The recruiter's read of the original (review.py) runs beside stages 3-4:
+    # its own model call, so it costs no extra wait. Advice; never a blocker.
+    from concurrent.futures import ThreadPoolExecutor
+    from ml.tailoring import review as reviewing
+    pool = ThreadPoolExecutor(max_workers=1)
+    pending_review = pool.submit(reviewing.recruiter_review, extracted.text, jd_text, company, cfg) \
+        if use_model else None
+
     # 3 -- identifying requirements
     progress(STAGES[2])
     reqs, req_notes = requirements.extract(jd_text, cfg, use_model=use_model)
@@ -81,6 +89,14 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
 
     # 5 -- creating the draft (from the uploaded file; it is never modified)
     progress(STAGES[4])
+    recruiter, review_note = {}, ""
+    if pending_review is not None:
+        try:
+            recruiter = pending_review.result(timeout=600)
+        except Exception as exc:
+            review_note = f"The recruiter review could not be made ({str(exc)[:100]})."
+    pool.shutdown(wait=False)
+    review_extra = reviewing.guidance(recruiter)
     if resume_file.suffix.lower() not in (".docx", ".pdf", ".txt", ".md"):
         raise StageError(STAGES[4], "Unsupported resume file.", "resume")
     # Drafted again until it matches the posting's keywords well (rounds.py);
@@ -88,7 +104,8 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     from ml.tailoring import rounds
     draft, ats, rounds_used = rounds.best_draft(
         lambda extra, focus: drafting.create(resume_file, jd_text, report, cfg, use_model=use_model,
-                                             extra=extra, focus=focus),
+                                             extra="\n\n".join(x for x in (review_extra, extra) if x),
+                                             focus=focus),
         jd_text, progress=lambda note: progress(STAGES[4], note), rounds=rounds.ROUNDS if use_model else 1,
         company=company, refit=lambda d, focus: drafting.refit(d, jd_text, report, focus))
     # A header that says "LinkedIn" as a linked word keeps the link: the
@@ -102,6 +119,13 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     progress(STAGES[5])
     rendered = documents.produce(draft, folder, model=model, jd_text=jd_text)
     draft.changes = drafting.changes(draft.base, draft.result, draft.header)
+    tailored_text = read_document(rendered.docx).text
+    skim, skim_note = {}, ""
+    if use_model:
+        try:
+            skim = reviewing.skim_test(tailored_text, jd_text, cfg)
+        except Exception as exc:
+            skim_note = f"The skim test could not be made ({str(exc)[:100]})."
     from pypdf import PdfReader
     before_after = {
         "ats": [ats["before"], ats["after"]],
@@ -128,6 +152,9 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         "changes": draft.changes,
         "draft_note": draft.problem,
         "gaps": [asdict(m) for m in report.gaps],
+        "review": {"recruiter": recruiter, "skim": skim,
+                   "needs_numbers": reviewing.needs_numbers(_bullets(rendered.docx)),
+                   "notes": [n for n in (review_note, skim_note) if n]},
         "checks": [asdict(c) for c in rendered.checks],
         "checks_ok": rendered.ok,
         "word_rendered": rendered.word,
@@ -140,6 +167,19 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     }
     (folder / "result.json").write_text(json.dumps(result, indent=1, default=str))
     return result
+
+
+def _bullets(docx: Path) -> list[str]:
+    """The tailored resume's experience lines (not the role headers), as they will be read."""
+    from ml.tailoring.reader import read_document
+    from ml.tailoring.structure import build
+    try:
+        model = build(read_document(docx))
+    except Exception:
+        return []
+    facts = {f.id: f.text for f in model.facts}
+    return [facts[i] for e in model.entries if e.section == "experience"
+            for i in e.facts if i in facts and len(facts[i].split()) >= 6]
 
 
 def _draft_json(draft) -> dict:

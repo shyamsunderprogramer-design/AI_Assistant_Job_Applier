@@ -56,6 +56,7 @@
   <div class="t-warn" id="extraction" hidden></div>
   <div class="t-tabs" role="tablist">
     <button class="t-tab on" data-tab="resume" role="tab" id="tab-resume" aria-controls="panel-resume" aria-selected="true">Tailored Resume</button>
+    <button class="t-tab" data-tab="review" role="tab" id="tab-review" aria-controls="panel-review" aria-selected="false" tabindex="-1">Recruiter Review</button>
     <button class="t-tab" data-tab="report" role="tab" id="tab-report" aria-controls="panel-report" aria-selected="false" tabindex="-1">Match Report</button>
     <button class="t-tab" data-tab="alignment" role="tab" id="tab-alignment" aria-controls="panel-alignment" aria-selected="false" tabindex="-1">Alignment Summary</button>
     <button class="t-tab" data-tab="versions" role="tab" id="tab-versions" aria-controls="panel-versions" aria-selected="false" tabindex="-1">Version Checks</button>
@@ -86,6 +87,7 @@
     <div class="t-table-wrap"><table class="t-table" id="report-table"></table></div>
     <p class="t-formula" id="formula"></p>
   </div>
+  <div class="t-panel" data-panel="review" role="tabpanel" id="panel-review" aria-labelledby="tab-review" tabindex="0" hidden><div id="review"></div></div>
   <div class="t-panel" data-panel="alignment" role="tabpanel" id="panel-alignment" aria-labelledby="tab-alignment" tabindex="0" hidden><div id="alignment"></div></div>
   <div class="t-panel" data-panel="versions" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" tabindex="0" hidden><div id="versions"></div></div>
   <div class="t-panel" data-panel="changes" role="tabpanel" id="panel-changes" aria-labelledby="tab-changes" tabindex="0" hidden><div id="changes"></div></div>
@@ -216,7 +218,7 @@ async function load() {
   $('extraction').innerHTML = [RESULT.draft_note, ...(RESULT.notes || []), ...(ex.warnings || [])]
       .filter(Boolean).map(w => `<div>⚠ ${esc(w)}</div>`).join('')
     + (ex.text ? `<details><summary>Show the text read from the resume</summary><pre>${esc(ex.text)}</pre></details>` : '');
-  renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps();
+  renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps(); renderReview();
 }
 
 // -- tabs ------------------------------------------------------------------------
@@ -306,6 +308,39 @@ function renderGaps() {
   $('gaps').innerHTML = gaps.length ? `<p class="hint">What the job asks for that the resume does not demonstrate. These are not added to the resume.</p>
     <ul class="t-list">${gaps.map(m => `<li>${badge(m.status)} <b>${esc(m.requirement.original)}</b> <span class="hint">(${m.requirement.priority})</span><div class="hint">${esc(m.explanation)}</div></li>`).join('')}</ul>`
     : '<p class="hint">No gaps: every identified requirement is directly or partly shown.</p>';
+}
+
+function renderReview() {
+  const v = RESULT.review || {}, r = v.recruiter || {}, sk = v.skim || {};
+  const parts = [];
+  (v.notes || []).forEach(n => parts.push(`<div class="t-warn">⚠ ${esc(n)}</div>`));
+  if (r.breakdown) {
+    const names = {skills: 'Skills', experience_level: 'Experience level', keywords: 'Keywords', impact: 'Impact (results, numbers)'};
+    parts.push(`<h3>Recruiter score for the original resume: ${r.score} / 100</h3>
+      <p class="hint">A senior recruiter's judgement at this company, read before tailoring. Not the employer's ATS.</p>
+      <table class="t-table"><caption class="sr-only">Score breakdown</caption><tbody>${Object.entries(names).map(([k, n]) =>
+        `<tr><th scope="row">${n}</th><td class="num">${r.breakdown[k]} / 25</td></tr>`).join('')}</tbody></table>`);
+    if ((r.missing_keywords || []).length) parts.push(`<h3>Top missing keywords</h3>
+      <p class="hint">Worked into the rewrite only where your resume already shows that work; otherwise left out.</p>
+      <ol class="t-list">${r.missing_keywords.map(k => `<li>${esc(k)}</li>`).join('')}</ol>`);
+    if ((r.red_flags || []).length) parts.push(`<h3>Red flags a hiring manager spots in 10 seconds</h3>
+      <ol class="t-list">${r.red_flags.map(f => `<li><b>${esc(f.flag)}</b>${f.fix ? `<div class="hint">Fix: ${esc(f.fix)}</div>` : ''}</li>`).join('')}</ol>`);
+  }
+  if (sk.first_six_seconds || (sk.skipped || []).length || (sk.ats_problems || []).length) {
+    parts.push(`<h3>Skim test of the tailored resume</h3>
+      <p class="hint">Read as an ATS and as a hiring manager on their 200th resume.</p>
+      ${sk.first_six_seconds ? `<p><b>First six seconds:</b> ${esc(sk.first_six_seconds)}</p>` : ''}
+      ${(sk.skipped || []).length ? `<ul class="t-list">${sk.skipped.map(s => `<li><b>${esc(s.section)}</b> gets skipped: ${esc(s.why)}
+        ${s.rewrite ? `<details><summary>Suggested rewrite</summary><div class="t-after">${esc(s.rewrite)}</div>
+          ${(s.unsupported_numbers || []).length ? `<div class="pill bad">Numbers not on your resume: ${esc(s.unsupported_numbers.join(', '))}. Check before using.</div>` : ''}</details>` : ''}</li>`).join('')}</ul>`
+        : '<p class="hint">No section would be skipped.</p>'}
+      ${(sk.ats_problems || []).length ? `<h3>ATS problems</h3><ul class="t-list">${sk.ats_problems.map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}`);
+  }
+  const ask = v.needs_numbers || [];
+  if (ask.length) parts.push(`<h3>Add a number to these (${ask.length})</h3>
+    <p class="hint">The XYZ formula (accomplished X, measured by Y, by doing Z) needs a real measure. These lines have none, so they were left as they are. If you know the figure, add it with <b>Edit text</b>.</p>
+    <ul class="t-list">${ask.slice(0, 12).map(b => `<li>${esc(b)}</li>`).join('')}</ul>${ask.length > 12 ? `<p class="hint">…and ${ask.length - 12} more.</p>` : ''}`);
+  $('review').innerHTML = parts.join('') || '<p class="hint">No recruiter review for this run (made only when a writing model is in use).</p>';
 }
 
 // -- editing ---------------------------------------------------------------------
