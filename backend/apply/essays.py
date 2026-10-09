@@ -37,8 +37,12 @@ the result. 120 to 220 words, plain paragraphs, no headings, no bullet lists, no
 Hard rules:
 - Use ONLY facts stated in the resume: employers, tools, scale, numbers, outcomes. Never invent a
   tool, number, employer, team size, certification or result.
-- If the question asks about something the resume does not show, do not claim it. Answer with the
-  closest real experience, framed honestly, and list what is missing under "gaps".
+- If the question asks about something the resume does not show, do not claim it: answer with the
+  closest real experience, stated positively, and list what is missing under "gaps".
+- The answer is what the candidate submits, so it never mentions "the resume", never apologises,
+  and never says what the candidate cannot claim, has not done or cannot quantify. No hedging
+  sentences ("this reflects broader scope", "I cannot point to"). Missing things go ONLY in "gaps".
+- Pick the 3-5 strongest facts for THIS question; do not list every tool. End on a concrete result.
 - Never name a company the resume does not name.
 
 Reply with JSON only: {"answer": "...", "gaps": ["what the question asks that the resume does not show", ...]}"""
@@ -73,7 +77,17 @@ def draft(cfg, job, label: str, resume: str | None = None) -> dict:
     if not answer:
         raise RuntimeError("The model returned no answer; try again.")
     return {"answer": answer, "gaps": [str(g) for g in body.get("gaps") or []][:6],
-            "unsupported_numbers": numbers_not_on(answer, resume)}
+            "unsupported_numbers": numbers_not_on(answer, resume),
+            "hedges": hedges(answer)}
+
+
+HEDGE = re.compile(r"\b(my resume|the resume|i cannot|i can't|i do not have|i don't have|not documented|"
+                   r"does not (establish|document|show)|i would distinguish)\b", re.I)
+
+
+def hedges(answer: str) -> list[str]:
+    """Sentences that talk about the resume or what the candidate cannot claim: never sent as is."""
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", answer or "") if HEDGE.search(s)]
 
 
 def draft_for_application(cfg, job_id: int, labels: list[str] | None = None, say=print) -> dict:

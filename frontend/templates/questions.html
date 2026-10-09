@@ -86,6 +86,7 @@ function typed() {
 function draftNote(d) {
   const bits = ['<b>AI draft from your resume — read and edit it, then press Save answers.</b>'];
   if ((d.unsupported_numbers || []).length) bits.push(`<span class="warn">Not on your resume: ${esc(d.unsupported_numbers.join(', '))} — check or remove.</span>`);
+  if ((d.hedges || []).length) bits.push(`<span class="warn">Remove before sending: “${esc(d.hedges.join(' '))}”</span>`);
   if ((d.gaps || []).length) bits.push('Your resume does not show: ' + esc(d.gaps.join('; ')) + '.');
   return bits.join(' ');
 }

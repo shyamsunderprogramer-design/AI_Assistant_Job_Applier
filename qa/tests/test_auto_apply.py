@@ -545,3 +545,10 @@ def test_a_draft_flags_numbers_the_resume_never_states(monkeypatch):
     got = essays.draft(None, job, "Walk us through your Kubernetes experience.", resume)
     assert got["unsupported_numbers"] == ["12"] and got["gaps"] == ["GPU node groups"]
     assert got["answer"].startswith("I ran EKS")
+
+
+def test_hedging_sentences_are_caught():
+    from backend.apply.essays import hedges
+    text = "I ran EKS for 40 services. My resume does not document GPU work. I cut spend 30%."
+    assert hedges(text) == ["My resume does not document GPU work."]
+    assert hedges("I ran EKS for 40 services.") == []
