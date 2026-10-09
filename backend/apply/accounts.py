@@ -93,6 +93,29 @@ def _fill(page, automation_id: str, value: str) -> bool:
     return True
 
 
+def _click(page, el) -> bool:
+    """Click a Workday button. Workday lays a transparent `click_filter` div over
+    its buttons that takes the click (Abercrombie, Oct 2026), and the page can
+    redraw mid-click; so try the button, then the overlay with the same name,
+    then a script click -- and never let a failed click end the run."""
+    try:
+        name = el.get_attribute("aria-label") or el.inner_text()
+    except Exception:
+        name = ""
+    attempts = [lambda: el.click(timeout=5000)]
+    if name:
+        attempts.append(lambda: page.click(f'[data-automation-id="click_filter"][aria-label="{name.strip()}"]',
+                                           timeout=5000))
+    attempts.append(lambda: el.evaluate("e => e.click()"))
+    for attempt in attempts:
+        try:
+            attempt()
+            return True
+        except Exception as exc:
+            log.debug("Workday click: %s", exc)
+    return False
+
+
 def workday_sign_in(page, state: dict, say=print) -> str:
     """Do the account step on a Workday sign-in page. Returns what happened.
 
@@ -106,6 +129,13 @@ def workday_sign_in(page, state: dict, say=print) -> str:
         return "no-account-saved"
 
     creating = _visible(page, '[data-automation-id="verifyPassword"]')
+    if creating and not state.get("signed_in_tried") and not state.get("to_sign_in"):
+        # Workday often opens on Create Account; the account may already exist, so sign in first.
+        for link in ('[data-automation-id="signInLink"]', 'button:has-text("Sign In")'):
+            el = page.query_selector(link)
+            if el and el.is_visible() and _click(page, el):
+                state["to_sign_in"] = True
+                return "to-sign-in"
     if creating:
         if state.get("created"):
             return "waiting"
@@ -123,8 +153,7 @@ def workday_sign_in(page, state: dict, say=print) -> str:
         _fill(page, "password", password)
         for button in ('[data-automation-id="signInSubmitButton"]', 'button:has-text("Sign In")'):
             el = page.query_selector(button)
-            if el and el.is_visible():
-                el.click()
+            if el and el.is_visible() and _click(page, el):
                 break
         state["signed_in_tried"] = True
         say("   Signing in to this employer's Workday with your job-site account…")
@@ -138,8 +167,7 @@ def workday_sign_in(page, state: dict, say=print) -> str:
         for link in ('[data-automation-id="createAccountLink"]', 'button:has-text("Create Account")',
                      'a:has-text("Create Account")'):
             el = page.query_selector(link)
-            if el and el.is_visible():
-                el.click()
+            if el and el.is_visible() and _click(page, el):
                 state["create_opened"] = True
                 say("   No account with this employer yet — opening Create Account.")
                 return "create-opened"

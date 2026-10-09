@@ -506,7 +506,11 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
             # The saved job-site account signs in, or fills a new account for
             # the person to agree to and create (backend/apply/accounts.py).
             from backend.apply.accounts import workday_sign_in
-            done = workday_sign_in(page, account_state, say)
+            try:
+                done = workday_sign_in(page, account_state, say)
+            except Exception as exc:          # the page redrew under us: look again next round
+                log.debug("Workday sign-in: %s", exc)
+                done = "waiting"
             if done == "no-account-saved" and "signin" not in told:
                 say("   Sign in to this employer's Workday (or create your account) in the "
                     "browser — I'll carry on from there. Save a job-site email and password "

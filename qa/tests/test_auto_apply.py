@@ -52,7 +52,7 @@ class FakeEl:
     def fill(self, value):
         self.page.filled[self.aid] = value
 
-    def click(self):
+    def click(self, **_):
         self.page.clicked.append(self.aid)
 
 
@@ -561,3 +561,11 @@ def test_how_did_you_hear_is_one_general_question():
     assert general.pick_option(label, "Company website", options) == 0
     assert general.pick_option(label, "Job board", options) == 4
     assert general.pick_option(label, "Glassdoor", options) is None     # not offered: the person picks
+
+
+def test_on_create_account_an_existing_account_signs_in_first(keychain):
+    accounts.save("me@example.com", "correct-horse-9")
+    page = FakePage({"email", "password", "verifyPassword", "signInLink"})
+    state = {}
+    assert accounts.workday_sign_in(page, state, say=lambda s: None) == "to-sign-in"
+    assert page.clicked == ["signInLink"] and page.filled == {}
