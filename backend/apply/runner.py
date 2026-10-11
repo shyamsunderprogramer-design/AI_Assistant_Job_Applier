@@ -132,7 +132,7 @@ def selected_master(cfg, job) -> Path | None:
     except Exception:
         return base_resume()
     result = TailorResult(summary=None)
-    limit = int(cfg.get("resume.max_pages", 2) or 0)
+    limit = int(cfg.get("resume.max_pages", 4) or 0)
     if limit > 0:
         fit_to_pages(base, result, job.description or job.title,
                      requirements=job.requirements, company=job.company, max_pages=limit)

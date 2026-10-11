@@ -38,3 +38,16 @@ def test_guidance_only_allows_honest_keywords():
 
 def test_lines_without_a_number_are_asked_for():
     assert review.needs_numbers(["Cut MTTR 38%.", "•\u2002Built pipelines in Jenkins.", "", "Infrastructure as Code & Cloud"]) == ["Built pipelines in Jenkins."]
+
+
+def test_federal_who_may_apply_marks_citizens_only():
+    from backend.core.eligibility import citizenship
+    assert citizenship("Who may apply: United States Citizens") == "US citizen"
+
+
+def test_page_range_and_tool_lines():
+    from ml.resume.fit import names_a_tool, page_limits
+    assert page_limits({"resume.max_pages": 4, "resume.min_pages": 3}) == (3, 4)
+    assert page_limits(None) == (3, 4)
+    assert names_a_tool("• Trained junior engineers on Terraform and Azure automation.")
+    assert not names_a_tool("• Documented all infrastructure procedures and guidelines.")

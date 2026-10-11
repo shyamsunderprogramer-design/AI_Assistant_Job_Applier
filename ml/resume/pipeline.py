@@ -102,7 +102,7 @@ def over_page_limit(cfg, target: Path) -> bool:
     skipped, and never attached to an application. Judged by its PDF; a
     .docx with no PDF beside it predates both, and is treated as too long.
     """
-    limit = int(cfg.get("resume.max_pages", 2) or 0)
+    limit = int(cfg.get("resume.max_pages", 4) or 0)
     if limit <= 0:
         return False
     pdf = Path(target).with_suffix(".pdf")
@@ -123,15 +123,16 @@ def _fit(cfg, resume, result, job, focus_terms=None) -> None:
     """
     if not result.accepted:
         return
-    from ml.resume.fit import fit_to_pages
+    from ml.resume.fit import fit_to_pages, page_limits
 
-    limit = int(cfg.get("resume.max_pages", 2) or 0)
+    limit = int(cfg.get("resume.max_pages", 4) or 0)
     if limit <= 0:
         return
     try:
         pages = fit_to_pages(resume, result, job.description or job.title,
                              requirements=job.requirements, company=job.company,
-                             max_pages=limit, focus_terms=focus_terms)
+                             max_pages=limit, focus_terms=focus_terms,
+                             min_pages=page_limits(cfg)[0])
         log.info("Fitted to %d page(s) for %s — %s", pages, job.company, job.title)
     except Exception as exc:        # never lose a tailoring over a length check
         log.warning("Could not fit to %d pages (%s: %s) — writing it untrimmed",

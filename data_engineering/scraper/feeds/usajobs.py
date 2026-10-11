@@ -32,13 +32,20 @@ def fetch(http, titles, cfg) -> list[FeedJob]:
         for item in items:
             d = item.get("MatchedObjectDescriptor") or {}
             pay = (d.get("PositionRemuneration") or [{}])[0]
-            summary = ((d.get("UserArea") or {}).get("Details") or {}).get("JobSummary", "")
+            details = (d.get("UserArea") or {}).get("Details") or {}
+            summary = details.get("JobSummary", "")
+            # Who may apply and the conditions of employment carry the citizenship
+            # rule; without them a federal job read as open to everyone.
+            who = (details.get("WhoMayApply") or {}).get("Name", "")
+            conditions = details.get("Requirements", "")
             raw = posting(NAME, job_id=item.get("MatchedObjectId") or d.get("PositionID"),
                           title=d.get("PositionTitle"),
                           company=d.get("OrganizationName") or d.get("DepartmentName"),
                           url=(d.get("ApplyURI") or [d.get("PositionURI")])[0],
                           location=d.get("PositionLocationDisplay"),
-                          description=f"{summary}\n\n{d.get('QualificationSummary', '')}",
+                          description=f"{summary}\n\n{d.get('QualificationSummary', '')}"
+                                      + (f"\n\nWho may apply: {who}" if who else "")
+                                      + (f"\n\n{conditions}" if conditions else ""),
                           posted=d.get("PublicationStartDate"))
             if raw:
                 yearly = pay.get("RateIntervalCode") == "PA"

@@ -41,9 +41,13 @@ resume:
   # flagged for review against this instead of min_score. Shown as "~NN".
   min_score_title_only: 0.45
   # The base resume is a MASTER resume, longer than any one application. Each
-  # tailored resume is cut down to this many PDF pages, keeping what is most
-  # relevant to that posting (ml/resume/fit.py). 0 keeps everything.
-  max_pages: 2
+  # tailored resume is cut down to at most max_pages PDF pages, keeping what is
+  # most relevant to that posting (ml/resume/fit.py). 0 keeps everything.
+  # max_pages is a cap, not a target: lines with nothing for the posting (no
+  # posting term, no tool named) are dropped when that brings it down to
+  # min_pages. An experienced candidate shows their range: 3 to 4.
+  max_pages: 4
+  min_pages: 3
   # Re-tailor a job that already has an output file?
   overwrite: false
 

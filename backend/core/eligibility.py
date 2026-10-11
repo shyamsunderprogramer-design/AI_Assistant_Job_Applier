@@ -53,7 +53,9 @@ _CITIZEN = re.compile(
     r"\bmust\s+(?:be|hold)\s+(?:a\s+)?(?:u\.?\s?s\.?|united\s+states)\s+citizen|"
     r"\b(?:u\.?\s?s\.?|united\s+states)\s+citizens?\s+only\b|"
     r"\brequires?\s+(?:u\.?\s?s\.?|united\s+states)\s+citizenship\b|"
-    r"\bcitizenship\s+(?:is\s+)?required\b", re.I)
+    r"\bcitizenship\s+(?:is\s+)?required\b|"
+    # USAJOBS' own field: "Who may apply: United States Citizens" (federal civil service).
+    r"\bwho\s+may\s+apply:\s*(?:u\.?\s?s\.?|united\s+states)\s+citizens\b", re.I)
 _GREEN_CARD = re.compile(r"\bgreen\s+card\b|\bpermanent\s+resident", re.I)
 
 _NO_SPONSOR = re.compile(

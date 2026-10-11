@@ -158,22 +158,24 @@ description of what you dropped cannot be acted on, so a paraphrase means the
 bullet stays in the document.
 
 The resume you are given is a MASTER resume: everything this person has done,
-deliberately far longer than any one application. The finished resume must
-fit on TWO pages, so most of it will not be used for any single posting. Your
-job is to SELECT what this posting needs, judged by the job description:
+deliberately far longer than any one application. The finished resume is
+three to four pages (an experienced engineer showing their range), so not all
+of it is used for any single posting. Your job is to SELECT what this posting
+needs, judged by the job description:
 
   - Rewrite only the bullets that best evidence what THIS posting asks for —
-    at most 12. Lines you leave alone are selected down to two pages
+    at most 12. Lines you leave alone are selected down to the page limit
     automatically, most relevant to this posting first, so do NOT list every
     line you would drop: put at most 10 of the clearest misfits in "omitted".
     A long reply is cut off and wasted.
-  - Recent roles earn more space than old ones. An older role can be reduced
-    to its two most relevant bullets.
+  - Recent roles earn more space than old ones. An older role keeps the
+    bullets that say which tools were used and how -- a recruiter needs them
+    to understand the role -- and loses only lines unrelated to this posting.
   - Never drop an employer, a job title, a date, a degree, or a whole role --
     those are the person's record, not padding. Keep at least two bullets per
     role, so no job reads as a gap.
 
-Anything you keep past two pages will be cut automatically, lowest relevance
+Anything you keep past the page limit will be cut automatically, lowest relevance
 to this posting first -- so choose deliberately rather than keeping everything.
 
 "gaps" is important — be honest there. It is how the human learns whether to

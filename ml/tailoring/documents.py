@@ -277,13 +277,13 @@ def content_checks(pdf: Path, file: str, blocks: list[tuple[str, str]], model=No
 # -- the whole step ---------------------------------------------------------------------
 
 def produce(draft, folder: Path, name: str = "tailored-resume", model=None, jd_text: str = "",
-            max_pages: int = 2, attempts: int = 3) -> Rendered:
+            max_pages: int | None = None, attempts: int = 3) -> Rendered:
     from ml.resume.pdf import write_pdf
     from ml.resume.writer import plan_document, write_tailored_resume
 
     folder.mkdir(parents=True, exist_ok=True)
     rendered = None
-    pages = max_pages
+    pages = getattr(draft, "max_pages", 4) if max_pages is None else max_pages
     for attempt in range(1, attempts + 1):
         docx, pdf = folder / f"{name}.docx", folder / f"{name}.pdf"
         write_tailored_resume(draft.base, draft.result, docx, header_lines=draft.header)

@@ -52,6 +52,8 @@ class Draft:
     problem: str = ""
     # What the model itself left out, before any line was cut for space: a refit starts here.
     model_omitted: list = field(default_factory=list)
+    max_pages: int = 4
+    min_pages: int = 3
 
 
 def guess_title(jd_text: str) -> str:
@@ -121,9 +123,9 @@ def keep_required_wording(result, report) -> list[str]:
     return undone
 
 
-def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_model: bool = True,
+def create(resume_path, jd_text: str, report, cfg=None, max_pages: int | None = None, use_model: bool = True,
            extra: str = "", focus: list[str] | None = None) -> Draft:
-    from ml.resume.fit import fit_to_pages
+    from ml.resume.fit import fit_to_pages, page_limits
     from ml.resume.parser import parse_resume
     from ml.resume.tailor import TailorResult, tailor_resume
 
@@ -154,9 +156,12 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_
     if result.bullets:
         keep_required_wording(result, report)
     draft.model_omitted = list(result.omitted or [])
+    fewest, most = page_limits(cfg)
+    max_pages = most if max_pages is None else max_pages
+    draft.max_pages, draft.min_pages = max_pages, min(fewest, max_pages)
     if max_pages:
         try:
-            fit_to_pages(base, result, jd_text, max_pages=max_pages,
+            fit_to_pages(base, result, jd_text, max_pages=max_pages, min_pages=draft.min_pages,
                          pages=lambda b, r: _pages(b, r, header), keep=evidence_lines(report),
                          focus_terms=focus or None, proof=required_proof(report))
         except Exception:
@@ -165,7 +170,7 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int = 2, use_
     return draft
 
 
-def refit(draft: Draft, jd_text: str, report, focus: list[str], max_pages: int = 2) -> Draft:
+def refit(draft: Draft, jd_text: str, report, focus: list[str], max_pages: int | None = None) -> Draft:
     """The same rewrite fitted to the pages again, keeping the lines that carry `focus`.
 
     No model call: a term the resume has but the draft lost was usually cut for
@@ -177,7 +182,8 @@ def refit(draft: Draft, jd_text: str, report, focus: list[str], max_pages: int =
     from ml.resume.fit import fit_to_pages
     result = copy.deepcopy(draft.result)
     result.omitted = copy.deepcopy(draft.model_omitted)
-    fit_to_pages(draft.base, result, jd_text, max_pages=max_pages,
+    fit_to_pages(draft.base, result, jd_text, max_pages=draft.max_pages if max_pages is None else max_pages,
+                 min_pages=draft.min_pages,
                  pages=lambda b, r: _pages(b, r, draft.header), keep=evidence_lines(report),
                  focus_terms=focus or None, proof=required_proof(report))
     again = copy.copy(draft)

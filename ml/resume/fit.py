@@ -40,6 +40,29 @@ from ml.resume.writer import _is_role_line, _is_subheading, strip_bullet
 log = logging.getLogger(__name__)
 
 MIN_BULLETS_PER_ROLE = 2
+# With three or more pages there is room for every role to say what was used
+# and how: older roles keep three bullets, not two (the person's call, Oct 2026:
+# "if we shorten it the recruiter doesn't understand").
+MIN_BULLETS_ROOMY = 3
+
+
+def page_limits(cfg) -> tuple[int, int]:
+    """(fewest, most) pages for a tailored resume, from Settings: 3 to 4 by default.
+
+    The most is a cap, not a target: the resume is only as long as the
+    posting's relevant evidence needs, and never shorter than the fewest
+    unless the master itself is."""
+    most = int(cfg.get("resume.max_pages", 4) or 0) if cfg is not None else 4
+    fewest = int(cfg.get("resume.min_pages", 3) or 0) if cfg is not None else 3
+    return (min(fewest, most) if most else 0), most
+
+
+def names_a_tool(text: str) -> bool:
+    """Does the line say what was used? A product name after the first word:
+    "Trained engineers on Terraform" does; "Documented all procedures" does not."""
+    words = strip_bullet(text).split()[1:]
+    return any(re.match(r"[A-Z][A-Za-z0-9]*[A-Z0-9+#]|[A-Z][a-z]+[A-Z]|[A-Z][a-z]{2,}", w.strip("(),.;:"))
+               for w in words if w[:1].isupper())
 # What a term is worth the second time a kept line shows it, relative to the
 # first. Ranked alone, the fourth Jenkins bullet beat the only Splunk one.
 REPEAT = 0.35
@@ -230,13 +253,13 @@ def _key(text: str) -> str:
     return " ".join((text or "").lower().lstrip("-•*·▪◦–— ").split())[:80]
 
 
-def _protected(line: Line, dropped: set[str], lines: list[Line]) -> bool:
+def _protected(line: Line, dropped: set[str], lines: list[Line], floor: int | None = None) -> bool:
     """Would dropping this take a role below its minimum?"""
     if line.role is None or line.children is not None:
         return False
     kept = [l for l in lines if l.role == line.role and l.children is None
             and not _is_list(l.text) and l.text not in dropped]
-    return line.text in {l.text for l in kept} and len(kept) <= MIN_BULLETS_PER_ROLE
+    return line.text in {l.text for l in kept} and len(kept) <= (floor or MIN_BULLETS_PER_ROLE)
 
 
 def _with_labels(dropped: set[str], lines: list[Line]) -> set[str]:
@@ -271,7 +294,8 @@ def count_pages(base, result) -> int:
 def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
                  company: str | None = None, max_pages: int = 2,
                  pages=count_pages, focus_terms: list[str] | None = None,
-                 keep: set[str] | None = None, proof: list[set[str]] | None = None) -> int:
+                 keep: set[str] | None = None, proof: list[set[str]] | None = None,
+                 min_pages: int = 0) -> int:
     """Trim `result` in place so the rendered resume fits `max_pages`.
 
     Returns the page count it ends at (it may exceed the limit if the
@@ -289,6 +313,8 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     """
     if max_pages <= 0:
         return pages(base, result)
+    per_role = MIN_BULLETS_ROOMY if max_pages >= 3 else MIN_BULLETS_PER_ROLE
+    floor = 0.25 / math.sqrt(6) * 1.5 * 1.25 * 1.3   # the most a no-match line can score
     weights = posting_terms(jd_text or "", requirements, company)
     # Terms "Align closer" asked for outweigh everything else, so the line
     # that shows each one is among the last to be cut.
@@ -314,7 +340,7 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     for line in sorted((by_text[t] for t in asked
                         if t in by_text and by_text[t].children is None and t not in evidence),
                        key=lambda l: l.score):
-        if not _protected(line, dropped, lines):
+        if not _protected(line, dropped, lines, per_role):
             dropped.add(line.text)
 
     reasons = {(e.get("original") or "").strip(): e.get("reason", "")
@@ -330,6 +356,9 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     apply()
     current = pages(base, result)
     if current <= max_pages:
+        if min_pages and current > min_pages:
+            current = _no_padding(base, result, lines, dropped, evidence, proofs, per_role,
+                                  floor, min_pages, current, pages, apply)
         return current
 
     # Estimate how many words to lose from the first render, then confirm by
@@ -342,7 +371,7 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     for line in queue:
         if kept_words <= budget:
             break
-        if _protected(line, dropped, lines) or sole_proof(line):
+        if _protected(line, dropped, lines, per_role) or sole_proof(line):
             continue
         dropped.add(line.text)
         kept_words -= line.words
@@ -357,7 +386,7 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
             step = 0
             for line in list(remaining):
                 remaining.remove(line)
-                if _protected(line, dropped, lines) or sole_proof(line):
+                if _protected(line, dropped, lines, per_role) or sole_proof(line):
                     continue
                 dropped.add(line.text)
                 step += 1
@@ -380,7 +409,6 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     # space back to the most relevant lines that were cut, one at a time, as
     # long as the page count holds. Never lines the model itself left out.
     misses = 0
-    floor = 0.25 / math.sqrt(6) * 1.5 * 1.25 * 1.3   # the most a no-match line can score
     for line in sorted((by_text[t] for t in list(dropped)
                         if t in by_text and t not in asked and by_text[t].children is None
                         and by_text[t].score > floor),
@@ -393,4 +421,34 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
             misses += 1
             if misses >= 4:
                 break
+    current = pages(base, result)
+    if min_pages and current > min_pages:
+        current = _no_padding(base, result, lines, dropped, evidence, proofs, per_role,
+                              floor, min_pages, current, pages, apply)
+    return current
+
+
+def _no_padding(base, result, lines, dropped, evidence, proofs, per_role, floor, min_pages,
+                current, pages, apply) -> int:
+    """The last page only if it is earned: when the lines with nothing for this
+    posting -- no posting term, no tool named, no requirement's proof -- are all
+    that stand between `min_pages` and more, they go. Otherwise nothing changes:
+    a page that holds real evidence stays."""
+    proof_lines = set().union(*proofs) if proofs else set()
+    filler = sorted((l for l in lines if l.children is None and l.text not in dropped
+                     and l.score <= floor and l.text not in evidence and l.text not in proof_lines
+                     and not names_a_tool(l.text)), key=lambda l: l.score)
+    trial = set()
+    for line in filler:
+        if not _protected(line, dropped | trial, lines, per_role):
+            trial.add(line.text)
+    if not trial:
+        return current
+    dropped |= trial
+    apply()
+    shorter = pages(base, result)
+    if shorter <= min_pages:
+        return shorter
+    dropped -= trial                      # it did not save the page: keep the lines
+    apply()
     return pages(base, result)
