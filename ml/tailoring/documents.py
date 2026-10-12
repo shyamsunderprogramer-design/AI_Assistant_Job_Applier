@@ -261,7 +261,7 @@ def content_checks(pdf: Path, file: str, blocks: list[tuple[str, str]], model=No
         need = re.findall(r"[a-z0-9%+#]+", line.lower())
         return not need or sum(w in have for w in need) / len(need) >= 0.9
 
-    missing = [t for k, t in blocks if k in ("bullet", "text", "skill", "role") and not present(t)]
+    missing = [t for k, t in blocks if k in ("bullet", "text", "skill", "role", "degree", "school", "title") and not present(t)]
     if missing:
         checks.append(Check(file, None, "content", f"{len(missing)} line(s) of the draft are not in the "
                                                    f"document, e.g. “{missing[0][:60]}”.", "problem"))

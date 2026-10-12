@@ -29,7 +29,7 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase.pdfmetrics import stringWidth
-from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, HRFlowable,
+from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, HRFlowable, KeepTogether,
                                 PageTemplate, Paragraph, Spacer)
 
 from ml.resume.parser import Resume
@@ -46,22 +46,27 @@ log = logging.getLogger(__name__)
 #
 # reportlab's `bulletText=` argument has the same fault whatever the font, so
 # the bullet goes in the text flow instead, exactly as the .docx does it.
+_WORD_FONTS = Path("/Applications/Microsoft Word.app/Contents/Resources/DFonts")
 _CANDIDATES = [
+    # The person's format: Cambria. Installed with Microsoft Office.
+    ("Cambria", str(_WORD_FONTS / "Cambria.ttc"), str(_WORD_FONTS / "Cambriab.ttf")),
+    ("Cambria", "/Library/Fonts/Cambria.ttc", "/Library/Fonts/Cambria Bold.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf",
      "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
 ]
 
-BODY = 10.5
-INK = Color(0.10, 0.10, 0.10)
-MUTED = Color(0.33, 0.33, 0.33)
+BODY = 11
+LEADING = 1.17          # single line spacing, as Word sets Cambria
+INK = Color(0, 0, 0)
+MUTED = INK
 RULE = Color(0.75, 0.75, 0.75)
 
 SIDE_MARGIN = 0.65 * inch
-TOP_MARGIN = 0.5 * inch
-BULLET_INDENT = 11
-BULLET_HANG = 11
+TOP_MARGIN = 0.65 * inch
+BULLET_AT = 0.15 * inch          # the "•", from the left text margin
+BULLET_TEXT_AT = 0.30 * inch     # its text, and every wrapped line
 
 
 def _register_font() -> tuple[str, str]:
@@ -79,11 +84,21 @@ def _register_font() -> tuple[str, str]:
         if not Path(regular).exists():
             continue
         try:
-            pdfmetrics.registerFont(TTFont(name, regular))
+            # A .ttc holds several faces; Cambria's first is the text face.
+            extra = {"subfontIndex": 0} if regular.endswith(".ttc") else {}
+            pdfmetrics.registerFont(TTFont(name, regular, **extra))
             bold_name = name
             if Path(bold).exists():
                 bold_name = f"{name}-Bold"
                 pdfmetrics.registerFont(TTFont(bold_name, bold))
+            # A family, so <b> in a paragraph means this bold face. Without
+            # it, <b> silently printed the regular weight: job titles came
+            # out plain.
+            from reportlab.lib.fonts import addMapping
+            addMapping(name, 0, 0, name)
+            addMapping(name, 1, 0, bold_name)
+            addMapping(name, 0, 1, name)
+            addMapping(name, 1, 1, bold_name)
             return name, bold_name
         except Exception:                      # a broken font file is not fatal
             continue
@@ -110,7 +125,7 @@ BULLET = "-" if FONT == "Helvetica" else "\u2022"
 
 
 def _bullet_width() -> float:
-    return stringWidth(BULLET + "  ", FONT, BODY)
+    return BULLET_TEXT_AT
 
 
 def _pack(items: list[str], width: float, size: float) -> list[str]:
@@ -130,37 +145,37 @@ def _pack(items: list[str], width: float, size: float) -> list[str]:
 
 
 def _styles() -> dict[str, ParagraphStyle]:
+    """The person's format: Cambria, black, single spaced; 3pt after body lines."""
     base = ParagraphStyle(
-        "body", fontName=FONT, fontSize=BODY, leading=BODY * 1.30,
-        textColor=INK, spaceAfter=2.5,
+        "body", fontName=FONT, fontSize=BODY, leading=BODY * LEADING,
+        textColor=INK, spaceBefore=0, spaceAfter=3,
     )
     return {
         "name": ParagraphStyle("name", parent=base, fontName=FONT_BOLD,
-                               fontSize=19, leading=22, alignment=TA_CENTER,
-                               spaceAfter=1),
-        "contact": ParagraphStyle("contact", parent=base, fontSize=9.5,
-                                  leading=12, alignment=TA_CENTER,
-                                  textColor=MUTED, spaceAfter=1),
+                               fontSize=18, leading=18 * LEADING, alignment=TA_CENTER,
+                               spaceAfter=3),
+        "contact": ParagraphStyle("contact", parent=base, alignment=TA_CENTER, spaceAfter=3),
+        "title": ParagraphStyle("title", parent=base, fontName=FONT_BOLD,
+                                alignment=TA_CENTER, spaceAfter=6),
         # keepWithNext: a heading, a group title or a role line is never
         # left alone at the foot of a page with its lines on the next.
         "heading": ParagraphStyle("heading", parent=base, fontName=FONT_BOLD,
-                                  fontSize=10.5, leading=13, spaceBefore=11,
-                                  spaceAfter=3, keepWithNext=1),
-        "role": ParagraphStyle("role", parent=base, spaceBefore=7, spaceAfter=1,
-                               keepWithNext=1),
+                                  fontSize=12, leading=12 * LEADING, spaceBefore=8,
+                                  spaceAfter=1, keepWithNext=1),
+        "role": ParagraphStyle("role", parent=base, fontName=FONT_BOLD, spaceBefore=6,
+                               spaceAfter=3, keepWithNext=1),
+        "degree": ParagraphStyle("degree", parent=base, spaceBefore=4, keepWithNext=1),
         "subheading": ParagraphStyle("subheading", parent=base,
-                                     fontName=FONT_BOLD, spaceBefore=5,
-                                     spaceAfter=1, keepWithNext=1),
-        # The hanging indent, measured: the bullet and its two spaces are part
-        # of the text, so wrapped lines start exactly where the first line's
-        # words do. A fixed 22pt hang put them 12pt further right than that --
-        # the ragged look that says a program laid this out.
+                                     fontName=FONT_BOLD, spaceBefore=2,
+                                     spaceAfter=3, keepWithNext=1),
+        # The bullet at 0.15", its text and every wrapped line at 0.30".
         "bullet": ParagraphStyle("bullet", parent=base, alignment=TA_JUSTIFY,
-                                 leftIndent=_bullet_width(), bulletIndent=0,
+                                 leftIndent=BULLET_TEXT_AT, bulletIndent=BULLET_AT,
                                  bulletFontName=FONT, bulletFontSize=BODY),
         # Body text justified: straight right edges, the last line of each
         # paragraph left as it falls.
         "text": ParagraphStyle("text", parent=base, alignment=TA_JUSTIFY),
+        "skill": ParagraphStyle("skill", parent=base),          # left aligned
     }
 
 
@@ -170,7 +185,7 @@ def _escape(text: str) -> str:
             .replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def _role_markup(text: str, width: float) -> str:
+def _role_markup(text: str, width: float, bold: bool = True) -> str:
     """A job title with its dates against the right margin.
 
     A right-aligned tab, the same device the .docx uses. Spaces would move
@@ -179,7 +194,7 @@ def _role_markup(text: str, width: float) -> str:
     from ml.resume.writer import _split_dates
 
     title, dates = _split_dates(text)
-    head = f"<b>{_escape(title)}</b>"
+    head = f"<b>{_escape(title)}</b>" if bold else _escape(title)
     if not dates:
         return head
     # The tab positions the dates on the page but leaves NOTHING in the text
@@ -187,9 +202,54 @@ def _role_markup(text: str, width: float) -> str:
     # a parser reads one nonsense token. Two spaces before it cost nothing
     # visually -- the tab still pushes the dates to the margin -- and keep the
     # two apart for anything reading the text rather than the page.
-    return (f'{head}&nbsp;&nbsp;<tab/>'
-            f'<font color="#555555">{_escape(dates)}</font>')
+    tail = f"<b>{_escape(dates)}</b>" if bold else _escape(dates)
+    return f'{head}&nbsp;&nbsp;<tab/>{tail}'
 
+
+
+class _DatedLine(Flowable):
+    """A title on the left and its dates against the right margin, on one line.
+
+    reportlab's paragraphs ignore tab stops, so the dates sat straight after
+    the title. Drawn as two strings instead: the text layer still reads title
+    then dates, in that order, on one line.
+    """
+
+    def __init__(self, title: str, dates: str, font: str, size: float,
+                 space_before: float, space_after: float):
+        super().__init__()
+        self.title, self.dates, self.font, self.size = title, dates, font, size
+        self.spaceBefore, self.spaceAfter = space_before, space_after
+        self.keepWithNext = 1           # a job is never split from its first line
+
+    def fits(self, width: float) -> bool:
+        gap = stringWidth("    ", self.font, self.size)
+        return (stringWidth(self.title, self.font, self.size) + gap
+                + stringWidth(self.dates, self.font, self.size)) <= width
+
+    def wrap(self, avail_w, avail_h):
+        self.width = avail_w
+        return avail_w, self.size * LEADING
+
+    def draw(self):
+        c = self.canv
+        c.setFillColor(INK)
+        c.setFont(self.font, self.size)
+        baseline = self.size * (LEADING - 1) / 2 + self.size * 0.22
+        c.drawString(0, baseline, self.title + "  ")
+        c.drawRightString(self.width, baseline, self.dates)
+
+
+def _dated(text: str, width: float, font: str, style: ParagraphStyle):
+    """The dated line, or a paragraph when title and dates will not share a line."""
+    from ml.resume.writer import _split_dates
+    title, dates = _split_dates(text)
+    if dates:
+        line = _DatedLine(title, dates, font, style.fontSize, style.spaceBefore, style.spaceAfter)
+        if line.fits(width):
+            return line
+    bold = font == FONT_BOLD
+    return Paragraph(_role_markup(text, width, bold=bold), style)
 
 
 class _Rule(HRFlowable):
@@ -197,7 +257,7 @@ class _Rule(HRFlowable):
 
     def __init__(self, width):
         super().__init__(width="100%", thickness=0.4, color=RULE,
-                         spaceBefore=1, spaceAfter=4, lineCap="butt")
+                         spaceBefore=1, spaceAfter=3, lineCap="butt")
         self.keepWithNext = 1           # the rule goes with its section's first line
 
 
@@ -213,7 +273,7 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
 
     # A right tab at the margin, so role dates land there rather than
     # wherever the source happened to space them.
-    for name in ("role",):
+    for name in ("role", "degree"):
         styles[name].tabs = [(text_w, "right")]
 
     story: list[Flowable] = []
@@ -229,7 +289,7 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
                 parts = []
                 for piece in line.split(" \u00b7 "):
                     url = shown.get(piece)
-                    parts.append(f'<a href="{_escape(url)}" color="#1F4E79"><u>{_escape(piece)}</u></a>'
+                    parts.append(f'<a href="{_escape(url)}" color="#000000"><u>{_escape(piece)}</u></a>'
                                  if url else _escape(piece))
                 return " \u00b7 ".join(parts)
 
@@ -238,20 +298,28 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
         elif kind == "heading":
             story.append(Paragraph(_escape(text.upper()), styles["heading"]))
             story.append(_Rule(text_w))
+        elif kind == "title":
+            from ml.resume.writer import _tidy_contact as tidy
+            story.append(Paragraph(_escape(tidy(text)), styles["title"]))
         elif kind == "role":
-            story.append(Paragraph(_role_markup(text, text_w), styles["role"]))
+            story.append(_dated(text, text_w, FONT_BOLD, styles["role"]))
+        elif kind == "degree":
+            story.append(_dated(text, text_w, FONT, styles["degree"]))
+        elif kind == "school":
+            story.append(Paragraph(f"<b>{_escape(text)}</b>", styles["text"]))
         elif kind == "subheading":
             story.append(Paragraph(f"<b>{_escape(text)}</b>", styles["subheading"]))
         elif kind == "bullet":
             # The bullet as the paragraph's own mark, not text: justified,
             # the spaces after a text bullet were stretched with the words.
-            story.append(Paragraph(_escape(text), styles["bullet"], bulletText=BULLET))
+            # Kept whole: a bullet is not split across a page break.
+            story.append(KeepTogether([Paragraph(_escape(text), styles["bullet"], bulletText=BULLET)]))
         elif kind == "skill":
             label, _, items = text.partition(": ")
             # The bold face by name: <b> needs a registered font family, and
             # without one the label silently came out in the regular weight.
             story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {_escape(items)}',
-                                   styles["text"]))
+                                   styles["skill"]))
         else:
             story.append(Paragraph(_escape(text), styles["text"]))
 

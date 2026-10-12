@@ -92,19 +92,25 @@ def test_a_heading_is_never_stranded_at_the_foot_of_a_page(written):
 
 # --- layout -------------------------------------------------------------
 
-def test_a_job_keeps_its_dates_on_its_line_without_a_tab(written):
-    """Viewers that ignore tab stops (Quick Look, Pages) put tabbed dates mid-line."""
+def test_a_job_heading_is_bold_with_its_dates_on_a_right_tab(written):
+    """The person's format: title and company left, dates right, all bold."""
+    from docx.enum.text import WD_TAB_ALIGNMENT
     role = next(p for p in body(written) if "ACME CORP" in p.text)
-    assert "\t" not in role.text and "\u00a0\u00a0" in role.text
-    assert len(role.paragraph_format.tab_stops) == 0
+    assert "\t" in role.text
+    [stop] = role.paragraph_format.tab_stops
+    assert stop.alignment == WD_TAB_ALIGNMENT.RIGHT
+    assert all(r.bold for r in role.runs if r.text.strip())
     assert role.paragraph_format.keep_with_next, "a job must not split from its bullets"
 
 
 def test_wrapped_bullet_lines_start_under_the_first_word(written):
+    """Bullet at 0.15", text and wrapped lines at 0.30"."""
+    from docx.shared import Inches
     for para in bullets(written):
         fmt = para.paragraph_format
-        assert "\t" not in para.text
-        assert fmt.first_line_indent == -fmt.left_indent and fmt.left_indent > 0
+        assert para.text.startswith("\u2022\t")
+        assert fmt.left_indent == Inches(0.30)
+        assert fmt.left_indent + fmt.first_line_indent == Inches(0.15)
 
 
 def test_a_job_title_is_not_turned_into_a_bullet(written):
@@ -225,7 +231,7 @@ def test_body_text_is_justified_and_the_bullet_gap_fixed(tmp_path):
     out = write_tailored_resume(parse_resume(src), TailorResult(summary=None), tmp_path / "out.docx")
     bullet = next(p for p in Document(str(out)).paragraphs if p.text.startswith("•"))
     assert bullet.alignment == WD_ALIGN_PARAGRAPH.JUSTIFY
-    assert bullet.text.startswith("• ") and " " not in bullet.text
+    assert bullet.text.startswith("\u2022\t")
 
 
 def _merged(blocks):

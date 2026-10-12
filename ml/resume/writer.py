@@ -44,25 +44,24 @@ from ml.resume.tailor import TailorResult
 
 log = logging.getLogger(__name__)
 
-# Arial, as the PDF uses: on every Mac and PC. Calibri is not on a Mac
-# without Office, and Pages, Quick Look and many recruiters' previews
-# silently set the whole resume in Times instead.
-FONT = "Arial"
-BODY_SIZE = Pt(10.5)
-HEADING_SIZE = Pt(10.5)
-NAME_SIZE = Pt(19)
-CONTACT_SIZE = Pt(9.5)
+# The person's format (Oct 2026): Cambria throughout, black, single spaced.
+# The PDF embeds the same face, so a reader without Office sees it too.
+FONT = "Cambria"
+BODY_SIZE = Pt(11)
+HEADING_SIZE = Pt(12)
+NAME_SIZE = Pt(18)
+CONTACT_SIZE = Pt(11)
 
-INK = RGBColor(0x1A, 0x1A, 0x1A)      # near-black reads softer than pure black
-MUTED = RGBColor(0x55, 0x55, 0x55)    # contact line, dates
+INK = RGBColor(0x00, 0x00, 0x00)
+MUTED = INK                           # contact line and dates are black too
 
 # Content width, so the right-aligned date tab lands on the margin.
 PAGE_WIDTH_IN = 8.5
 SIDE_MARGIN_IN = 0.65
 TEXT_WIDTH_IN = PAGE_WIDTH_IN - 2 * SIDE_MARGIN_IN
 
-BULLET_INDENT = Pt(11)    # how far the "•" sits in
-BULLET_HANG = Pt(11)      # and how far the text hangs past it
+BULLET_AT = Inches(0.15)       # the "•", from the left text margin
+BULLET_TEXT_AT = Inches(0.30)  # its text, and every wrapped line under it
 
 # A line naming a job and its dates, rather than describing the work.
 DATE_RE = re.compile(
@@ -90,14 +89,16 @@ def _style_document(document: Document) -> None:
     normal.font.size = BODY_SIZE
     normal.font.color.rgb = INK
     fmt = normal.paragraph_format
-    fmt.space_after = Pt(2)
+    fmt.space_after = Pt(3)
     fmt.space_before = Pt(0)
-    fmt.line_spacing = 1.06          # room to breathe without costing a page
+    fmt.line_spacing = 1.0
     fmt.widow_control = True         # never strand one line of a bullet
 
     for section in document.sections:
-        section.top_margin = Inches(0.5)
-        section.bottom_margin = Inches(0.5)
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(11)
+        section.top_margin = Inches(SIDE_MARGIN_IN)
+        section.bottom_margin = Inches(SIDE_MARGIN_IN)
         section.left_margin = Inches(SIDE_MARGIN_IN)
         section.right_margin = Inches(SIDE_MARGIN_IN)
 
@@ -110,8 +111,8 @@ def _style_document(document: Document) -> None:
     heading.font.color.rgb = INK
     heading.font.all_caps = True
     hfmt = heading.paragraph_format
-    hfmt.space_before = Pt(11)
-    hfmt.space_after = Pt(3)
+    hfmt.space_before = Pt(8)
+    hfmt.space_after = Pt(4)
     hfmt.keep_with_next = True       # a heading alone at a page foot is a bug
 
 
@@ -161,40 +162,52 @@ def _add_heading(document: Document, text: str) -> None:
     _rule_under(para)
 
 
-def _add_role(document: Document, text: str) -> None:
-    """A job title line, with its dates pushed to the right margin.
+def _add_role(document: Document, text: str, *, bold_title: bool = True) -> None:
+    """A job title line in bold, its dates on a right tab stop at the margin.
 
-    Resumes put dates on the right. Doing it with spaces breaks the moment the
-    font changes and doing it with a table breaks the parser, so it is a right
-    tab stop -- which is what the tab character is for.
+    The person's format: title and company left, dates right, all bold. A
+    table would break parsers and spaces move with the font, so a tab -- and
+    two spaces before it, so text extraction keeps the two apart.
     """
     title, dates = _split_dates(text)
     para = document.add_paragraph()
     fmt = para.paragraph_format
-    fmt.space_before = Pt(7)
-    fmt.space_after = Pt(1)
+    fmt.space_before = Pt(6)
+    fmt.space_after = Pt(3)
     fmt.keep_with_next = True        # never split a job from its first bullet
+    fmt.tab_stops.add_tab_stop(Inches(TEXT_WIDTH_IN), WD_TAB_ALIGNMENT.RIGHT)
 
-    run = para.add_run(title)
-    run.bold = True
+    run = para.add_run(title + ("  \t" if dates else ""))
+    run.bold = bold_title
     run.font.name = FONT
     run.font.size = BODY_SIZE
     if dates:
-        # After the title, in grey, as the PDF sets it. A right tab put them
-        # at the margin in Word and mid-line in every viewer that ignores
-        # tab stops, which is most of the ones a recruiter might preview in.
-        tail = para.add_run("\u00a0\u00a0\u00a0" + dates)
+        tail = para.add_run(dates)
+        tail.bold = bold_title
         tail.font.name = FONT
         tail.font.size = BODY_SIZE
-        tail.font.color.rgb = MUTED
     return para
+
+
+def _add_school(document: Document, text: str) -> None:
+    """The university line of an education entry, in bold."""
+    para = _add(document, text, bold=True)
+    para.paragraph_format.space_after = Pt(3)
+
+
+def _add_title(document: Document, text: str) -> None:
+    """The professional title and primary technologies under the contact line."""
+    para = _add(document, _tidy_contact(text), bold=True, size=BODY_SIZE,
+                align=WD_ALIGN_PARAGRAPH.CENTER)
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(6)
 
 
 def _add_contact(document: Document, text: str) -> None:
     """The contact line, with the LinkedIn address as a linked word."""
     para = document.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    para.paragraph_format.space_after = Pt(1)
+    para.paragraph_format.space_after = Pt(3)
     items = [i for i in _tidy_contact(text).split(" \u00b7 ") if i]
     for n, item in enumerate(items):
         if n:
@@ -225,7 +238,7 @@ def _hyperlink(para, shown: str, url: str) -> None:
     link.set(qn("r:id"), rel)
     run = OxmlElement("w:r")
     props = OxmlElement("w:rPr")
-    for tag, attr, value in (("w:rFonts", "w:ascii", FONT), ("w:color", "w:val", "1F4E79"),
+    for tag, attr, value in (("w:rFonts", "w:ascii", FONT), ("w:color", "w:val", "000000"),
                              ("w:u", "w:val", "single"), ("w:sz", "w:val", str(int(CONTACT_SIZE.pt * 2)))):
         el = OxmlElement(tag)
         el.set(qn(attr), value)
@@ -244,8 +257,8 @@ def _add_skill(document: Document, text: str) -> None:
     """"Label: items" with the label in bold, as one paragraph."""
     label, _, items = text.partition(": ")
     para = document.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    para.paragraph_format.space_after = Pt(2.5)
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT          # category bold, tools regular, left
+    para.paragraph_format.space_after = Pt(3)
     for value, bold in ((label + ": ", True), (items, False)):
         run = para.add_run(value)
         run.bold = bold
@@ -255,8 +268,8 @@ def _add_skill(document: Document, text: str) -> None:
 
 def _add_subheading(document: Document, text: str) -> None:
     """A grouping inside one job ("Cloud Infrastructure & Scalability")."""
-    para = _add(document, text, bold=True, space_before=5)
-    para.paragraph_format.space_after = Pt(1)
+    para = _add(document, text, bold=True, space_before=2)
+    para.paragraph_format.space_after = Pt(3)
     para.paragraph_format.keep_with_next = True
     return para
 
@@ -273,25 +286,21 @@ def _bullet_width_pt() -> float:
 
 
 def _add_bullet(document: Document, text: str) -> None:
-    """A bullet with a hanging indent, so wrapped text aligns under text.
+    """A bullet at 0.15", its text at 0.30", wrapped lines under the first word.
 
-    A literal "• " rather than a Word list style: list numbering lives in
-    separate numbering XML, which is one of the things weaker parsers drop --
-    and a dropped bullet turns a list into a wall of prose.
+    A literal "•" and a tab rather than a Word list style: list numbering
+    lives in separate numbering XML, which weaker parsers drop. The hanging
+    indent puts every wrapped line at the tab, under the bullet's text.
     """
     para = document.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY      # both edges straight, as the PDF sets it
+    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     fmt = para.paragraph_format
-    # No tab: Quick Look, Pages and Google Docs ignore tab stops and jump to
-    # their own half-inch one, so the first line started far right of the
-    # lines under it. The bullet and an en space, measured in the font, make
-    # the hang. An en space, not no-break spaces: in a justified line Word
-    # stretches those, and the gap after the bullet grew line by line.
-    hang = Pt(_bullet_width_pt())
-    fmt.left_indent = hang
-    fmt.first_line_indent = -hang
-    fmt.space_after = Pt(2.5)
-    run = para.add_run(f"\u2022\u2002{strip_bullet(text)}")
+    fmt.left_indent = BULLET_TEXT_AT
+    fmt.first_line_indent = BULLET_AT - BULLET_TEXT_AT
+    fmt.tab_stops.add_tab_stop(BULLET_TEXT_AT)
+    fmt.space_after = Pt(3)
+    fmt.keep_together = True             # a bullet is not split across pages
+    run = para.add_run(f"\u2022\t{strip_bullet(text)}")
     run.font.name = FONT
     run.font.size = BODY_SIZE
 
@@ -438,7 +447,9 @@ def plan_document(base: Resume, result: TailorResult,
     header = header_lines if header_lines is not None else _base_header(base)
     for i, line in enumerate(header):
         if (line or "").strip():
-            blocks.append(("name" if i == 0 else "contact", line.strip()))
+            # kinds added here: title -- the professional title line, bold.
+            kind = "name" if i == 0 else "contact" if _is_contact_line(line) or "linkedin" in line.lower() else "title"
+            blocks.append((kind, line.strip()))
 
     if result.summary:
         blocks.append(("heading", "Summary"))
@@ -520,10 +531,10 @@ def _arrange(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
     kinds added here: skill -- "Label: items", drawn with the label in bold.
     """
-    head = [b for b in blocks if b[0] in ("name", "contact")]
+    head = [b for b in blocks if b[0] in ("name", "contact", "title")]
     sections: list[list[tuple[str, str]]] = []
     for kind, text in blocks:
-        if kind in ("name", "contact"):
+        if kind in ("name", "contact", "title"):
             continue
         if kind == "heading" or not sections:
             sections.append([])
@@ -540,6 +551,11 @@ def _arrange(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
             # A school, certificate or project the parser took for a label
             # printed bold under one entry and plain under the next. Plain.
             body = [("text", t) if k == "subheading" else (k, t) for k, t in body]
+        if "education" in low:
+            # kinds added here: degree -- "Master of Science <tab> 2023 - 2024",
+            # regular with the years right; school -- the university, bold.
+            body = [("degree", t) if k == "role" else ("school", t) if k == "text" else (k, t)
+                    for k, t in body]
         if any(w in low for w in ("expertise", "practice", "highlight")):
             # "Infrastructure as Code (IaC): Built ..." reads as its skills
             # neighbour does: the label in bold, the work after it.
@@ -746,9 +762,15 @@ def write_tailored_resume(
         if kind == "name":
             name = _add(document, text, bold=True, size=NAME_SIZE,
                         align=WD_ALIGN_PARAGRAPH.CENTER)
-            name.paragraph_format.space_after = Pt(1)
+            name.paragraph_format.space_after = Pt(3)
         elif kind == "contact":
             _add_contact(document, text)
+        elif kind == "title":
+            _add_title(document, text)
+        elif kind == "degree":
+            _add_role(document, text, bold_title=False)
+        elif kind == "school":
+            _add_school(document, text)
         elif kind == "heading":
             _add_heading(document, text)
         elif kind == "role":
@@ -760,7 +782,8 @@ def write_tailored_resume(
         elif kind == "skill":
             _add_skill(document, text)
         else:
-            _add(document, text, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            para = _add(document, text, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            para.paragraph_format.space_after = Pt(3)
 
     document.save(output_path)
     log.info("Wrote ATS-safe resume: %s", output_path)
