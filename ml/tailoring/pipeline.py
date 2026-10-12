@@ -13,11 +13,14 @@ each stage starts so the page can follow along.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from backend.config.loader import PROJECT_ROOT
 
@@ -115,6 +118,10 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         draft.header = [h.replace("LinkedIn", linkedin) if "LinkedIn" in h and "linkedin.com" not in h.lower()
                         else h for h in draft.header]
 
+    # The posting's keywords, bold where the resume says them.
+    from ml.resume import emphasis
+    draft.result.emphasis = emphasis.terms(jd_text, extracted.text, company)
+
     # 6 -- checking the final files
     progress(STAGES[5])
     rendered = documents.produce(draft, folder, model=model, jd_text=jd_text)
@@ -183,7 +190,7 @@ def _bullets(docx: Path) -> list[str]:
 
 
 def _draft_json(draft) -> dict:
-    keep = ("summary", "bullets", "skills_order", "omitted", "gaps", "fitted", "overrides")
+    keep = ("summary", "bullets", "skills_order", "omitted", "gaps", "fitted", "overrides", "emphasis")
     return {"result": {k: getattr(draft.result, k, None) for k in keep}, "header": draft.header}
 
 
@@ -297,6 +304,25 @@ def editable_lines(folder: Path) -> list[dict]:
     return [{"kind": k, "text": t} for k, t in plan_document(draft.base, draft.result, draft.header)]
 
 
+def _emphasis_for(folder: Path, draft) -> list[str]:
+    """Keywords to bold for a run saved before they were kept: from its job's posting."""
+    job = job_of_run(folder)
+    if not job:
+        return []
+    try:
+        import sqlite3
+        from backend.config.loader import PROJECT_ROOT as root
+        from ml.resume import emphasis
+        row = sqlite3.connect(f"file:{root / 'data' / 'jobs.db'}?mode=ro", uri=True).execute(
+            "select title, description, company from jobs where id = ?", (job["job_id"],)).fetchone()
+        if not row:
+            return []
+        return emphasis.terms(f"{row[0]}\n\n{row[1] or ''}", draft.base.text(), row[2])
+    except Exception as exc:
+        log.info("Keywords to bold for %s: %s", folder.name, exc)
+        return []
+
+
 def apply_edits(folder: Path, edits: dict[str, str]) -> dict:
     """The person's edits to the draft: saved, the files written again, and checked again."""
     from ml.tailoring import documents
@@ -307,6 +333,8 @@ def apply_edits(folder: Path, edits: dict[str, str]) -> dict:
         source = next((k for k, v in overrides.items() if v == before), before)
         overrides[source] = (after or "").strip()
     draft.result.overrides = overrides
+    if not getattr(draft.result, "emphasis", None):
+        draft.result.emphasis = _emphasis_for(folder, draft)
     rendered = documents.produce(draft, folder, attempts=1)
     data["files"] = {"docx": rendered.docx.name, "pdf": rendered.pdf.name}
     data["pages"] = {k: [Path(p).name for p in v] for k, v in rendered.pages.items()}

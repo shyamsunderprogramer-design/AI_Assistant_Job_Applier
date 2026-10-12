@@ -285,7 +285,7 @@ def _bullet_width_pt() -> float:
         return 0.85 * BODY_SIZE.pt           # Arial: bullet 0.35em + en space 0.5em
 
 
-def _add_bullet(document: Document, text: str) -> None:
+def _add_bullet(document: Document, text: str, keywords: list[str] | None = None) -> None:
     """A bullet at 0.15", its text at 0.30", wrapped lines under the first word.
 
     A literal "•" and a tab rather than a Word list style: list numbering
@@ -300,9 +300,17 @@ def _add_bullet(document: Document, text: str) -> None:
     fmt.tab_stops.add_tab_stop(BULLET_TEXT_AT)
     fmt.space_after = Pt(3)
     fmt.keep_together = True             # a bullet is not split across pages
-    run = para.add_run(f"\u2022\t{strip_bullet(text)}")
-    run.font.name = FONT
-    run.font.size = BODY_SIZE
+    _emphasised(para, "\u2022\t", strip_bullet(text), keywords)
+
+
+def _emphasised(para, lead: str, text: str, keywords: list[str] | None) -> None:
+    """The text as runs, the posting's keywords in bold (ml/resume/emphasis.py)."""
+    from ml.resume.emphasis import spans
+    for i, (piece, bold) in enumerate(spans(text, keywords or [])):
+        run = para.add_run((lead if i == 0 else "") + piece)
+        run.bold = bold
+        run.font.name = FONT
+        run.font.size = BODY_SIZE
 
 
 def _split_dates(line: str) -> tuple[str, str]:
@@ -757,6 +765,7 @@ def write_tailored_resume(
 
     document = Document()
     _style_document(document)
+    keywords = list(getattr(result, "emphasis", None) or [])
 
     for kind, text in plan_document(base, result, header_lines):
         if kind == "name":
@@ -778,12 +787,14 @@ def write_tailored_resume(
         elif kind == "subheading":
             _add_subheading(document, text)
         elif kind == "bullet":
-            _add_bullet(document, text)
+            _add_bullet(document, text, keywords)
         elif kind == "skill":
             _add_skill(document, text)
         else:
-            para = _add(document, text, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
+            para = document.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             para.paragraph_format.space_after = Pt(3)
+            _emphasised(para, "", text, keywords)
 
     document.save(output_path)
     log.info("Wrote ATS-safe resume: %s", output_path)

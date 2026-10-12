@@ -276,6 +276,12 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
     for name in ("role", "degree"):
         styles[name].tabs = [(text_w, "right")]
 
+    keywords = list(getattr(result, "emphasis", None) or [])
+
+    def emphasised(text: str) -> str:
+        from ml.resume.emphasis import spans
+        return "".join(f"<b>{_escape(p)}</b>" if bold else _escape(p) for p, bold in spans(text, keywords))
+
     story: list[Flowable] = []
     for kind, text in plan_document(base, result, header_lines):
         if kind == "name":
@@ -313,7 +319,7 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
             # The bullet as the paragraph's own mark, not text: justified,
             # the spaces after a text bullet were stretched with the words.
             # Kept whole: a bullet is not split across a page break.
-            story.append(KeepTogether([Paragraph(_escape(text), styles["bullet"], bulletText=BULLET)]))
+            story.append(KeepTogether([Paragraph(emphasised(text), styles["bullet"], bulletText=BULLET)]))
         elif kind == "skill":
             label, _, items = text.partition(": ")
             # The bold face by name: <b> needs a registered font family, and
@@ -321,7 +327,7 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
             story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {_escape(items)}',
                                    styles["skill"]))
         else:
-            story.append(Paragraph(_escape(text), styles["text"]))
+            story.append(Paragraph(emphasised(text), styles["text"]))
 
     doc = BaseDocTemplate(
         str(output_path), pagesize=LETTER,

@@ -201,6 +201,8 @@ class TailorResult:
     fitted: bool = False
     # Lines the person edited in the preview: final text -> their text ("" removes it).
     overrides: dict = field(default_factory=dict)
+    # The posting's keywords to set in bold where the resume says them (ml/resume/emphasis.py).
+    emphasis: list = field(default_factory=list)
 
     @property
     def accepted(self) -> bool:
