@@ -218,3 +218,53 @@ def test_abbreviated_degrees_and_close_fields():
     assert degree_option(options, "Bachelor of Technology") is None        # no "BT": the person picks
     assert _words_in("Computer and Information Science", "Computer Science")
     assert not _words_in("Computer Engineering", "Computer Science")
+
+
+def test_job_titles_from_a_capitals_heading_read_as_written():
+    assert workday._titled("SENIOR DEVOPS ENGINEER") == "Senior DevOps Engineer"
+    assert workday._titled("Site Reliability Engineer") == "Site Reliability Engineer"
+
+
+@pytest.mark.parametrize("value, parts", [
+    ("2025-02", ("02", "2025")), ("2016-11", ("11", "2016")), (2012, ("01", "2012")),
+    ("3/2018", ("03", "2018")), ("", None), ("Present", None)])
+def test_work_dates_become_month_and_year(value, parts):
+    assert workday._month_year(value) == parts
+
+
+def test_the_profiles_own_work_list_wins_over_the_resume(tmp_path):
+    work = [{"title": "Cloud Engineer", "company": "Example Corp", "from": "2016-02", "to": "2018-03"}]
+    assert workday.work_history(Applicant(work=work), tmp_path / "missing.docx") == work
+
+
+def test_no_profile_list_and_no_resume_is_no_jobs(tmp_path):
+    assert workday.work_history(Applicant(), tmp_path / "missing.docx") == []
+
+
+def test_jobs_come_from_the_resume_when_the_profile_has_none(tmp_path, monkeypatch):
+    from types import SimpleNamespace as NS
+    from ml.tailoring import reader, structure
+    facts = {"f1": NS(kind="bullet", text="Built pipelines."), "f2": NS(kind="group", text="CI/CD"),
+             "f3": NS(kind="text", text="Cut MTTR 38% with Prometheus.")}
+    model = NS(entries=[NS(section="experience", title="SENIOR DEVOPS ENGINEER",
+                           employer="DOUBLENE, USA", start="2025-02", end=None, present=True,
+                           facts=["f1", "f2", "f3"])], fact=facts.get)
+    monkeypatch.setattr(reader, "read_document", lambda p: None)
+    monkeypatch.setattr(structure, "build", lambda x: model)
+    resume = tmp_path / "r.docx"; resume.write_text("x")
+    [job] = workday.work_history(Applicant(), resume)
+    assert job == {"title": "Senior DevOps Engineer", "company": "DOUBLENE", "location": "USA",
+                   "from": "2025-02", "to": None, "current": True,
+                   "description": "• Built pipelines.\n• Cut MTTR 38% with Prometheus."}
+
+
+def test_the_persons_own_answers_are_noted_not_the_fillers(page):
+    from backend.apply.greenhouse import FillResult
+    result = FillResult(job_id=1, url="")
+    result.filled["First Name"] = "Jordan"
+    page.fill("#fn", "Jordan")
+    page.fill("#a1", "1 Example Way")            # typed by the person
+    page.check("#pnn", force=True)               # picked by the person
+    workday.note_given(page, result)
+    assert result.given == {"Address Line 1": "1 Example Way",
+                            "Have you previously worked for Acme?": "No"}

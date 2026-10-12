@@ -40,6 +40,7 @@ named, never approximated.
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 from pathlib import Path
@@ -128,7 +129,7 @@ _COLLECT_JS = r"""() => {
       out.push({i: tag(el), kind: 'text', label, value: clean(el.value), required: required(el, label)});
     }
   }
-  return out;
+  return out.map(o => ({...o, eid: (document.querySelector(`[data-ja="${o.i}"]`) || {}).id || ''}));
 }"""
 
 _ERRORS_JS = r"""() => [...document.querySelectorAll(
@@ -248,11 +249,35 @@ def _options(page, selector: str) -> list:
 def _choose_dropdown(page, el, answer: str, label: str = "") -> bool:
     from backend.apply.accounts import _click
     try:
+        # A School list left open read as this dropdown's options: Degree was
+        # offered only "School Not Found". Close any open list first, then read
+        # the one this button controls.
+        # Workday leaves the School list on the page after a pick, and it was
+        # read as Degree's options ("School Not Found"). Only the options that
+        # appear when this dropdown opens are its own.
+        if _options(page, '[role="listbox"]'):
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+        stale = {o.inner_text().strip() for o in _options(page, '[role="option"]')}
         if not _click(page, el):
             log.info("Workday %r: the dropdown would not open", label)
             return False
         page.wait_for_timeout(800)
-        opts = _options(page, '[role="listbox"] [role="option"]')
+        owned = el.get_attribute("aria-controls")
+        opts = _options(page, f'[id="{owned}"] [role="option"]') if owned else []
+        real = '[role="listbox"] [role="option"]:not([data-automation-id="selectedItem"])'
+        if not opts:
+            opts = [o for o in _options(page, real) if o.inner_text().strip() not in stale]
+        if not opts:
+            # The click landed but no list opened (Degree, Abercrombie): a
+            # person would press Enter on the focused field.
+            el.focus()
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(800)
+            opts = [o for o in _options(page, real) if o.inner_text().strip() not in stale]
+        if not opts:
+            log.info("Workday %r: the list did not open", label)
+            return False
         texts = [o.inner_text() for o in opts]
         hit = _pick(texts, answer)
         if hit is None and _bare(label).lower() == "degree":
@@ -326,10 +351,258 @@ def _choose_prompt(page, el, answer: str, label: str = "") -> bool:
             return False
         _click(page, opts[hit])
         page.wait_for_timeout(400)
+        page.keyboard.press("Escape")            # a prompt list stays open after a pick
         return True
     except Exception as exc:
         log.info("Workday prompt %r = %r: %s", label, answer, str(exc).splitlines()[0][:160])
         return False
+
+
+# -- work experience ---------------------------------------------------------------
+
+_CAPS = {"devops": "DevOps", "devsecops": "DevSecOps", "sre": "SRE", "qa": "QA", "it": "IT",
+         "ai": "AI", "ml": "ML", "ui": "UI", "ux": "UX", "hr": "HR", "vp": "VP", "cto": "CTO"}
+
+
+def _titled(text: str) -> str:
+    """"SENIOR DEVOPS ENGINEER" -> "Senior DevOps Engineer"; mixed case is left alone."""
+    if text != text.upper():
+        return text
+    return " ".join(_CAPS.get(w.lower(), w.capitalize()) for w in text.split())
+
+
+def work_history(applicant: Applicant, resume: Path | None) -> list[dict]:
+    """The jobs for Workday's Work Experience, newest first.
+
+    The profile's own `work` list when it has one -- a resume heading says
+    "PR DEPT., GO., AP, IND", and a form wants the employer's real name --
+    else the jobs as the resume states them.
+    """
+    if applicant.work:
+        return applicant.work
+    if resume is None or not Path(resume).exists():
+        return []
+    try:
+        from ml.tailoring.reader import read_document
+        from ml.tailoring.structure import build
+        model = build(read_document(Path(resume)))
+    except Exception as exc:
+        log.info("Workday work experience: could not read the resume (%s)", exc)
+        return []
+    jobs = []
+    for e in model.entries:
+        if e.section != "experience" or not e.start:
+            continue
+        company, _, place = e.employer.rpartition(", ")
+        # The attached (tailored) resume's own lines for this job. From a PDF
+        # they read as "text", not "bullet": Role Description came out empty.
+        facts = [f.text.strip().lstrip("•-* ").strip() for f in (model.fact(i) for i in e.facts)
+                 if f and f.kind in ("bullet", "text")]
+        jobs.append({"title": _titled(e.title), "company": company or e.employer,
+                     "location": place if company else "", "from": e.start,
+                     "to": None if e.present else e.end, "current": e.present,
+                     "description": _description(facts)})
+    return jobs
+
+
+def _description(facts: list[str], limit: int = 1900) -> str:
+    """One bullet per line, whole bullets only, within Workday's box."""
+    out = ""
+    for fact in facts:
+        line = f"• {fact}\n"
+        if len(out) + len(line) > limit:
+            break
+        out += line
+    return out.rstrip()
+
+
+def _month_year(value) -> tuple[str, str] | None:
+    """"2025-02", "02/2025" or 2025 -> ("02", "2025")."""
+    text = str(value or "").strip()
+    m = re.match(r"^(\d{4})(?:-(\d{1,2}))?$", text) or None
+    if m:
+        return (m.group(2) or "01").zfill(2), m.group(1)
+    m = re.match(r"^(\d{1,2})/(\d{4})$", text)
+    return (m.group(1).zfill(2), m.group(2)) if m else None
+
+
+_ADD_JS = r"""([aria, heading, mark]) => {
+  // A section's own Add button: by its label ("Add Work Experience"), else the
+  // Add / Add Another under the section's heading.
+  let b = [...document.querySelectorAll('button')].find(x =>
+      new RegExp(aria, 'i').test(x.getAttribute('aria-label') || ''));
+  if (!b) {
+    const h = [...document.querySelectorAll('h2,h3,h4,[role="heading"],legend')]
+        .find(x => new RegExp('^\\s*' + heading + '\\s*$', 'i').test(x.textContent));
+    let box = h;
+    while (box && !b) {
+      box = box.parentElement;
+      if (!box) break;
+      b = [...box.querySelectorAll('button')].find(x => /^\s*add( another)?\s*$/i.test(x.textContent));
+    }
+  }
+  if (!b) return false;
+  document.querySelectorAll(`[data-ja-add="${mark}"]`).forEach(x => x.removeAttribute('data-ja-add'));
+  b.setAttribute('data-ja-add', mark);
+  return true;
+}"""
+
+
+def _find_add(page, section: str) -> bool:
+    heading = {"work": "work experience", "school": "education"}[section]
+    return bool(page.evaluate(_ADD_JS, [f"add {heading}", heading, section]))
+
+
+
+def _type_date(page, prefix: str, which: str, value) -> bool:
+    parts = _month_year(value)
+    month = page.query_selector(f'[id="{prefix}{which}-dateSectionMonth-input"]')
+    year = page.query_selector(f'[id="{prefix}{which}-dateSectionYear-input"]')
+    if not parts or month is None:
+        return False
+    # The month and year boxes sit under Workday's own display layer, which
+    # takes the click (30 s timeouts at Abercrombie): focus them and type.
+    _human(page, month)
+    month.focus()
+    page.keyboard.type(parts[0], delay=60)
+    if year is not None:
+        year.focus()
+    page.keyboard.type(parts[1], delay=60)
+    return True
+
+
+def fill_work_experience(page, jobs: list[dict], result: FillResult) -> int:
+    """Add each job under Work Experience when the step has the section and no jobs yet.
+
+    Returns how many were added. A job a field would not take is left for the
+    person, named in result.required_blank.
+    """
+    from backend.apply.accounts import _click
+    if not jobs or page.query_selector('input[id$="--jobTitle"], input[name="jobTitle"]'):
+        return 0                                  # no section here, or already filled
+    if not _find_add(page, "work"):
+        return 0
+    added = 0
+    for n, job in enumerate(jobs, 1):
+        if n > 1 and not _find_add(page, "work"):
+            break
+        button = page.query_selector('[data-ja-add="work"]')
+        if button is None or not _click(page, button):
+            break
+        try:
+            page.wait_for_function(
+                f"document.querySelectorAll('input[id$=\"--jobTitle\"]').length >= {n}",
+                timeout=8000)
+        except Exception:
+            log.info("Workday work experience: no new entry appeared after Add")
+            break
+        title = page.query_selector_all('input[id$="--jobTitle"]')[-1]
+        prefix = (title.get_attribute("id") or "")[:-len("jobTitle")]
+        missed = []
+        for key, field in (("title", "jobTitle"), ("company", "companyName"),
+                           ("location", "location"), ("description", "roleDescription")):
+            value = str(job.get(key) or "").strip()
+            el = page.query_selector(f'[id="{prefix}{field}"]')
+            if not value or el is None:
+                if key in ("title", "company") and el is not None:
+                    missed.append(key)
+                continue
+            try:
+                _human(page, el)
+                _type(el, value)
+            except Exception:
+                missed.append(key)
+        current = bool(job.get("current")) or not job.get("to")
+        if current:
+            box = page.query_selector(f'[id="{prefix}currentlyWorkHere"]')
+            if box is not None and not box.is_checked():
+                _click(page, box)
+                page.wait_for_timeout(300)
+        try:
+            if not _type_date(page, prefix, "startDate", job.get("from")):
+                missed.append("from")
+            if not current and not _type_date(page, prefix, "endDate", job.get("to")):
+                missed.append("to")
+        except Exception as exc:
+            log.info("Workday work experience dates: %s", str(exc).splitlines()[0][:160])
+            missed.append("dates")
+        if missed:
+            result.required_blank.append(f"Work Experience {n} ({', '.join(missed)})")
+        result.filled[f"Work Experience {n}"] = f"{job.get('title')} at {job.get('company')}"
+        added += 1
+    log.info("Workday work experience: added %d of %d jobs", added, len(jobs))
+    return added
+
+
+def _type_year(page, el, year) -> bool:
+    text = str(year or "").strip()[:4]
+    if el is None or not re.fullmatch(r"\d{4}", text):
+        return False
+    _human(page, el)
+    el.focus()
+    page.keyboard.type(text, delay=60)
+    return True
+
+
+def fill_education(page, schools: list[dict], result: FillResult) -> int:
+    """Each school in its own Education block, highest first: school, degree,
+    field of study, years. Adds a block per school the form does not show yet.
+
+    Filled entry by entry because every block asks the same questions: filled
+    by label, the second block got the first school's answers.
+    """
+    from backend.apply.accounts import _click
+
+    def blocks():
+        return [el.get_attribute("id")[:-len("school")]
+                for el in page.query_selector_all('input[id^="education-"][id$="--school"]')]
+
+    if not schools or not (blocks() or _find_add(page, "school")):
+        return 0
+    while len(blocks()) < len(schools):
+        had = len(blocks())
+        button = page.query_selector('[data-ja-add="school"]') if _find_add(page, "school") else None
+        if button is None or not _click(page, button):
+            break
+        try:
+            page.wait_for_function(
+                f"document.querySelectorAll('input[id^=\"education-\"][id$=\"--school\"]').length > {had}",
+                timeout=8000)
+        except Exception:
+            log.info("Workday education: no new block appeared after Add")
+            break
+    done = 0
+    for n, (prefix, school) in enumerate(zip(blocks(), schools), 1):
+        missed = []
+        box = page.query_selector(f'[id="{prefix}school"]')
+        wrap = page.query_selector(f'[data-fkit-id="{prefix}school"] [data-automation-id="selectedItem"]')
+        if box is not None and wrap is None and school.get("school"):
+            _human(page, box)
+            if not _choose_prompt(page, box, str(school["school"]), "School or University"):
+                missed.append("school")
+        degree = page.query_selector(f'[id="{prefix}degree"]')
+        if degree is not None and school.get("degree") and \
+                (degree.inner_text().strip().lower() in ("", "select one")):
+            _human(page, degree)
+            if not _choose_dropdown(page, degree, str(school["degree"]), "Degree"):
+                missed.append("degree")
+        field_box = page.query_selector(f'[id="{prefix}fieldOfStudy"]')
+        chosen = page.query_selector(f'[data-fkit-id="{prefix}fieldOfStudy"] [data-automation-id="selectedItem"]')
+        if field_box is not None and chosen is None and school.get("field"):
+            _human(page, field_box)
+            if not _choose_prompt(page, field_box, str(school["field"]), "Field of Study"):
+                missed.append("field of study")
+        for key, which in (("from", "firstYearAttended"), ("to", "lastYearAttended")):
+            el = page.query_selector(f'[id="{prefix}{which}-dateSectionYear-input"]')
+            if el is not None and not (el.input_value() or "").strip():
+                if not _type_year(page, el, school.get(key)):
+                    missed.append(key)
+        if missed:
+            result.required_blank.append(f"Education {n} ({', '.join(missed)})")
+        result.filled[f"Education {n}"] = f"{school.get('degree')}, {school.get('school')}"
+        done += 1
+    log.info("Workday education: filled %d of %d", done, len(schools))
+    return done
 
 
 def _upload(page, el, path: Path) -> bool:
@@ -368,8 +641,51 @@ def _check_radio(page, tag: str) -> bool:
     return False
 
 
+def _human(page, el) -> None:
+    """Bring a field into view and pause, as a person would before touching it.
+
+    Filled in one pass at machine speed, the page jumped up and down as each
+    field scrolled itself into view, radios last of all, back at the top.
+    """
+    try:
+        el.scroll_into_view_if_needed(timeout=3000)
+    except Exception:
+        pass
+    page.wait_for_timeout(random.randint(250, 550))
+
+
+def _type(el, text: str) -> None:
+    """Short answers typed key by key; a long description pasted, as people do."""
+    if len(text) <= 80:
+        el.fill("")
+        el.type(text, delay=random.randint(25, 45))
+    else:
+        el.fill(text)
+
+
+def note_given(page, result: FillResult) -> None:
+    """Keep the answers the person typed or picked on this step, by question.
+
+    Only theirs: what this tool filled is in result.filled, and the job and
+    school entries are the profile's, not answers. answers.remember decides
+    later which are short and general enough to reuse.
+    """
+    try:
+        fields = page.evaluate(_COLLECT_JS) or []
+    except Exception:
+        return
+    for f in fields:
+        label = _bare(f.get("label") or "")
+        if (not label or not f.get("value") or f["kind"] in ("file", "checkbox")
+                or f.get("eid", "").startswith(("workExperience-", "education-"))
+                or label[:60] in result.filled):
+            continue
+        result.given[label] = f["option"] if f["kind"] == "radio" else f["value"]
+
+
 def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResult) -> list[str]:
-    """Fill what this step asks that the profile answers. Returns what is left for the person."""
+    """Fill what this step asks that the profile answers, top to bottom, one field
+    at a time. Returns what is left for the person."""
     if signing_in(page):
         return []                    # an account page is never filled, whatever its fields
     fields = page.evaluate(_COLLECT_JS) or []
@@ -378,11 +694,19 @@ def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResul
     for f in fields:
         if f["kind"] == "radio":
             radios.setdefault(f["name"] or f["label"], []).append(f)
+    for f in fields:
+        if f["kind"] == "radio":
+            group = radios.pop(f["name"] or f["label"], None)
+            if group:                                 # the whole question, where it first appears
+                _fill_radio(page, group, applicant, result, waiting)
             continue
         el = page.query_selector(f'[data-ja="{f["i"]}"]')
         label = _bare(f["label"])
         if el is None:
             continue
+        if f.get("eid", "").startswith("workExperience-") or \
+                (applicant.education and f.get("eid", "").startswith("education-")):
+            continue                              # fill_work_experience / fill_education
         if f["kind"] == "file":
             other = any(w in label.lower() for w in ("cover", "transcript", "other", "additional"))
             already = any(a.startswith("resume=") for a in result.attachments)
@@ -411,12 +735,13 @@ def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResul
             continue
         done = False
         try:
+            _human(page, el)
             if f["kind"] == "dropdown":
                 done = _choose_dropdown(page, el, answer, label)
             elif f["kind"] == "prompt":
                 done = _choose_prompt(page, el, answer, label)
             else:
-                el.fill(answer)
+                _type(el, answer)
                 done = True
         except Exception as exc:
             log.debug("Workday field %r: %s", label, exc)
@@ -425,30 +750,35 @@ def fill_step(page, applicant: Applicant, resume: Path | None, result: FillResul
         elif f["required"]:
             result.required_blank.append(label[:60])
             waiting.append(label[:60])
-
-    for group in radios.values():
-        label = _bare(group[0]["label"])
-        if any(r["value"] for r in group):
-            continue
-        answer = value_for(label, applicant)
-        hit = None if answer is None else _pick([r["option"] for r in group], answer)
-        if hit is None:
-            if _is_declaration(label):
-                result.declarations.append(label[:90])
-                waiting.append(label[:60])
-            elif group[0]["required"]:
-                result.required_blank.append(label[:60])
-                waiting.append(label[:60])
-            else:
-                result.left_blank.append(label[:60])
-            continue
-        if _check_radio(page, group[hit]["i"]):
-            result.filled[label[:60]] = answer
-        else:
-            if group[0]["required"]:
-                result.required_blank.append(label[:60])
-            waiting.append(label[:60])
     return waiting
+
+
+def _fill_radio(page, group: list[dict], applicant: Applicant, result: FillResult,
+                waiting: list[str]) -> None:
+    label = _bare(group[0]["label"])
+    if any(r["value"] for r in group):
+        return
+    answer = value_for(label, applicant)
+    hit = None if answer is None else _pick([r["option"] for r in group], answer)
+    if hit is None:
+        if _is_declaration(label):
+            result.declarations.append(label[:90])
+            waiting.append(label[:60])
+        elif group[0]["required"]:
+            result.required_blank.append(label[:60])
+            waiting.append(label[:60])
+        else:
+            result.left_blank.append(label[:60])
+        return
+    el = page.query_selector(f'[data-ja="{group[hit]["i"]}"]')
+    if el is not None:
+        _human(page, el)
+    if _check_radio(page, group[hit]["i"]):
+        result.filled[label[:60]] = answer
+    else:
+        if group[0]["required"]:
+            result.required_blank.append(label[:60])
+        waiting.append(label[:60])
 
 
 # -- the wizard --------------------------------------------------------------------
@@ -601,12 +931,14 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
                     "in Settings and I'll do this for you next time.")
                 told.add("signin")
         elif on_review(page):
+            note_given(page, result)
             if not reached_review:
                 reached_review = True
                 _shot(page, evidence, "review")
                 say("   On the Review page — check it and press Submit. "
                     "Close the tab to skip this one.")
         else:
+            note_given(page, result)                 # before the person moves on
             step = current_step(page) or "form"
             if step not in done_steps and len(done_steps) < STEP_LIMIT:
                 page.wait_for_timeout(1500)          # let the step finish drawing
@@ -618,6 +950,8 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
                     page.wait_for_timeout(POLL_MS)
                     continue
                 done_steps.add(step)
+                fill_work_experience(page, work_history(applicant, resume), result)
+                fill_education(page, applicant.education, result)
                 waiting = fill_step(page, applicant, resume, result)
                 _shot(page, evidence, step)
                 if waiting:
@@ -663,5 +997,7 @@ def _shot(page, evidence: Path, step: str) -> None:
     try:
         name = re.sub(r"[^a-z0-9]+", "-", step.lower()).strip("-") or "step"
         page.screenshot(path=str(evidence / f"workday-{name}.png"), full_page=True)
+        # The page as drawn, for working out a tenant's fields after the fact.
+        (evidence / f"workday-{name}.html").write_text(page.content())
     except Exception as exc:
         log.debug("Workday screenshot: %s", exc)

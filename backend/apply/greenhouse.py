@@ -123,6 +123,7 @@ class FillResult:
     submitted: bool = False
     screenshot: str | None = None
     error: str | None = None
+    given: dict[str, str] = field(default_factory=dict)   # the person's own answers, by question
 
     @property
     def ok(self) -> bool:

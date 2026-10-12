@@ -53,6 +53,7 @@ class Applicant:
     demographics: dict = field(default_factory=dict)
     apply: dict = field(default_factory=dict)
     education: list = field(default_factory=list)      # highest first: school, degree, field, from, to
+    work: list = field(default_factory=list)           # newest first: title, company, location, from, to, current, description
     # The person's own answers to screening questions (backend/apply/answers.py).
     answers: dict = field(default_factory=dict)
     path: str | None = None
@@ -227,6 +228,7 @@ def load(path=None) -> Applicant:
         demographics=data.get("demographics") or {},
         apply=data.get("apply") or {},
         education=[e for e in data.get("education") or [] if isinstance(e, dict)],
+        work=[w for w in data.get("work") or [] if isinstance(w, dict)],
         answers=_answer_bank(),
         path=str(target),
     )

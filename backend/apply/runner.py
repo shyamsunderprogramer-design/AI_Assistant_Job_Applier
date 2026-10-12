@@ -391,7 +391,7 @@ def _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter, resum
         outcome.detail = result.error or ""
         return outcome
     _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter,
-            result, evidence, {})
+            result, evidence, result.given)
     return outcome
 
 
@@ -425,3 +425,8 @@ def _settle(outcome, job, verdict, how, url, kept, resume_note, letter, result, 
                 say(f"   Kept {len(learned)} of your answers for next time: " + "; ".join(learned[:4]))
     else:
         say("   No submission in the time allowed — moving on; it stays in the queue.")
+        if answers:                     # what was typed before time ran out is still theirs
+            from backend.apply.answers import remember
+            learned = remember(answers, company=job.company)
+            if learned:
+                say(f"   Kept {len(learned)} of your answers for next time: " + "; ".join(learned[:4]))
