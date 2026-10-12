@@ -83,8 +83,8 @@ def test_every_role_and_date_survives():
 
 
 def test_each_role_keeps_at_least_two_bullets_even_when_irrelevant():
-    """An old role the posting barely needs still shows two lines of work."""
-    base, result, _ = fit(max_pages=1, per_page=10)
+    """On two pages, an old role the posting barely needs still shows two lines of work."""
+    base, result, _ = fit(max_pages=2, per_page=5)
     kept = [t for k, t in plan_document(base, result) if k == "bullet"]
     globex = ["Spark pipelines", "Oracle stored", "Airflow", "printer fleet"]
     assert sum(any(g in b for g in globex) for b in kept) >= 2
@@ -170,3 +170,33 @@ def test_proof_gives_way_when_the_page_limit_cannot_be_met_otherwise():
     every = [{l.lstrip("- ")} for l in MASTER.splitlines() if l.startswith("- ")]
     base, result = parse_text(MASTER), TailorResult(summary=None)
     assert fit_to_pages(base, result, JD, max_pages=2, pages=pages_of(60), proof=every) <= 2
+
+
+def test_length_by_experience_and_by_choice():
+    from types import SimpleNamespace as NS
+    from ml.resume.fit import length_for_years, page_range, years_of_experience
+    assert [length_for_years(y) for y in (1, 5, 14, None)] == ["1", "2", "3-4", "3-4"]
+    assert page_range("1", years=14) == (1, 1)            # the person's choice wins
+    assert page_range("2") == (1, 2)
+    assert page_range("auto", years=2) == (1, 1)
+    assert page_range("auto", years=11) == (3, 4)
+    jobs = [NS(section="experience", start="2012-05"), NS(section="education", start="2008-07"),
+            NS(section="experience", start="2018-04")]
+    years = years_of_experience(jobs)
+    assert 13 < years < 20                                 # from the first job, not the first degree
+    assert years_of_experience([]) is None
+
+
+
+def test_one_page_keeps_the_newest_job_fullest_and_older_ones_shortest():
+    """One page: the newest job keeps two bullets, the one before it at least one."""
+    from ml.resume.fit import role_floor
+    floor = role_floor(1)
+    assert [floor(r) for r in (0, 1, 2, 5)] == [2, 1, 0, 0]
+    assert role_floor(2)(4) == 2 and role_floor(4)(4) == 3
+    base, result, _ = fit(max_pages=1, per_page=10)
+    kept = [t for k, t in plan_document(base, result) if k == "bullet"]
+    globex = ["Spark pipelines", "Oracle stored", "Airflow", "printer fleet"]
+    assert sum(any(g in b for g in globex) for b in kept) >= 1
+    roles = [t for k, t in plan_document(base, result) if k == "role"]
+    assert any("GLOBEX" in r for r in roles)                 # the job itself is never cut

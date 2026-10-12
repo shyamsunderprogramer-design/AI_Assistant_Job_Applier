@@ -32,6 +32,11 @@
     </div>
   </div>
   <div class="row" style="margin-top:14px">
+    <label class="hint" for="length">Length</label>
+    <select id="length" class="chip" title="How many pages the tailored resume may use">
+      <option value="auto" selected>Automatic (by your experience)</option>
+      <option value="1">1 page</option><option value="2">2 pages</option><option value="3-4">3–4 pages</option>
+    </select>
     <button class="btn primary" id="create">Create tailored resume</button>
     <span class="hint" id="create-hint">Takes about five to ten minutes: Claude reads the posting, judges the evidence and writes the draft.</span>
   </div>
@@ -157,6 +162,7 @@ $('create').onclick = async () => {
   else if (SAVED) form.append('use_saved', '1');
   if ($('jd-file').files[0]) form.append('jd_file', $('jd-file').files[0]);
   form.append('jd_text', $('jd-text').value);
+  form.append('length', $('length').value);
   $('create').disabled = true;
   let r;
   try { r = await (await fetch('/tailor/start', {method: 'POST', body: form})).json(); }
@@ -506,6 +512,13 @@ if (opened) { RUN = opened; $('progress').hidden = false; follow(); }
 // are both here, so the run starts without another press.
 if ({{ 'true' if autostart else 'false' }} && !new URLSearchParams(location.search).get('run')) $('create').click();
 
+function lengthNote(L) {
+  if (!L || !L.pages) return '';
+  const [lo, hi] = L.pages, range = lo === hi ? `${hi} page${hi > 1 ? 's' : ''}` : `${lo}–${hi} pages`;
+  return L.choice === 'auto' || !L.choice
+    ? `${range}, chosen for ${L.years != null ? Math.round(L.years) + ' years of' : 'your'} experience`
+    : `${range}, as you chose`;
+}
 // Before -> after: the original resume and the tailored one, measured the same way.
 function beforeAfter(d) {
   const ba = d.before_after;
@@ -522,7 +535,7 @@ function beforeAfter(d) {
     ${row('ATS keyword match', ba.ats, 'How many of the posting\'s keywords the resume text contains — what an ATS scans for')}
     ${row('Requirements named word for word', ba.requirements, 'Requirements the resume names outright, counted by the same strict rules on both. Requirements met below also credits related work, as the AI reads it.')}
     ${ba.pages ? `<div class="ba-row" title="The whole resume, then the tailored one, in the same layout"><span class="ba-label">Length</span>
-      <span class="ba-num">${ba.pages[0]} pages</span><span class="ba-arrow">→</span><b class="ba-num">${ba.pages[1]} pages</b><span></span></div>` : ''}
+      <span class="ba-num">${ba.pages[0]} pages</span><span class="ba-arrow">→</span><b class="ba-num">${ba.pages[1]} pages</b><span class="hint">${lengthNote(d.length)}</span></div>` : ''}
     <div class="ba-foot">${ba.rewritten} line(s) rewritten in the posting's words · ${ba.rounds} round(s), aiming for ${ba.target}%</div></div>`;
 }
 

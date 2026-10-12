@@ -129,7 +129,7 @@ def keep_required_wording(result, report) -> list[str]:
 
 
 def create(resume_path, jd_text: str, report, cfg=None, max_pages: int | None = None, use_model: bool = True,
-           extra: str = "", focus: list[str] | None = None) -> Draft:
+           extra: str = "", focus: list[str] | None = None, min_pages: int | None = None) -> Draft:
     from ml.resume.fit import fit_to_pages, page_limits
     from ml.resume.parser import parse_resume
     from ml.resume.tailor import TailorResult, tailor_resume
@@ -163,6 +163,7 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int | None = 
     draft.model_omitted = list(result.omitted or [])
     fewest, most = page_limits(cfg)
     max_pages = most if max_pages is None else max_pages
+    fewest = fewest if min_pages is None else min_pages
     draft.max_pages, draft.min_pages = max_pages, min(fewest, max_pages)
     if max_pages:
         try:

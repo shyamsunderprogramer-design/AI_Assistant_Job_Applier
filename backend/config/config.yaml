@@ -48,6 +48,11 @@ resume:
   # min_pages. An experienced candidate shows their range: 3 to 4.
   max_pages: 4
   min_pages: 3
+  # How long a tailored resume is when the tailoring page does not say:
+  # "auto" decides by the resume's own years of experience (under 3: 1 page,
+  # under 8: 2 pages, else 3-4); or "1", "2", "3-4". With no years to go on,
+  # max_pages and min_pages above decide.
+  length: auto
   # Re-tailor a job that already has an output file?
   overwrite: false
 

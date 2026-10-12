@@ -44,7 +44,8 @@ def new_run() -> Path:
 
 
 def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None = None, cfg=None,
-        progress=lambda stage, note="": None, use_model: bool = True, company: str | None = None) -> dict:
+        progress=lambda stage, note="": None, use_model: bool = True, company: str | None = None,
+        length: str | None = None) -> dict:
     from ml.tailoring import documents, draft as drafting, matching, requirements, versions
     from ml.tailoring.reader import ReadError, read_document
     from ml.tailoring.structure import build
@@ -75,6 +76,10 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     if not model.facts or not model.entries:
         raise StageError(STAGES[1], "No work history could be found in the resume. Check that it is the "
                                     "right file, or upload a .docx.", "resume")
+    # How long: the person's choice, or by their experience (ml/resume/fit.py).
+    from ml.resume.fit import page_range, years_of_experience
+    years = years_of_experience(model.entries)
+    fewest, most = page_range(length, years, cfg)
 
     # The recruiter's read of the original (review.py) runs beside stages 3-4:
     # its own model call, so it costs no extra wait. Advice; never a blocker.
@@ -113,7 +118,7 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     draft, ats, rounds_used = rounds.best_draft(
         lambda extra, focus: drafting.create(resume_file, jd_text, report, cfg, use_model=use_model,
                                              extra="\n\n".join(x for x in (review_extra, extra) if x),
-                                             focus=focus),
+                                             focus=focus, max_pages=most, min_pages=fewest),
         jd_text, progress=lambda note: progress(STAGES[4], note), rounds=rounds.ROUNDS if use_model else 1,
         company=company, refit=lambda d, focus: drafting.refit(d, jd_text, report, focus))
     # A header that says "LinkedIn" as a linked word keeps the link: the
@@ -155,6 +160,8 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         "pages": {k: [Path(p).name for p in v] for k, v in rendered.pages.items()},
         "score": report.score,
         "before_after": before_after,
+        "length": {"choice": length or (cfg.get("resume.length", "auto") if cfg is not None else "auto"),
+                   "years": years, "pages": [fewest, most]},
         "score_note": ("The builder's estimate: required items weigh 3 and preferred 1; a direct match "
                        "counts 1.0 and a related one 0.5. 100% means every identified requirement is "
                        "directly shown under these rules — not a guaranteed result from an employer's ATS."),
@@ -258,7 +265,7 @@ def _progress(folder: Path, **state) -> None:
 
 
 def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, cfg,
-          after=None, company: str | None = None) -> None:
+          after=None, company: str | None = None, length: str | None = None) -> None:
     """Run in the background; the page follows progress.json.
 
     `after(result)` runs once the files are made and before the run reads as
@@ -271,7 +278,8 @@ def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, c
 
     def work():
         try:
-            result = run(folder, resume_file, jd_text, jd_file, cfg, progress=follow, company=company)
+            result = run(folder, resume_file, jd_text, jd_file, cfg, progress=follow, company=company,
+                         length=length)
             if after is not None:
                 after(result)
             _progress(folder, stage=len(STAGES), done=True, note="")

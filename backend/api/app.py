@@ -2360,7 +2360,10 @@ def tailor_start():
         _, jd_path = save_inputs(folder, None, jd_file if has_jd_file else None)
     else:
         resume_path, jd_path = save_inputs(folder, resume, jd_file if has_jd_file else None)
-    start(folder, resume_path, jd_text, jd_path, cfg())
+    length = request.form.get("length") or None
+    if length not in (None, "auto", "1", "2", "3-4"):
+        length = None
+    start(folder, resume_path, jd_text, jd_path, cfg(), length=length)
     return jsonify(ok=True, run=folder.name)
 
 

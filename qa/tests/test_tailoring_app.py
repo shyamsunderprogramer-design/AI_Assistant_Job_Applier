@@ -87,7 +87,7 @@ def client(monkeypatch, tmp_path):
     from backend.api import app as webapp
     monkeypatch.setattr(pipeline, "RUNS", tmp_path / "runs")
     started = []
-    monkeypatch.setattr(pipeline, "start", lambda *a: started.append(a))
+    monkeypatch.setattr(pipeline, "start", lambda *a, **k: started.append(a))
     monkeypatch.setattr(webapp, "cfg", lambda: None)
     c = webapp.app.test_client()
     c.started = started

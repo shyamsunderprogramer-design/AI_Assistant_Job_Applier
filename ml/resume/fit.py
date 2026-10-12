@@ -46,6 +46,45 @@ MIN_BULLETS_PER_ROLE = 2
 MIN_BULLETS_ROOMY = 3
 
 
+# The person's choice of length, as (fewest, most) pages. "auto" decides by experience.
+LENGTHS = {"1": (1, 1), "2": (1, 2), "3-4": (3, 4)}
+
+
+def length_for_years(years: float | None) -> str:
+    """How long a resume this much experience earns: one page early on, two in
+    the middle, three to four for a senior career whose tools a recruiter reads."""
+    if years is None:
+        return "3-4"
+    return "1" if years < 3 else "2" if years < 8 else "3-4"
+
+
+def years_of_experience(entries) -> float | None:
+    """From the first job's start to now, off the resume's experience entries ("YYYY-MM")."""
+    from datetime import date
+    starts = [e.start for e in entries or [] if getattr(e, "section", "") == "experience" and getattr(e, "start", None)]
+    if not starts:
+        return None
+    first = min(starts)
+    try:
+        y, m = int(first[:4]), int(first[5:7] or 1)
+    except ValueError:
+        return None
+    today = date.today()
+    return round((today.year - y) + (today.month - m) / 12, 1)
+
+
+def page_range(length: str | None, years: float | None = None, cfg=None) -> tuple[int, int]:
+    """(fewest, most) pages for one tailoring: a chosen length, or "auto" by experience.
+
+    With neither a choice nor the years, Settings decides (page_limits)."""
+    choice = (length or (cfg.get("resume.length", "auto") if cfg is not None else "auto") or "auto").strip()
+    if choice in LENGTHS:
+        return LENGTHS[choice]
+    if years is not None:
+        return LENGTHS[length_for_years(years)]
+    return page_limits(cfg)
+
+
 def page_limits(cfg) -> tuple[int, int]:
     """(fewest, most) pages for a tailored resume, from Settings: 3 to 4 by default.
 
@@ -253,13 +292,45 @@ def _key(text: str) -> str:
     return " ".join((text or "").lower().lstrip("-•*·▪◦–— ").split())[:80]
 
 
-def _protected(line: Line, dropped: set[str], lines: list[Line], floor: int | None = None) -> bool:
-    """Would dropping this take a role below its minimum?"""
-    if line.role is None or line.children is not None:
+def role_floor(max_pages: int):
+    """The fewest bullets each job keeps, by how recent it is (0 = the newest).
+
+    Three to four pages: three each, so older roles keep the tools that explain
+    them. Two pages: two each. One page: the newest job two, the one before it
+    one, and older jobs their title and dates alone -- a one-page resume for a
+    long career shows the whole history and spends its space on the recent work.
+    """
+    if max_pages >= 3:
+        return lambda role: MIN_BULLETS_ROOMY
+    if max_pages == 2:
+        return lambda role: MIN_BULLETS_PER_ROLE
+    return lambda role: (2, 1)[role] if role is not None and role < 2 else 0
+
+
+SKILL_ROWS_KEPT = 3     # a skills section is the most keyword-dense part of a short resume
+
+
+def _is_skills(section: str) -> bool:
+    low = (section or "").lower()
+    return any(w in low for w in ("skill", "competenc", "technolog"))
+
+
+def _protected(line: Line, dropped: set[str], lines: list[Line], floor=None) -> bool:
+    """Would dropping this take a role below its minimum, or the skills section
+    below SKILL_ROWS_KEPT rows? `floor` is a number, or a function of the role's
+    index (role_floor)."""
+    if line.children is not None:
         return False
+    if line.role is None:
+        if not _is_skills(line.section):
+            return False
+        kept = [l for l in lines if l.section == line.section and l.role is None
+                and l.children is None and l.text not in dropped]
+        return line.text in {l.text for l in kept} and len(kept) <= SKILL_ROWS_KEPT
+    least = floor(line.role) if callable(floor) else (MIN_BULLETS_PER_ROLE if floor is None else floor)
     kept = [l for l in lines if l.role == line.role and l.children is None
             and not _is_list(l.text) and l.text not in dropped]
-    return line.text in {l.text for l in kept} and len(kept) <= (floor or MIN_BULLETS_PER_ROLE)
+    return line.text in {l.text for l in kept} and len(kept) <= least
 
 
 def _with_labels(dropped: set[str], lines: list[Line]) -> set[str]:
@@ -313,7 +384,7 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
     """
     if max_pages <= 0:
         return pages(base, result)
-    per_role = MIN_BULLETS_ROOMY if max_pages >= 3 else MIN_BULLETS_PER_ROLE
+    per_role = role_floor(max_pages)
     floor = 0.25 / math.sqrt(6) * 1.5 * 1.25 * 1.3   # the most a no-match line can score
     weights = posting_terms(jd_text or "", requirements, company)
     # Terms "Align closer" asked for outweigh everything else, so the line
@@ -322,6 +393,16 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
         weights[term.lower()] = max(weights.values() or [1.0]) * 3
     lines = candidates(base, result, weights)
     by_text = {l.text: l for l in lines}
+    short_summary: set[str] = set()
+    if max_pages == 1 and not getattr(result, "summary", None):
+        # One page has room for one paragraph of summary: the master's first.
+        # Even a paragraph that is evidence: the experience below says it again.
+        # The summary is never a trim candidate (KEEP_SECTIONS), so it is read here.
+        for section in base.sections:
+            if section.heading.strip().lower().startswith(("summary", "objective", "profile")):
+                paragraphs = [l.strip() for l in section.lines if l.strip()]
+                short_summary = set(paragraphs[1:])
+                break
     keys = {_key(k) for k in keep or ()}
     evidence = {l.text for l in lines if _key(l.text) in keys}
     # Each required item's proof, as the candidate lines that carry it.
@@ -343,8 +424,10 @@ def fit_to_pages(base, result, jd_text: str, *, requirements: str | None = None,
         if not _protected(line, dropped, lines, per_role):
             dropped.add(line.text)
 
+    dropped |= short_summary
     reasons = {(e.get("original") or "").strip(): e.get("reason", "")
                for e in result.omitted if isinstance(e, dict)}
+    reasons.update({t: "One page: the summary keeps its first paragraph." for t in short_summary})
 
     def apply() -> None:
         final = _with_labels(dropped, lines)
