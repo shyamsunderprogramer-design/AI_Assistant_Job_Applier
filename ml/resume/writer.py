@@ -253,17 +253,17 @@ def _hyperlink(para, shown: str, url: str) -> None:
     para._p.append(link)
 
 
-def _add_skill(document: Document, text: str) -> None:
-    """"Label: items" with the label in bold, as one paragraph."""
+def _add_skill(document: Document, text: str, keywords: list[str] | None = None) -> None:
+    """"Label: items" with the label in bold and the posting's tools bold among the items."""
     label, _, items = text.partition(": ")
     para = document.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.LEFT          # category bold, tools regular, left
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
     para.paragraph_format.space_after = Pt(3)
-    for value, bold in ((label + ": ", True), (items, False)):
-        run = para.add_run(value)
-        run.bold = bold
-        run.font.name = FONT
-        run.font.size = BODY_SIZE
+    run = para.add_run(label + ": ")
+    run.bold = True
+    run.font.name = FONT
+    run.font.size = BODY_SIZE
+    _emphasised(para, "", items, keywords)
 
 
 def _add_subheading(document: Document, text: str) -> None:
@@ -789,7 +789,7 @@ def write_tailored_resume(
         elif kind == "bullet":
             _add_bullet(document, text, keywords)
         elif kind == "skill":
-            _add_skill(document, text)
+            _add_skill(document, text, keywords)
         else:
             para = document.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY

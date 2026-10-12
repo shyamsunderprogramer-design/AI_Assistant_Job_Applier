@@ -324,7 +324,7 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
             label, _, items = text.partition(": ")
             # The bold face by name: <b> needs a registered font family, and
             # without one the label silently came out in the regular weight.
-            story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {_escape(items)}',
+            story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {emphasised(items)}',
                                    styles["skill"]))
         else:
             story.append(Paragraph(emphasised(text), styles["text"]))
