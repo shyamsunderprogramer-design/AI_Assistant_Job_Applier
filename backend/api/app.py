@@ -2426,6 +2426,54 @@ def tailor_lines(run_id):
     return jsonify(ok=True, lines=editable_lines(folder))
 
 
+@app.get("/tailor/<run_id>/keywords")
+def tailor_keywords(run_id):
+    """The posting's keywords: shown and where, lost in tailoring, or not on the resume."""
+    from ml.tailoring.pipeline import keywords_for
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    try:
+        return jsonify(ok=True, **keywords_for(folder))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+
+
+@app.post("/tailor/<run_id>/keywords/check")
+def tailor_keywords_check(run_id):
+    """What unsaved edits would do to the keywords: which would be lost, and the coverage."""
+    from ml.tailoring.pipeline import check_keyword_edits
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    edits = (request.get_json(silent=True) or {}).get("edits") or {}
+    edits = {str(k): str(v) for k, v in edits.items()}
+    try:
+        return jsonify(ok=True, **check_keyword_edits(folder, edits))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+
+
+@app.post("/tailor/<run_id>/restore")
+def tailor_restore(run_id):
+    """Put back one line of the master that the tailoring cut or rewrote."""
+    from ml.tailoring.pipeline import restore_line
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    line = str((request.get_json(silent=True) or {}).get("line") or "").strip()
+    if not line:
+        return jsonify(ok=False, error="No line given."), 400
+    try:
+        data = restore_line(folder, line)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+    data.pop("folder", None)
+    return jsonify(ok=True, **data)
+
+
 @app.post("/tailor/<run_id>/edit")
 def tailor_edit(run_id):
     from ml.tailoring.pipeline import apply_edits

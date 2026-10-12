@@ -63,6 +63,11 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     if len((jd_text or "").split()) < 15:
         raise StageError(STAGES[0], "The job description is empty or too short to analyse. Paste the "
                                     "full posting or upload it as a file.", "job")
+    # Kept with the run: the keyword tracker reads it again after every edit.
+    (folder / "inputs").mkdir(parents=True, exist_ok=True)
+    (folder / "inputs" / "job.txt").write_text(jd_text)
+    if company:
+        (folder / "inputs" / "company.txt").write_text(company)
 
     # 2 -- extracting resume information
     progress(STAGES[1])
@@ -323,6 +328,120 @@ def _emphasis_for(folder: Path, draft) -> list[str]:
         return []
 
 
+# -- keywords ------------------------------------------------------------------------
+
+def run_posting(folder: Path) -> tuple[str, str | None]:
+    """(posting text, company) for a run: saved with it, else its saved job's."""
+    inputs = folder / "inputs"
+    company = (inputs / "company.txt").read_text().strip() if (inputs / "company.txt").exists() else None
+    if (inputs / "job.txt").exists():
+        return (inputs / "job.txt").read_text(), company
+    for other in inputs.glob("job.*"):
+        try:
+            from ml.tailoring.reader import read_document
+            return read_document(other).text, company
+        except Exception:
+            pass
+    job = job_of_run(folder)
+    if job:
+        try:
+            import sqlite3
+            from backend.config.loader import PROJECT_ROOT as root
+            row = sqlite3.connect(f"file:{root / 'data' / 'jobs.db'}?mode=ro", uri=True).execute(
+                "select title, description, company from jobs where id = ?", (job["job_id"],)).fetchone()
+            if row:
+                return f"{row[0]}\n\n{row[1] or ''}", company or row[2]
+        except Exception as exc:
+            log.info("Posting for %s: %s", folder.name, exc)
+    return "", company
+
+
+def _texts(folder: Path) -> tuple[str, str]:
+    """(master resume text, tailored resume text) for a run."""
+    from ml.tailoring.reader import read_document
+    master = next((folder / "inputs").glob("resume.*"))
+    return read_document(master).text, read_document(folder / "tailored-resume.docx").text
+
+
+def keywords_for(folder: Path) -> dict:
+    from ml.tailoring import keywords
+    jd, company = run_posting(folder)
+    if not jd:
+        return {"keywords": [], "counts": {}, "coverage": None,
+                "note": "This run's job posting was not kept, so its keywords cannot be listed."}
+    try:
+        master, tailored = _texts(folder)
+    except (StopIteration, FileNotFoundError):
+        return {"keywords": [], "counts": {}, "coverage": None,
+                "note": "This run did not keep a copy of the resume it started from, so lost "
+                        "keywords cannot be found. Tailor again from this page to see them."}
+    return keywords.track(master, tailored, jd, company)
+
+
+def check_keyword_edits(folder: Path, edits: dict[str, str]) -> dict:
+    from ml.tailoring import keywords
+    jd, company = run_posting(folder)
+    if not jd:
+        return {"lost": [], "gained": [], "by_line": {}}
+    return keywords.check_edits(_texts(folder)[1], edits, jd, company)
+
+
+def _rescore(folder: Path, data: dict) -> None:
+    """The ATS match of the resume as it now is, after the person's change."""
+    jd, company = run_posting(folder)
+    if not jd:
+        return
+    from ml.resume.ats import compare
+    master, tailored = _texts(folder)
+    ats = compare(master, tailored, jd, company=company)
+    ba = data.setdefault("before_after", {})
+    ba["ats"] = [ats["before"], ats["after"]]
+    ba["pages"] = [(ba.get("pages") or [None])[0], len(data.get("pages", {}).get("pdf", []))]
+
+
+def restore_line(folder: Path, line: str) -> dict:
+    """Put one of the master's lines back: undo the cut, or the rewrite, that removed it.
+
+    For a keyword the tailoring lost. The line is the person's own, word for
+    word, so nothing new is claimed; the resume may grow by a line.
+    """
+    from ml.resume.parser import strip_bullet
+    from ml.tailoring import documents
+    draft, data = load_draft(folder)
+    want = strip_bullet(line.strip())
+    same = lambda text: strip_bullet((text or "").strip()) == want
+    omitted = [e for e in (draft.result.omitted or [])
+               if not (isinstance(e, dict) and same(e.get("original")))]
+    bullets = [b for b in (draft.result.bullets or []) if not same(b.get("original"))]
+    if len(omitted) == len(draft.result.omitted or []) and len(bullets) == len(draft.result.bullets or []):
+        raise ValueError("That line is not one the tailoring removed or rewrote.")
+    draft.result.omitted, draft.result.bullets = omitted, bullets
+    rendered = documents.produce(draft, folder, attempts=1)
+    data["files"] = {"docx": rendered.docx.name, "pdf": rendered.pdf.name}
+    data["pages"] = {k: [Path(p).name for p in v] for k, v in rendered.pages.items()}
+    data["checks"] = [asdict(c) for c in rendered.checks]
+    data["checks_ok"] = rendered.ok
+    data["draft"] = _draft_json(draft)
+    data.setdefault("restored", []).append(line.strip())
+    _rescore(folder, data)
+    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    _place_if_job(folder, data)
+    return data
+
+
+def _place_if_job(folder: Path, data: dict) -> None:
+    """A job's run, once the person changes it, is what that job's application attaches."""
+    job = job_of_run(folder)
+    if job and job.get("docx"):
+        packet = Path(job["packet"]) if job.get("packet") else None
+        place_for_job(folder, Path(job["docx"]), packet)
+        record = _job_record(job["job_id"])
+        record.update(best=folder.name, run=folder.name, edited=True)
+        JOBS.mkdir(parents=True, exist_ok=True)
+        (JOBS / f"{job['job_id']}.json").write_text(json.dumps(record))
+        data["placed_for_job"] = True
+
+
 def apply_edits(folder: Path, edits: dict[str, str]) -> dict:
     """The person's edits to the draft: saved, the files written again, and checked again."""
     from ml.tailoring import documents
@@ -342,19 +461,16 @@ def apply_edits(folder: Path, edits: dict[str, str]) -> dict:
     data["checks_ok"] = rendered.ok
     data["draft"] = _draft_json(draft)
     data["edited"] = [{"before": k, "after": v} for k, v in overrides.items()]
+    # The score shown is the score of the resume as edited, not as first drafted.
+    try:
+        _rescore(folder, data)
+    except Exception as exc:
+        log.info("Rescore after edit, %s: %s", folder.name, exc)
     (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
     # The person's edits are the resume they mean to send: a job's run, once
     # edited, becomes what the application attaches, whatever its score.
     # Without this the edits stayed in the run and an older file went out.
-    job = job_of_run(folder)
-    if job and job.get("docx"):
-        packet = Path(job["packet"]) if job.get("packet") else None
-        place_for_job(folder, Path(job["docx"]), packet)
-        record = _job_record(job["job_id"])
-        record.update(best=folder.name, run=folder.name, edited=True)
-        JOBS.mkdir(parents=True, exist_ok=True)
-        (JOBS / f"{job['job_id']}.json").write_text(json.dumps(record))
-        data["placed_for_job"] = True
+    _place_if_job(folder, data)
     return data
 
 

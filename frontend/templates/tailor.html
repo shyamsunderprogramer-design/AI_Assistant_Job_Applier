@@ -57,6 +57,7 @@
   <div class="t-tabs" role="tablist">
     <button class="t-tab on" data-tab="resume" role="tab" id="tab-resume" aria-controls="panel-resume" aria-selected="true">Tailored Resume</button>
     <button class="t-tab" data-tab="review" role="tab" id="tab-review" aria-controls="panel-review" aria-selected="false" tabindex="-1">Recruiter Review</button>
+    <button class="t-tab" data-tab="keywords" role="tab" id="tab-keywords" aria-controls="panel-keywords" aria-selected="false" tabindex="-1">Keywords</button>
     <button class="t-tab" data-tab="report" role="tab" id="tab-report" aria-controls="panel-report" aria-selected="false" tabindex="-1">Match Report</button>
     <button class="t-tab" data-tab="alignment" role="tab" id="tab-alignment" aria-controls="panel-alignment" aria-selected="false" tabindex="-1">Alignment Summary</button>
     <button class="t-tab" data-tab="versions" role="tab" id="tab-versions" aria-controls="panel-versions" aria-selected="false" tabindex="-1">Version Checks</button>
@@ -76,6 +77,7 @@
     <div id="editor" hidden>
       <div class="hint">Edit any line, or clear it to remove it. Your edits are your own: the builder does
         not check them against the resume. The files are written and checked again when you save.</div>
+      <div class="kw-live" id="kw-live" hidden></div>
       <div id="edit-lines"></div>
       <div class="row" style="margin-top:10px"><button class="btn primary" id="save-edits">Save edits</button>
         <button class="btn" id="cancel-edits">Cancel</button><span class="hint" id="edit-say"></span></div>
@@ -88,6 +90,7 @@
     <p class="t-formula" id="formula"></p>
   </div>
   <div class="t-panel" data-panel="review" role="tabpanel" id="panel-review" aria-labelledby="tab-review" tabindex="0" hidden><div id="review"></div></div>
+  <div class="t-panel" data-panel="keywords" role="tabpanel" id="panel-keywords" aria-labelledby="tab-keywords" tabindex="0" hidden><div id="keywords"></div></div>
   <div class="t-panel" data-panel="alignment" role="tabpanel" id="panel-alignment" aria-labelledby="tab-alignment" tabindex="0" hidden><div id="alignment"></div></div>
   <div class="t-panel" data-panel="versions" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" tabindex="0" hidden><div id="versions"></div></div>
   <div class="t-panel" data-panel="changes" role="tabpanel" id="panel-changes" aria-labelledby="tab-changes" tabindex="0" hidden><div id="changes"></div></div>
@@ -219,6 +222,65 @@ async function load() {
       .filter(Boolean).map(w => `<div>⚠ ${esc(w)}</div>`).join('')
     + (ex.text ? `<details><summary>Show the text read from the resume</summary><pre>${esc(ex.text)}</pre></details>` : '');
   renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps(); renderReview();
+  loadKeywords();
+}
+
+// -- keywords --------------------------------------------------------------------
+// Every keyword the posting weighs: shown (and on which lines), lost in the
+// tailoring (with the master's line, to put back), or not on the resume.
+let KW = null, KW_FILTER = 'all';
+const KW_LABEL = {shown: 'Shown', lost: 'Lost in tailoring', missing: 'Not on your resume'};
+function excerpt(line, term) {
+  // About 140 characters around the keyword: a skills row is a paragraph long.
+  const at = line.toLowerCase().indexOf(term.toLowerCase());
+  if (line.length <= 150 || at < 0) return line;
+  const from = Math.max(0, at - 60), to = Math.min(line.length, at + term.length + 80);
+  return (from ? '…' : '') + line.slice(from, to) + (to < line.length ? '…' : '');
+}
+function wherePlaces(lines, term) {
+  if (!lines.length) return '';
+  const first = `<div class="kw-where">${markTerm(excerpt(lines[0], term), term)}</div>`;
+  if (lines.length === 1) return first;
+  return first + `<details><summary class="hint">+${lines.length - 1} more line${lines.length > 2 ? 's' : ''}</summary>`
+    + lines.slice(1).map(l => `<div class="kw-where">${markTerm(excerpt(l, term), term)}</div>`).join('') + '</details>';
+}
+function markTerm(line, term) {
+  const re = new RegExp('(' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+  return esc(line).replace(re, '<mark>$1</mark>');
+}
+async function loadKeywords() {
+  KW = await (await fetch(`/tailor/${RUN}/keywords`)).json();
+  renderKeywords();
+}
+function renderKeywords() {
+  if (!KW || !KW.ok) { $('keywords').innerHTML = `<p class="hint">${esc((KW && KW.error) || 'Loading…')}</p>`; return; }
+  if (KW.note) { $('keywords').innerHTML = `<p class="hint">${esc(KW.note)}</p>`; return; }
+  const c = KW.counts || {};
+  const rows = KW.keywords.filter(k => KW_FILTER === 'all' || k.status === KW_FILTER);
+  const chip = (f, label) => `<button class="chip ${KW_FILTER === f ? 'on' : ''}" data-kwf="${f}">${label}</button>`;
+  $('keywords').innerHTML = `
+    <div class="kw-bar"><span class="kw-cov">${KW.coverage}%</span>
+      <span class="hint">of the posting's keywords, by weight, are on the tailored resume ·
+        ${c.shown || 0} shown · ${c.lost || 0} lost in tailoring · ${c.missing || 0} not on your resume</span></div>
+    <div class="kw-filters">${chip('all', 'All ' + KW.keywords.length)}${chip('lost', 'Lost in tailoring ' + (c.lost || 0))}${chip('shown', 'Shown ' + (c.shown || 0))}${chip('missing', 'Not on your resume ' + (c.missing || 0))}</div>
+    <div class="t-table-wrap"><table class="t-table"><thead><tr><th>Keyword</th><th class="num">In posting</th><th>Status</th><th>Where</th></tr></thead><tbody>
+    ${rows.map(k => `<tr><td><b>${esc(k.term)}</b>${k.tool ? '<span class="kw-tool">tool</span>' : ''}</td>
+      <td class="num">×${k.mentions}</td>
+      <td><span class="pill ${k.status === 'shown' ? 'good' : k.status === 'lost' ? 'bad' : 'muted'}">${KW_LABEL[k.status]}</span></td>
+      <td>${k.status === 'shown' ? wherePlaces(k.where, k.term)
+        : k.status === 'lost' ? k.master_lines.map(l => `<div class="kw-where">${markTerm(l, k.term)}
+            <button class="btn" data-restore="${esc(l)}">Put this line back</button></div>`).join('')
+          + '<div class="hint">Your master resume has it; the tailoring cut or reworded that line.</div>'
+        : '<span class="hint">Your resume does not show this. It is never added for you: if you have done it, add it to your master resume, or see Gaps.</span>'}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  document.querySelectorAll('[data-kwf]').forEach(b => b.onclick = () => { KW_FILTER = b.dataset.kwf; renderKeywords(); });
+  document.querySelectorAll('[data-restore]').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Putting it back and checking the files…';
+    const r = await (await fetch(`/tailor/${RUN}/restore`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                             body: JSON.stringify({line: b.dataset.restore})})).json();
+    if (!r.ok) { b.disabled = false; b.textContent = 'Put this line back'; alert(r.error); return; }
+    await load();
+  });
 }
 
 // -- tabs ------------------------------------------------------------------------
@@ -350,12 +412,44 @@ $('edit-toggle').onclick = async () => {
     ? `<div class="t-ed-head">${esc(l.text)}</div>`
     : `<textarea class="t-ed" data-before="${esc(l.text)}" rows="${Math.max(1, Math.ceil(l.text.length / 110))}">${esc(l.text)}</textarea>`).join('');
   $('editor').hidden = false; $('pages').hidden = true; $('edit-say').textContent = '';
+  $('kw-live').hidden = true;
+  document.querySelectorAll('.t-ed').forEach(t => t.oninput = () => { clearTimeout(KW_TIMER); KW_TIMER = setTimeout(checkEdits, 600); });
 };
+let KW_TIMER = null, KW_CHECK = null;
+function currentEdits() {
+  const edits = {};
+  document.querySelectorAll('.t-ed').forEach(t => { if (t.value !== t.dataset.before) edits[t.dataset.before] = t.value; });
+  return edits;
+}
+async function checkEdits() {
+  const edits = currentEdits();
+  document.querySelectorAll('.t-ed').forEach(t => { t.classList.remove('kw-loses'); const w = t.nextElementSibling; if (w && w.classList.contains('kw-line-warn')) w.remove(); });
+  if (!Object.keys(edits).length) { $('kw-live').hidden = true; KW_CHECK = null; return; }
+  KW_CHECK = await (await fetch(`/tailor/${RUN}/keywords/check`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                                  body: JSON.stringify({edits})})).json();
+  if (!KW_CHECK.ok) return;
+  const lost = KW_CHECK.lost || [], gained = KW_CHECK.gained || [];
+  $('kw-live').hidden = false;
+  $('kw-live').className = 'kw-live' + (lost.length ? ' bad' : '');
+  $('kw-live').innerHTML = `Keywords: ${KW_CHECK.coverage_before}% → <b>${KW_CHECK.coverage_after}%</b>`
+    + (lost.length ? ` · <b>would lose</b> ${lost.map(esc).join(', ')} (no other line has ${lost.length > 1 ? 'them' : 'it'})` : '')
+    + (gained.length ? ` · adds ${gained.map(esc).join(', ')}` : '')
+    + (!lost.length && !gained.length ? ' · no keyword lost' : '');
+  document.querySelectorAll('.t-ed').forEach(t => {
+    const terms = (KW_CHECK.by_line || {})[t.dataset.before];
+    if (!terms) return;
+    t.classList.add('kw-loses');
+    t.insertAdjacentHTML('afterend', `<div class="kw-line-warn">This edit removes ${terms.map(esc).join(', ')}, the posting asks for ${terms.length > 1 ? 'them' : 'it'}, and no other line has ${terms.length > 1 ? 'them' : 'it'}.</div>`);
+  });
+}
 $('cancel-edits').onclick = () => { $('editor').hidden = true; $('pages').hidden = false; };
 $('save-edits').onclick = async () => {
   const edits = {};
   document.querySelectorAll('.t-ed').forEach(t => { if (t.value !== t.dataset.before) edits[t.dataset.before] = t.value; });
   if (!Object.keys(edits).length) { $('edit-say').textContent = 'Nothing was changed.'; return; }
+  await checkEdits();
+  const losing = (KW_CHECK && KW_CHECK.lost) || [];
+  if (losing.length && !confirm(`These edits remove ${losing.join(', ')} from the resume: the posting asks for ${losing.length > 1 ? 'them' : 'it'} and no other line has ${losing.length > 1 ? 'them' : 'it'}. Keyword coverage ${KW_CHECK.coverage_before}% → ${KW_CHECK.coverage_after}%.\n\nSave anyway?`)) return;
   $('save-edits').disabled = true; $('edit-say').textContent = 'Writing and checking the files again…';
   const r = await (await fetch(`/tailor/${RUN}/edit`, {method: 'POST', headers: {'Content-Type': 'application/json'},
                                                       body: JSON.stringify({edits})})).json();

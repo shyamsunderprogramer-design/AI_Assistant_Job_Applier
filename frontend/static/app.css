@@ -523,3 +523,15 @@ td.elig.el-good{color:#22764a;font-weight:600}
 .prep-chance{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
 .star{margin:4px 0;padding:6px 10px;border-left:3px solid var(--signal);background:var(--raised);font-size:13px;line-height:1.6}
 .star span{display:inline-block;width:16px;font-weight:700;color:var(--signal)}
+
+/* Keyword tracker (tailoring page) */
+.kw-bar{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;margin-bottom:12px}
+.kw-cov{font-family:var(--mono);font-size:1.6em;font-weight:700}
+.kw-filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.kw-where{margin:2px 0;color:var(--ink-2);font-size:.92em}
+.kw-where mark{background:color-mix(in srgb,var(--signal) 22%,transparent);color:inherit;border-radius:3px;padding:0 2px}
+.kw-tool{font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:6px}
+.kw-live{margin:8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:.92em}
+.kw-live.bad{border-color:var(--crit)}
+.t-ed.kw-loses{border-color:var(--crit);box-shadow:0 0 0 1px var(--crit)}
+.kw-line-warn{color:var(--crit);font-size:.85em;margin:-2px 0 6px}
