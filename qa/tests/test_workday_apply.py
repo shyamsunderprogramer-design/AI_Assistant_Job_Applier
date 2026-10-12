@@ -268,3 +268,11 @@ def test_the_persons_own_answers_are_noted_not_the_fillers(page):
     workday.note_given(page, result)
     assert result.given == {"Address Line 1": "1 Example Way",
                             "Have you previously worked for Acme?": "No"}
+
+
+def test_a_question_mentioning_the_country_is_not_the_country_field():
+    a = person()
+    assert workday.value_for("Country*", a) == "United States"
+    answer = workday.value_for("Are you legally authorized to work in the country where the job "
+                               "you're applying to is located?*", a)
+    assert answer != "United States"

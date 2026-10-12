@@ -177,10 +177,12 @@ def value_for(label: str, applicant: Applicant) -> str | None:
         return str(applicant.location.get("street") or "").strip() or None
     if "address line" in text:
         return None
-    if "country" in words and "phone" not in words:
+    short = len(text) <= 40                 # a field's name, not a question ("did you finish high school?")
+    # "Country" is a field; "Are you legally authorized to work in the country
+    # where the job is located?" is a question, and was answered "United States".
+    if short and "country" in words and "phone" not in words:
         return str(applicant.location.get("country") or "").strip() or None
     school = applicant.education[0] if applicant.education else {}
-    short = len(text) <= 40                 # a field's name, not a question ("did you finish high school?")
     if short and "high" not in words and words & {"school", "university", "college"}:
         return str(school.get("school") or "").strip() or None
     if short and "degree" in words and not words & {"level", "highest", "have", "do", "required"}:
@@ -950,9 +952,11 @@ def apply(page, job_id: int, url: str | None, applicant: Applicant, resume: Path
                     page.wait_for_timeout(POLL_MS)
                     continue
                 done_steps.add(step)
+                before = len(result.required_blank)
                 fill_work_experience(page, work_history(applicant, resume), result)
                 fill_education(page, applicant.education, result)
-                waiting = fill_step(page, applicant, resume, result)
+                left = result.required_blank[before:]       # a job or school field it could not set
+                waiting = left + fill_step(page, applicant, resume, result)
                 _shot(page, evidence, step)
                 if waiting:
                     say(f"   {step}: needs you — {', '.join(dict.fromkeys(waiting))[:200]}. "
