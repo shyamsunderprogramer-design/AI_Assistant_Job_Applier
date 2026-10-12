@@ -312,6 +312,18 @@ def apply_edits(folder: Path, edits: dict[str, str]) -> dict:
     data["draft"] = _draft_json(draft)
     data["edited"] = [{"before": k, "after": v} for k, v in overrides.items()]
     (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    # The person's edits are the resume they mean to send: a job's run, once
+    # edited, becomes what the application attaches, whatever its score.
+    # Without this the edits stayed in the run and an older file went out.
+    job = job_of_run(folder)
+    if job and job.get("docx"):
+        packet = Path(job["packet"]) if job.get("packet") else None
+        place_for_job(folder, Path(job["docx"]), packet)
+        record = _job_record(job["job_id"])
+        record.update(best=folder.name, run=folder.name, edited=True)
+        JOBS.mkdir(parents=True, exist_ok=True)
+        (JOBS / f"{job['job_id']}.json").write_text(json.dumps(record))
+        data["placed_for_job"] = True
     return data
 
 
