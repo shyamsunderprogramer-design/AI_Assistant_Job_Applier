@@ -574,7 +574,15 @@ async function watch(task, button) {
   const d = await ask('/run/'+task, {method:'POST'});
   if (!d.ok) { b.disabled = false; b.textContent = LABEL[task];
     $('run-out').hidden = false; $('run-out').className='out bad';
-    $('run-out').textContent = d.error; return; }
+    $('run-out').textContent = d.error;
+    // The output box sits under thousands of rows; a refusal shown only
+    // there looked like a button that did nothing. Say it up here too.
+    setIdle();
+    $('statusbox').className = 'statusbox';
+    $('sb-dot').className = 'sb-dot bad';
+    $('sb-title').textContent = 'Did not start';
+    $('sb-detail').textContent = (d.error || '').split('\n')[0];
+    return; }
   watch(task, b);
 }));
 
@@ -645,6 +653,18 @@ pollProbe();
 // pretending nothing is happening.
 ['scrape','score','apply'].forEach(async task => {
   const d = await ask(`/run/${task}/status`);
+  if (d.scheduled && !d.running && task === 'scrape') {
+    // The 6am run is fetching and scoring already: the buttons would only be
+    // refused, so say what is going on instead of "All jobs idle".
+    $('statusbox').className = 'statusbox';
+    $('sb-dot').className = 'sb-dot on';
+    $('sb-title').textContent = `Scheduled ${d.scheduled} run in progress`;
+    $('sb-detail').textContent = `Started ${d.scheduled_since} · new postings and scores arrive when it finishes`;
+    ['scrape', 'score'].forEach(t => {
+      $('run-'+t).disabled = true;
+      $('run-'+t).title = `Waiting for the scheduled ${d.scheduled} run (started ${d.scheduled_since}), which does the same work`;
+    });
+  }
   if (d.running) {
     const b = $('run-'+task);
     b.disabled = true;

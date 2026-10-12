@@ -2099,9 +2099,12 @@ def _lock_started(task: str) -> str:
 
     lock = PROJECT_ROOT / "data" / f"{task}.lock"
     try:
-        return datetime.fromtimestamp(lock.stat().st_mtime).strftime("%H:%M")
+        started = datetime.fromtimestamp(lock.stat().st_mtime)
     except OSError:
         return "unknown"
+    # A daily run can outlast its day; "06:15" alone read as this morning.
+    return started.strftime("%H:%M" if started.date() == datetime.now().date()
+                            else "%b %-d, %H:%M")
 
 
 def _first_log_time(lines: list[str]) -> float | None:
@@ -2188,8 +2191,11 @@ def run_status(task: str):
             "Nothing to score", "No new jobs", "done:", "Run finished",
             "below threshold", "Run `export`",
         ))
+    # The 6am run holds the same work; the page says so rather than "idle".
+    scheduled = None if running else _scheduled_run_holding(task)
     return jsonify(
         ok=True, running=running, tail=tail, progress=progress,
+        scheduled=scheduled, scheduled_since=_lock_started(scheduled) if scheduled else None,
         done=done, total=total, current=current, eta=eta,
         percent=round(done / total * 100, 1) if total else None,
         exit=None if running else (0 if ok_finish else 1),
