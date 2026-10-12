@@ -215,7 +215,7 @@ def test_abbreviated_degrees_and_close_fields():
     from backend.apply.workday import _words_in, degree_option
     options = ["Select One", "GED", "High School", "AA", "AS", "BA", "BS", "MA", "MS", "MBA", "PhD"]
     assert options[degree_option(options, "Master of Science")] == "MS"
-    assert degree_option(options, "Bachelor of Technology") is None        # no "BT": the person picks
+    assert options[degree_option(options, "Bachelor of Technology")] == "BS"   # no "BT": BS, the person's choice
     assert _words_in("Computer and Information Science", "Computer Science")
     assert not _words_in("Computer Engineering", "Computer Science")
 
