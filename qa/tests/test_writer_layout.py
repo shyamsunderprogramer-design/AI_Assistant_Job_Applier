@@ -273,3 +273,17 @@ def test_a_lone_section_is_left_as_it_is():
                    ("text", "Kubernetes Operations: Ran EKS and AKS clusters at scale."),
                    ("heading", "EXPERIENCE"), ("role", "DEV, A   2020"), ("bullet", "x")])
     assert [t for k, t in out if k == "heading"] == ["KEY EXPERTISE", "EXPERIENCE"]
+
+
+def test_a_tailored_header_carries_the_profiles_contact_line(monkeypatch):
+    from ml.resume import writer
+    from ml.resume.parser import Resume, Section
+    from ml.tailoring.draft import header_of
+    base = Resume(sections=[Section("HEADER", ["Jane Doe", "WA, USA (Open to Relocate) | +1 555 000 0000 | old@example.com",
+                                               "Platform Engineer"])], raw_text="")
+    monkeypatch.setattr(writer, "applicant_contact_line",
+                        lambda: lambda relocate: "Beaumont, TX" + (" (Open to Relocate)" if relocate else "")
+                        + " · +1 555 111 2222 · new@example.com")
+    assert header_of(base) == ["Jane Doe",
+                               "Beaumont, TX (Open to Relocate) · +1 555 111 2222 · new@example.com",
+                               "Platform Engineer"]

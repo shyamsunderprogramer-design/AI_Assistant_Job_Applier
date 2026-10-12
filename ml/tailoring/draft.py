@@ -66,8 +66,13 @@ def guess_title(jd_text: str) -> str:
 
 
 def header_of(base) -> list[str]:
-    section = next((s for s in base.sections if s.heading == "HEADER"), None)
-    return [l for l in (section.lines[:4] if section else []) if l.strip()]
+    """The resume's name and title lines, with the contact line from the profile.
+
+    Read straight from the master, a tailored resume kept the old city, phone
+    and email after the person updated them on the Applicant page.
+    """
+    from ml.resume.writer import _base_header
+    return [l for l in _base_header(base)[:4] if l.strip()]
 
 
 def guidance(report) -> str:

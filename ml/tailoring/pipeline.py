@@ -285,7 +285,10 @@ def load_draft(folder: Path):
     for key, value in saved.items():
         if key != "summary" and value is not None:
             setattr(result, key, value)
-    return Draft(base, result, data["draft"]["header"], data.get("title", "")), data
+    # The header is drawn fresh, not as saved: contact details the person
+    # updated since belong on the next copy of this resume too.
+    from ml.tailoring.draft import header_of
+    return Draft(base, result, header_of(base) or data["draft"]["header"], data.get("title", "")), data
 
 
 def editable_lines(folder: Path) -> list[dict]:
