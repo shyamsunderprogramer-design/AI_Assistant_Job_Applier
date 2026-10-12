@@ -489,7 +489,7 @@ $('upload').addEventListener('submit', async e => {
   }
 });
 
-// A scrape takes about half an hour. Start it, then watch — the button stays
+// A scrape of every board takes about four hours awake (13,500 boards). Start it, then watch — the button stays
 // honest about what is happening instead of appearing to hang.
 const LABEL = {scrape: 'Get latest postings', score: 'Re-score', apply: 'Apply to next 10'};
 const NAME = {scrape: 'Fetching new postings', score: 'Re-scoring against your resume',
@@ -569,7 +569,7 @@ async function watch(task, button) {
 ['scrape','score','apply'].forEach(task => $('run-'+task).addEventListener('click', async e => {
   const b = e.currentTarget;
   b.disabled = true;
-  b.textContent = {scrape: 'Fetching… (about 30 min)', score: 'Scoring…',
+  b.textContent = {scrape: 'Fetching… (about 4 hours)', score: 'Scoring…',
                    apply: 'Applying… (browser window)'}[task];
   const d = await ask('/run/'+task, {method:'POST'});
   if (!d.ok) { b.disabled = false; b.textContent = LABEL[task];
@@ -668,7 +668,7 @@ pollProbe();
   if (d.running) {
     const b = $('run-'+task);
     b.disabled = true;
-    b.textContent = {scrape: 'Fetching… (about 30 min)', score: 'Scoring…',
+    b.textContent = {scrape: 'Fetching… (about 4 hours)', score: 'Scoring…',
                      apply: 'Applying… (browser window)'}[task];
     watch(task, b);
   }
