@@ -276,3 +276,9 @@ def test_a_question_mentioning_the_country_is_not_the_country_field():
     answer = workday.value_for("Are you legally authorized to work in the country where the job "
                                "you're applying to is located?*", a)
     assert answer != "United States"
+
+
+def test_a_btech_is_entered_as_bs_and_a_masters_as_ms():
+    options = ["Select One", "GED", "High School", "AA", "AS", "BA", "BS", "MA", "MS", "MBA", "PhD", "JD", "N/A"]
+    assert options[workday.degree_option(options, "Bachelor of Technology")] == "BS"
+    assert options[workday.degree_option(options, "Master of Science")] == "MS"

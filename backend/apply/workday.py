@@ -235,6 +235,10 @@ def degree_option(texts: list[str], degree: str) -> int | None:
         # Abbreviated lists (Abercrombie: "BS", "MS", "MBA"): the degree's initials.
         initials = "".join(w[0] for w in re.findall(r"[a-z]+", degree.lower()) if w not in ("of", "in", "the"))
         hits = [i for i, t in enumerate(texts) if re.sub(r"[^a-z]", "", t.lower()) == initials]
+    if not hits and level == "bachelor" and re.search(r"\btech|\bengineering|\bb\.?e\b", degree.lower()):
+        # No B.Tech or B.E. on the list: the person's choice is BS, its usual US equivalent.
+        hits = [i for i, t in enumerate(texts)
+                if re.sub(r"[^a-z]", "", t.lower()) == "bs" or "bachelor of science" in t.lower()]
     if len(hits) > 1:                      # "Master of Science" over "Master of Arts"
         tail = [i for i in hits if any(w in texts[i].lower() for w in re.findall(r"[a-z]{4,}", degree.lower())
                                        if w not in ("master", "bachelor", "doctor"))]
