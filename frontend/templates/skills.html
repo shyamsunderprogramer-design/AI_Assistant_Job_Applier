@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Skills{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Skills</h1>
+    <div class="sub">What your best-matching jobs ask for: the skills your resume does not show yet, ranked by how
+      many jobs want them, and the ones you have that the most jobs want. Nothing here changes your resume.</div>
+  </div>
+  <div class="row">
+    <label class="hint" for="scope">Jobs to read</label>
+    <select id="scope" class="chip">
+      <option value="100">Best 100</option><option value="300" selected>Best 300</option>
+      <option value="600">Best 600</option><option value="2000">All scored</option>
+    </select>
+    <button class="btn" id="rescan">Scan again</button>
+  </div>
+</header>
+
+<section class="card">
+  <p class="hint" id="scan-note" role="status">Reading your jobs…</p>
+  <h2 class="sk-h">To learn next</h2>
+  <p class="hint">Tools and named skills these jobs ask for that your resume does not show. Each opens a roadmap:
+    the closest thing you already have, a plan, a project, and what to say in an interview today.</p>
+  <div class="t-table-wrap"><table class="t-table"><thead><tr>
+    <th>Skill</th><th class="num">Jobs asking</th><th>How postings put it</th><th>Example jobs</th><th></th>
+  </tr></thead><tbody id="missing"></tbody></table></div>
+</section>
+
+<section class="card">
+  <h2 class="sk-h">Lead with these</h2>
+  <p class="hint">Skills on your resume that the most of these jobs ask for: put them high in the summary and skills.</p>
+  <div id="strengths" class="sk-chips"></div>
+</section>
+
+<style>
+.sk-h{font-size:1.1em;margin:6px 0}
+.sk-bar{display:inline-block;height:6px;border-radius:3px;background:var(--signal);vertical-align:middle;margin-left:6px}
+.sk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.sk-chip{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:.92em;background:var(--raised)}
+.sk-chip b{font-family:var(--mono);font-size:.85em;margin-left:4px}
+.sk-ctx{color:var(--ink-2);font-size:.9em}
+.sk-jobs a{display:block;font-size:.88em}
+.sk-road td{background:var(--sunk)}
+</style>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let DATA = null;
+
+function card(k) {
+  return `<div class="rm-card">
+    <div class="rm-head"><span class="rm-skill">${esc(k.skill)}</span>
+      <span class="pill muted">asked by ${k.jobs} jobs</span><span class="rm-hours">~${k.hours || 0} h</span></div>
+    <div>${esc(k.what_it_is)}</div>
+    ${k.why_here ? `<div class="hint">${esc(k.why_here)}</div>` : ''}
+    ${k.you_have || k.how_it_transfers ? `<div class="rm-bridge">${k.you_have ? `<div class="rm-label">You already have</div><q>${esc(k.you_have)}</q>` : ''}
+      ${k.how_it_transfers ? `<div>${esc(k.how_it_transfers)}</div>` : ''}</div>` : ''}
+    ${(k.plan || []).length ? `<div class="rm-label">Plan</div><ol class="rm-plan">${k.plan.map(p => `<li>${esc(p.step)}${p.resource ? ` <span class="hint">· ${esc(p.resource)}</span>` : ''}${p.hours ? ` <span class="hint">· ${p.hours} h</span>` : ''}</li>`).join('')}</ol>` : ''}
+    ${k.project ? `<div class="rm-label">Prove it</div><div>${esc(k.project)}</div>` : ''}
+    ${k.certification ? `<div class="rm-label">Certification</div><div>${esc(k.certification)}</div>` : ''}
+    ${k.interview_answer ? `<div class="rm-label">If asked in an interview today</div><div><q>${esc(k.interview_answer)}</q></div>
+      ${k.check_answer ? '<div class="kw-line-warn">This answer says you are already learning or building it. Say that only once you have started the plan.</div>' : ''}` : ''}
+    <div class="hint">Written ${esc(k.made || '')}</div></div>`;
+}
+
+function render() {
+  const d = DATA;
+  $('scan-note').textContent = `Read the ${d.jobs_scanned} best-matching open jobs against ${d.resume} · ${d.made.replace('T', ' ')}`;
+  const top = Math.max(1, ...d.missing.map(e => e.jobs));
+  $('missing').innerHTML = d.missing.length ? d.missing.map((e, i) => {
+    const road = d.roadmaps[e.term];
+    return `<tr><td><b>${esc(e.name)}</b></td>
+      <td class="num">${e.jobs} <span class="hint">(${e.share}%)</span><span class="sk-bar" style="width:${Math.round(60 * e.jobs / top)}px"></span></td>
+      <td class="sk-ctx">${e.contexts[0] ? `“${esc(e.contexts[0])}”` : ''}</td>
+      <td class="sk-jobs">${e.examples.slice(0, 3).map(j => `<a href="/job/${j.id}">${esc(j.company)} · ${esc(j.title)}</a>`).join('')}
+        ${e.examples.length > 3 ? `<span class="hint">and ${e.jobs - 3} more</span>` : ''}</td>
+      <td><button class="btn ${road ? '' : 'primary'}" data-road="${i}">${road ? 'Show roadmap' : 'Build roadmap'}</button></td></tr>
+      <tr class="sk-road" id="road-${i}" hidden><td colspan="5">${road ? card(road) : ''}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="hint">Your resume shows every tool these jobs ask for.</td></tr>';
+  $('strengths').innerHTML = d.strengths.map(e => `<span class="sk-chip">${esc(e.name)}<b>${e.jobs}</b></span>`).join('');
+  document.querySelectorAll('[data-road]').forEach(b => b.onclick = async () => {
+    const i = +b.dataset.road, e = d.missing[i], row = $('road-' + i);
+    if (d.roadmaps[e.term]) { row.hidden = !row.hidden; return; }
+    b.disabled = true; b.textContent = 'Writing… (about a minute)';
+    const r = await (await fetch('/skills/roadmap', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                    body: JSON.stringify({term: e.term})})).json();
+    b.disabled = false;
+    if (!r.ok) { b.textContent = 'Build roadmap'; row.hidden = false; row.firstElementChild.innerHTML = `<p class="t-error">${esc(r.error)}</p>`; return; }
+    d.roadmaps[e.term] = r.roadmap; b.textContent = 'Show roadmap'; b.classList.remove('primary');
+    row.firstElementChild.innerHTML = card(r.roadmap); row.hidden = false;
+  });
+}
+
+async function scan(refresh) {
+  $('scan-note').textContent = 'Reading your jobs… (a few seconds)';
+  $('rescan').disabled = true;
+  const r = await (await fetch(`/skills/scan?jobs=${$('scope').value}${refresh ? '&refresh=1' : ''}`)).json();
+  $('rescan').disabled = false;
+  if (!r.ok) { $('scan-note').textContent = r.error; return; }
+  DATA = r; render();
+}
+$('rescan').onclick = () => scan(true);
+$('scope').onchange = () => scan(false);
+scan(false);
+</script>
+{% endblock %}

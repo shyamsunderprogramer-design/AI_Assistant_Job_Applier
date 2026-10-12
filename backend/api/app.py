@@ -2454,6 +2454,40 @@ def tailor_keywords_check(run_id):
         return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
 
 
+@app.get("/skills")
+def skills_page():
+    """What the best-matching jobs ask for: the skills to learn next, and the ones to lead with."""
+    return render_template("skills.html")
+
+
+@app.get("/skills/scan")
+def skills_scan():
+    from ml.tailoring import market
+    try:
+        limit = max(20, min(2000, int(request.args.get("jobs") or market.DEFAULT_JOBS)))
+    except ValueError:
+        limit = market.DEFAULT_JOBS
+    try:
+        data = market.load_or_scan(cfg(), limit, refresh=bool(request.args.get("refresh")))
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+    return jsonify(ok=True, roadmaps=market.saved_roadmaps(), **{k: v for k, v in data.items() if k != "stamp"})
+
+
+@app.post("/skills/roadmap")
+def skills_roadmap():
+    from ml.tailoring import market
+    term = str((request.get_json(silent=True) or {}).get("term") or "").strip()
+    if not term:
+        return jsonify(ok=False, error="No skill given."), 400
+    try:
+        return jsonify(ok=True, roadmap=market.roadmap_for_skill(term, cfg()))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(ok=False, error=f"The roadmap could not be written: {type(exc).__name__}: {exc}"), 500
+
+
 @app.post("/tailor/<run_id>/roadmap")
 def tailor_roadmap(run_id):
     """Build the skill roadmap for this run's gaps (one model call, a minute or two)."""
