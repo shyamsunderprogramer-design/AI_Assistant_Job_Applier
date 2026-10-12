@@ -226,3 +226,50 @@ def test_body_text_is_justified_and_the_bullet_gap_fixed(tmp_path):
     bullet = next(p for p in Document(str(out)).paragraphs if p.text.startswith("•"))
     assert bullet.alignment == WD_ALIGN_PARAGRAPH.JUSTIFY
     assert bullet.text.startswith("• ") and " " not in bullet.text
+
+
+def _merged(blocks):
+    from ml.resume.writer import _arrange
+    return _arrange([("name", "X")] + blocks)
+
+
+def test_key_expertise_joins_core_competencies_as_one_section():
+    out = _merged([
+        ("heading", "SUMMARY"), ("text", "Engineer with 11+ years."),
+        ("heading", "KEY EXPERTISE & TECHNICAL PRACTICES"),
+        ("text", "Security & Compliance (DevSecOps): Integrated Snyk and Vault into CI/CD workflows."),
+        ("text", "Automation & Scripting: Created Python and Bash automation for provisioning."),
+        ("heading", "EXPERIENCE"), ("role", "DEV, A   2020"), ("bullet", "did things"),
+        ("heading", "CORE COMPETENCIES / TECHNICAL SKILLS SUMMARY"),
+        ("subheading", "Security / DevSecOps / Compliance"), ("bullet", "Trivy, tfsec"),
+        ("subheading", "Programming & Scripting"), ("bullet", "Python, Go")])
+    headings = [t for k, t in out if k == "heading"]
+    assert headings == ["SUMMARY", "CORE COMPETENCIES / TECHNICAL SKILLS SUMMARY", "EXPERIENCE"]
+    skills = [t for k, t in out if k == "skill"]
+    # the same subject once, the work and the tools both kept
+    assert skills[0] == ("Security & Compliance (DevSecOps): Integrated Snyk and Vault "
+                         "into CI/CD workflows. Trivy, tfsec.")
+    # a different subject is not folded in on one shared word
+    assert any(s.startswith("Automation & Scripting:") for s in skills)
+    assert any(s.startswith("Programming & Scripting:") for s in skills)
+
+
+def test_highlights_repeating_the_summary_numbers_go_the_rest_close_it():
+    out = _merged([
+        ("heading", "SUMMARY"), ("text", "Delivered 45% faster deployments and 35% shorter MTTR."),
+        ("heading", "HIGHLIGHTS OF IMPACT"),
+        ("bullet", "Reduced deployment cycles by 45% and MTTR by 35%."),
+        ("bullet", "Lowered cloud OPEX by 30% using FinOps dashboards."),
+        ("heading", "EXPERIENCE"), ("role", "DEV, A   2020"), ("bullet", "did things")])
+    assert [t for k, t in out if k == "heading"] == ["SUMMARY", "EXPERIENCE"]
+    text = [t for k, t in out if k == "text"]
+    assert "Lowered cloud OPEX by 30% using FinOps dashboards." in text
+    assert not any("Reduced deployment cycles" in t for t in text)
+
+
+def test_a_lone_section_is_left_as_it_is():
+    out = _merged([("heading", "KEY EXPERTISE"),
+                   ("text", "Cloud Platforms: Built landing zones on Azure and AWS."),
+                   ("text", "Kubernetes Operations: Ran EKS and AKS clusters at scale."),
+                   ("heading", "EXPERIENCE"), ("role", "DEV, A   2020"), ("bullet", "x")])
+    assert [t for k, t in out if k == "heading"] == ["KEY EXPERTISE", "EXPERIENCE"]

@@ -555,7 +555,67 @@ def _arrange(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
         out_sections.append((_rank(heading, first=number == 0),
                              [section[0]] + body if heading else body))
     out_sections.sort(key=lambda s: s[0])          # stable: master order within a rank
+    out_sections = _merge_repeats(out_sections)
     return head + [b for _, section in out_sections for b in section]
+
+
+_RANK_SUMMARY, _RANK_HIGHLIGHT, _RANK_EXPERTISE, _RANK_SKILLS = 0, 1, 2, 3
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _label_words(label: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", label.lower())) - {"and", "as", "of", "the"}
+
+
+def _same_label(a: str, b: str) -> bool:
+    """"Security & Compliance (DevSecOps)" is "Security / DevSecOps / Compliance"."""
+    wa, wb = _label_words(a), _label_words(b)
+    if not wa or not wb:
+        return False
+    return wa <= wb or wb <= wa or len(wa & wb) / len(wa | wb) >= 0.6
+
+
+def _merge_repeats(sections: list[tuple[int, list]]) -> list[tuple[int, list]]:
+    """One skills section and one summary on a tailored copy, not three that repeat.
+
+    The master keeps Key Expertise, Highlights of Impact and Core Competencies
+    apart, and a recruiter reading the tailored copy met "CI/CD & GitOps
+    Automation" twice before the first job. Expertise rows join the skills
+    section, a row whose label is already there joined to that row; Highlights
+    lines whose every number the summary already gives are dropped as repeats
+    and the rest close the summary. Nothing is reworded.
+    """
+    def find(rank):
+        return next((i for i, (r, s) in enumerate(sections)
+                     if r == rank and s and s[0][0] == "heading"), None)
+
+    exp, skills = find(_RANK_EXPERTISE), find(_RANK_SKILLS)
+    if exp is not None and skills is not None:
+        rows = list(sections[skills][1][1:])
+        merged = []
+        for kind, text in sections[exp][1][1:]:
+            label, sep, rest = text.partition(": ")
+            twin = next((j for j, (k, t) in enumerate(rows) if sep and k == "skill"
+                         and _same_label(label, t.partition(": ")[0])), None)
+            if twin is not None:
+                theirs = rows.pop(twin)[1].partition(": ")[2]
+                text = f"{label}: {rest.rstrip('.')}. {theirs}"
+                kind = "skill"
+            merged.append((kind, text))
+        sections[skills] = (_RANK_EXPERTISE, [sections[skills][1][0]] + merged + rows)
+        sections.pop(exp)
+
+    summary, high = find(_RANK_SUMMARY), find(_RANK_HIGHLIGHT)
+    if summary is not None and high is not None:
+        said = " ".join(t for _, t in sections[summary][1][1:])
+        shown = set(_NUMBER.findall(said))
+        extra = [("text", t) for k, t in sections[high][1][1:]
+                 if k in ("bullet", "text", "skill")
+                 and not ((nums := _NUMBER.findall(t)) and set(nums) <= shown)
+                 and t not in said]
+        sections[summary] = (_RANK_SUMMARY, sections[summary][1] + extra)
+        sections.pop(high)
+    return sections
 
 
 def _skill_row(text: str) -> bool:
