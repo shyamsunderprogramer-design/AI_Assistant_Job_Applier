@@ -45,7 +45,7 @@ def new_run() -> Path:
 
 def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None = None, cfg=None,
         progress=lambda stage, note="": None, use_model: bool = True, company: str | None = None,
-        length: str | None = None) -> dict:
+        length: str | None = None, template: str | None = None) -> dict:
     from ml.tailoring import documents, draft as drafting, matching, requirements, versions
     from ml.tailoring.reader import ReadError, read_document
     from ml.tailoring.structure import build
@@ -131,6 +131,8 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     # The posting's keywords, bold where the resume says them.
     from ml.resume import emphasis
     draft.result.emphasis = emphasis.terms(jd_text, extracted.text, company)
+    # The look: the page's choice, else Settings (ml/resume/style.py).
+    draft.result.template = template or (cfg.get("resume.template", "") if cfg is not None else "") or ""
 
     # 6 -- checking the final files
     progress(STAGES[5])
@@ -202,7 +204,7 @@ def _bullets(docx: Path) -> list[str]:
 
 
 def _draft_json(draft) -> dict:
-    keep = ("summary", "bullets", "skills_order", "omitted", "gaps", "fitted", "overrides", "emphasis")
+    keep = ("summary", "bullets", "skills_order", "omitted", "gaps", "fitted", "overrides", "emphasis", "template")
     return {"result": {k: getattr(draft.result, k, None) for k in keep}, "header": draft.header}
 
 
@@ -265,7 +267,8 @@ def _progress(folder: Path, **state) -> None:
 
 
 def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, cfg,
-          after=None, company: str | None = None, length: str | None = None) -> None:
+          after=None, company: str | None = None, length: str | None = None,
+          template: str | None = None) -> None:
     """Run in the background; the page follows progress.json.
 
     `after(result)` runs once the files are made and before the run reads as
@@ -279,7 +282,7 @@ def start(folder: Path, resume_file: Path, jd_text: str, jd_file: Path | None, c
     def work():
         try:
             result = run(folder, resume_file, jd_text, jd_file, cfg, progress=follow, company=company,
-                         length=length)
+                         length=length, template=template)
             if after is not None:
                 after(result)
             _progress(folder, stage=len(STAGES), done=True, note="")
@@ -473,6 +476,35 @@ def _place_if_job(folder: Path, data: dict) -> None:
         JOBS.mkdir(parents=True, exist_ok=True)
         (JOBS / f"{job['job_id']}.json").write_text(json.dumps(record))
         data["placed_for_job"] = True
+
+
+def change_template(folder: Path, template: str) -> dict:
+    """Draw the same resume in another template. No model; the words do not change.
+
+    The page count can: compact is shorter, modern a little longer. Reported,
+    and warned about when it passes the length the run was made for.
+    """
+    from ml.resume.style import TEMPLATES
+    from ml.tailoring import documents
+    if template not in TEMPLATES:
+        raise ValueError(f"No template called {template!r}.")
+    draft, data = load_draft(folder)
+    draft.result.template = template
+    rendered = documents.produce(draft, folder, attempts=1)
+    data["files"] = {"docx": rendered.docx.name, "pdf": rendered.pdf.name}
+    data["pages"] = {k: [Path(p).name for p in v] for k, v in rendered.pages.items()}
+    data["checks"] = [asdict(c) for c in rendered.checks]
+    data["checks_ok"] = rendered.ok
+    data["draft"] = _draft_json(draft)
+    _rescore(folder, data)
+    most = ((data.get("length") or {}).get("pages") or [None, None])[1]
+    pages = len(data["pages"].get("pdf", []))
+    data["template_note"] = (f"In this template the resume runs to {pages} pages, past the {most} it was "
+                             f"made for. Choose a shorter length or the Compact template."
+                             if most and pages > most else "")
+    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    _place_if_job(folder, data)
+    return data
 
 
 def apply_edits(folder: Path, edits: dict[str, str]) -> dict:

@@ -203,6 +203,8 @@ class TailorResult:
     overrides: dict = field(default_factory=dict)
     # The posting's keywords to set in bold where the resume says them (ml/resume/emphasis.py).
     emphasis: list = field(default_factory=list)
+    # The look (ml/resume/style.py): classic, modern or compact. Empty = the default.
+    template: str = ""
 
     @property
     def accepted(self) -> bool:

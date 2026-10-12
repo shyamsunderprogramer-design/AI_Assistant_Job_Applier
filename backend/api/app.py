@@ -2324,8 +2324,11 @@ def tailor_page():
             saved = base_resume_path(cfg()).name
         except Exception:
             saved = ""
+    from ml.resume.style import DEFAULT, choices
     return render_template("tailor.html", accepted=",".join(TAILOR_TYPES), jd=jd, saved=saved,
-                           autostart=bool(jd and saved and request.args.get("start")))
+                           autostart=bool(jd and saved and request.args.get("start")),
+                           templates=choices(),
+                           template=(cfg().get("resume.template", DEFAULT) if cfg() is not None else DEFAULT) or DEFAULT)
 
 
 @app.post("/tailor/start")
@@ -2363,7 +2366,11 @@ def tailor_start():
     length = request.form.get("length") or None
     if length not in (None, "auto", "1", "2", "3-4"):
         length = None
-    start(folder, resume_path, jd_text, jd_path, cfg(), length=length)
+    from ml.resume.style import TEMPLATES
+    template = request.form.get("template") or None
+    if template not in TEMPLATES:
+        template = None
+    start(folder, resume_path, jd_text, jd_path, cfg(), length=length, template=template)
     return jsonify(ok=True, run=folder.name)
 
 
@@ -2504,6 +2511,23 @@ def tailor_roadmap(run_id):
         return jsonify(ok=False, error=str(exc)), 400
     except Exception as exc:
         return jsonify(ok=False, error=f"The roadmap could not be written: {type(exc).__name__}: {exc}"), 500
+
+
+@app.post("/tailor/<run_id>/template")
+def tailor_template(run_id):
+    """The same resume in another template: drawn again, no model, words unchanged."""
+    from ml.tailoring.pipeline import change_template
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    try:
+        data = change_template(folder, str((request.get_json(silent=True) or {}).get("template") or ""))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
+    data.pop("folder", None)
+    return jsonify(ok=True, **data)
 
 
 @app.post("/tailor/<run_id>/restore")

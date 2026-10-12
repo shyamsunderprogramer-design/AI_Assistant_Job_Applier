@@ -51,6 +51,8 @@ _CANDIDATES = [
     # The person's format: Cambria. Installed with Microsoft Office.
     ("Cambria", str(_WORD_FONTS / "Cambria.ttc"), str(_WORD_FONTS / "Cambriab.ttf")),
     ("Cambria", "/Library/Fonts/Cambria.ttc", "/Library/Fonts/Cambria Bold.ttf"),
+    ("Calibri", str(_WORD_FONTS / "Calibri.ttf"), str(_WORD_FONTS / "Calibrib.ttf")),
+    ("Calibri", "/Library/Fonts/Calibri.ttf", "/Library/Fonts/Calibri Bold.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf",
      "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -62,6 +64,11 @@ LEADING = 1.17          # single line spacing, as Word sets Cambria
 INK = Color(0, 0, 0)
 MUTED = INK
 RULE = Color(0.75, 0.75, 0.75)
+HEADING_INK = INK
+NAME_SIZE, HEAD_SIZE = 18, 12
+GAP = 3
+HEAD_BEFORE, HEAD_AFTER = 8, 4
+ROLE_BEFORE, TITLE_AFTER = 6, 6
 
 SIDE_MARGIN = 0.65 * inch
 TOP_MARGIN = 0.65 * inch
@@ -69,7 +76,10 @@ BULLET_AT = 0.15 * inch          # the "•", from the left text margin
 BULLET_TEXT_AT = 0.30 * inch     # its text, and every wrapped line
 
 
-def _register_font() -> tuple[str, str]:
+_REGISTERED: dict[str, tuple[str, str]] = {}
+
+
+def _register_font(family: str | None = None) -> tuple[str, str]:
     """(regular, bold) font names, embedding a TrueType face where one exists.
 
     Falls back to reportlab's bundled Vera, then to base-14 Helvetica. The
@@ -80,9 +90,14 @@ def _register_font() -> tuple[str, str]:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    for name, regular, bold in _CANDIDATES:
+    if family in _REGISTERED:
+        return _REGISTERED[family]
+    # The template's family first, then any that is installed.
+    for name, regular, bold in sorted(_CANDIDATES, key=lambda c: c[0] != family):
         if not Path(regular).exists():
             continue
+        if name in _REGISTERED:
+            return _REGISTERED[name]
         try:
             # A .ttc holds several faces; Cambria's first is the text face.
             extra = {"subfontIndex": 0} if regular.endswith(".ttc") else {}
@@ -99,6 +114,9 @@ def _register_font() -> tuple[str, str]:
             addMapping(name, 1, 0, bold_name)
             addMapping(name, 0, 1, name)
             addMapping(name, 1, 1, bold_name)
+            _REGISTERED[name] = (name, bold_name)
+            if family:
+                _REGISTERED[family] = (name, bold_name)
             return name, bold_name
         except Exception:                      # a broken font file is not fatal
             continue
@@ -118,10 +136,34 @@ def _register_font() -> tuple[str, str]:
     return "Helvetica", "Helvetica-Bold"
 
 
-FONT, FONT_BOLD = _register_font()
+FONT, FONT_BOLD = _register_font("Cambria")
 
 # Only a font that can carry it gets the real bullet.
 BULLET = "-" if FONT == "Helvetica" else "\u2022"
+
+import threading
+_STYLE_LOCK = threading.RLock()
+
+
+def _hex(value: str) -> Color:
+    v = value.lstrip("#")
+    return Color(int(v[0:2], 16) / 255, int(v[2:4], 16) / 255, int(v[4:6], 16) / 255)
+
+
+def _apply_style(st) -> None:
+    """Set this module's type and spacing from a template (ml/resume/style.py)."""
+    global FONT, FONT_BOLD, BULLET, BODY, LEADING, INK, MUTED, RULE, HEADING_INK, NAME_SIZE, HEAD_SIZE
+    global GAP, HEAD_BEFORE, HEAD_AFTER, ROLE_BEFORE, TITLE_AFTER, SIDE_MARGIN, TOP_MARGIN
+    global BULLET_AT, BULLET_TEXT_AT
+    FONT, FONT_BOLD = _register_font(st.font)
+    BULLET = "-" if FONT == "Helvetica" else "\u2022"
+    BODY, LEADING, NAME_SIZE, HEAD_SIZE = st.body, st.leading, st.name, st.heading
+    INK = MUTED = _hex(st.ink)
+    HEADING_INK, RULE = _hex(st.heading_color), _hex(st.rule_color)
+    GAP, HEAD_BEFORE, HEAD_AFTER = st.gap, st.heading_before, st.heading_after
+    ROLE_BEFORE, TITLE_AFTER = st.role_before, st.title_after
+    SIDE_MARGIN = TOP_MARGIN = st.margin_in * inch
+    BULLET_AT, BULLET_TEXT_AT = st.bullet_at_in * inch, st.bullet_text_in * inch
 
 
 def _bullet_width() -> float:
@@ -145,30 +187,30 @@ def _pack(items: list[str], width: float, size: float) -> list[str]:
 
 
 def _styles() -> dict[str, ParagraphStyle]:
-    """The person's format: Cambria, black, single spaced; 3pt after body lines."""
+    """The template's type: one face, single spaced, GAP points after body lines."""
     base = ParagraphStyle(
         "body", fontName=FONT, fontSize=BODY, leading=BODY * LEADING,
-        textColor=INK, spaceBefore=0, spaceAfter=3,
+        textColor=INK, spaceBefore=0, spaceAfter=GAP,
     )
     return {
         "name": ParagraphStyle("name", parent=base, fontName=FONT_BOLD,
-                               fontSize=18, leading=18 * LEADING, alignment=TA_CENTER,
+                               fontSize=NAME_SIZE, leading=NAME_SIZE * LEADING, alignment=TA_CENTER,
                                spaceAfter=3),
         "contact": ParagraphStyle("contact", parent=base, alignment=TA_CENTER, spaceAfter=3),
         "title": ParagraphStyle("title", parent=base, fontName=FONT_BOLD,
-                                alignment=TA_CENTER, spaceAfter=6),
+                                alignment=TA_CENTER, spaceAfter=TITLE_AFTER),
         # keepWithNext: a heading, a group title or a role line is never
         # left alone at the foot of a page with its lines on the next.
-        "heading": ParagraphStyle("heading", parent=base, fontName=FONT_BOLD,
-                                  fontSize=12, leading=12 * LEADING, spaceBefore=8,
+        "heading": ParagraphStyle("heading", parent=base, fontName=FONT_BOLD, textColor=HEADING_INK,
+                                  fontSize=HEAD_SIZE, leading=HEAD_SIZE * LEADING, spaceBefore=HEAD_BEFORE,
                                   spaceAfter=1, keepWithNext=1),
-        "role": ParagraphStyle("role", parent=base, fontName=FONT_BOLD, spaceBefore=6,
-                               spaceAfter=3, keepWithNext=1),
-        "degree": ParagraphStyle("degree", parent=base, spaceBefore=4, keepWithNext=1),
+        "role": ParagraphStyle("role", parent=base, fontName=FONT_BOLD, spaceBefore=ROLE_BEFORE,
+                               spaceAfter=GAP, keepWithNext=1),
+        "degree": ParagraphStyle("degree", parent=base, spaceBefore=max(2, ROLE_BEFORE - 2), keepWithNext=1),
         "subheading": ParagraphStyle("subheading", parent=base,
                                      fontName=FONT_BOLD, spaceBefore=2,
-                                     spaceAfter=3, keepWithNext=1),
-        # The bullet at 0.15", its text and every wrapped line at 0.30".
+                                     spaceAfter=GAP, keepWithNext=1),
+        # The bullet at its position, its text and every wrapped line at the text position.
         "bullet": ParagraphStyle("bullet", parent=base, alignment=TA_JUSTIFY,
                                  leftIndent=BULLET_TEXT_AT, bulletIndent=BULLET_AT,
                                  bulletFontName=FONT, bulletFontSize=BODY),
@@ -252,18 +294,49 @@ def _dated(text: str, width: float, font: str, style: ParagraphStyle):
     return Paragraph(_role_markup(text, width, bold=bold), style)
 
 
+def _kept_with_next(story: list) -> list:
+    """Each heading, job line or group title bound to the line after it.
+
+    keepWithNext alone did not hold when the next line was itself kept whole
+    (every bullet is): "Leadership, Collaboration & Agile Enablement" was left
+    at the foot of page 1 with its bullet on page 2. Grouped explicitly, the
+    title moves with its first line.
+    """
+    out, pending = [], []
+    for f in story:
+        # A paragraph says it through its style (getKeepWithNext); a drawn line by attribute.
+        keep = f.getKeepWithNext() if hasattr(f, "getKeepWithNext") else getattr(f, "keepWithNext", 0)
+        if keep:
+            pending.append(f)
+            continue
+        if pending:
+            inner = list(f._content) if isinstance(f, KeepTogether) else [f]
+            out.append(KeepTogether(pending + inner))
+            pending = []
+        else:
+            out.append(f)
+    return out + pending
+
+
 class _Rule(HRFlowable):
     """The hairline under a section heading."""
 
     def __init__(self, width):
         super().__init__(width="100%", thickness=0.4, color=RULE,
-                         spaceBefore=1, spaceAfter=3, lineCap="butt")
+                         spaceBefore=1, spaceAfter=max(1, HEAD_AFTER - 1), lineCap="butt")
         self.keepWithNext = 1           # the rule goes with its section's first line
 
 
 def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
               header_lines: list[str] | None = None) -> Path:
-    """Render the tailored resume to PDF. Same content as the .docx."""
+    """Render the tailored resume to PDF. Same content as the .docx, in the same template."""
+    from ml.resume.style import style_for
+    with _STYLE_LOCK:
+        _apply_style(style_for(result))
+        return _write_pdf(base, result, output_path, header_lines)
+
+
+def _write_pdf(base, result, output_path, header_lines):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -339,7 +412,7 @@ def write_pdf(base: Resume, result: TailorResult, output_path: Path | str,
                   page_h - TOP_MARGIN * 2, id="body",
                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     doc.addPageTemplates([PageTemplate(id="resume", frames=[frame])])
-    doc.build(story)
+    doc.build(_kept_with_next(story))
 
     log.info("Wrote ATS-safe PDF: %s", output_path)
     return output_path

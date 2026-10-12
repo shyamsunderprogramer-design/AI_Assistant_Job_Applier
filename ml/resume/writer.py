@@ -54,6 +54,13 @@ CONTACT_SIZE = Pt(11)
 
 INK = RGBColor(0x00, 0x00, 0x00)
 MUTED = INK                           # contact line and dates are black too
+HEADING_COLOR = INK
+RULE_COLOR = "BFBFBF"
+GAP = 3                               # points after a body paragraph or bullet
+HEAD_BEFORE, HEAD_AFTER = 8, 4
+ROLE_BEFORE = 6
+TITLE_AFTER = 6
+LINE_SPACING = 1.0
 
 # Content width, so the right-aligned date tab lands on the margin.
 PAGE_WIDTH_IN = 8.5
@@ -62,6 +69,28 @@ TEXT_WIDTH_IN = PAGE_WIDTH_IN - 2 * SIDE_MARGIN_IN
 
 BULLET_AT = Inches(0.15)       # the "•", from the left text margin
 BULLET_TEXT_AT = Inches(0.30)  # its text, and every wrapped line under it
+
+# The values above are the classic template; a render sets them from the
+# draft's template (ml/resume/style.py) under this lock, so two renders at
+# once cannot mix one template's sizes with another's.
+import threading
+_STYLE_LOCK = threading.RLock()
+
+
+def _apply_style(st) -> None:
+    global FONT, BODY_SIZE, HEADING_SIZE, NAME_SIZE, CONTACT_SIZE, INK, MUTED, HEADING_COLOR
+    global RULE_COLOR, GAP, HEAD_BEFORE, HEAD_AFTER, ROLE_BEFORE, TITLE_AFTER, SIDE_MARGIN_IN
+    global TEXT_WIDTH_IN, BULLET_AT, BULLET_TEXT_AT
+    FONT = st.font
+    BODY_SIZE, HEADING_SIZE, NAME_SIZE, CONTACT_SIZE = Pt(st.body), Pt(st.heading), Pt(st.name), Pt(st.contact)
+    INK = MUTED = RGBColor.from_string(st.ink)
+    HEADING_COLOR = RGBColor.from_string(st.heading_color)
+    RULE_COLOR = st.rule_color
+    GAP, HEAD_BEFORE, HEAD_AFTER = st.gap, st.heading_before, st.heading_after
+    ROLE_BEFORE, TITLE_AFTER = st.role_before, st.title_after
+    SIDE_MARGIN_IN = st.margin_in
+    TEXT_WIDTH_IN = PAGE_WIDTH_IN - 2 * SIDE_MARGIN_IN
+    BULLET_AT, BULLET_TEXT_AT = Inches(st.bullet_at_in), Inches(st.bullet_text_in)
 
 # A line naming a job and its dates, rather than describing the work.
 DATE_RE = re.compile(
@@ -89,9 +118,9 @@ def _style_document(document: Document) -> None:
     normal.font.size = BODY_SIZE
     normal.font.color.rgb = INK
     fmt = normal.paragraph_format
-    fmt.space_after = Pt(3)
+    fmt.space_after = Pt(GAP)
     fmt.space_before = Pt(0)
-    fmt.line_spacing = 1.0
+    fmt.line_spacing = LINE_SPACING
     fmt.widow_control = True         # never strand one line of a bullet
 
     for section in document.sections:
@@ -108,11 +137,11 @@ def _style_document(document: Document) -> None:
     heading.font.name = FONT
     heading.font.size = HEADING_SIZE
     heading.font.bold = True
-    heading.font.color.rgb = INK
+    heading.font.color.rgb = HEADING_COLOR
     heading.font.all_caps = True
     hfmt = heading.paragraph_format
-    hfmt.space_before = Pt(8)
-    hfmt.space_after = Pt(4)
+    hfmt.space_before = Pt(HEAD_BEFORE)
+    hfmt.space_after = Pt(HEAD_AFTER)
     hfmt.keep_with_next = True       # a heading alone at a page foot is a bug
 
 
@@ -128,7 +157,7 @@ def _rule_under(para) -> None:
     bottom.set(qn("w:val"), "single")
     bottom.set(qn("w:sz"), "4")          # quarter-point hairline
     bottom.set(qn("w:space"), "2")
-    bottom.set(qn("w:color"), "BFBFBF")
+    bottom.set(qn("w:color"), RULE_COLOR)
     borders.append(bottom)
     para._p.get_or_add_pPr().append(borders)
 
@@ -158,7 +187,7 @@ def _add_heading(document: Document, text: str) -> None:
     for run in para.runs:
         run.font.name = FONT
         run.font.size = HEADING_SIZE
-        run.font.color.rgb = INK
+        run.font.color.rgb = HEADING_COLOR
     _rule_under(para)
 
 
@@ -172,8 +201,8 @@ def _add_role(document: Document, text: str, *, bold_title: bool = True) -> None
     title, dates = _split_dates(text)
     para = document.add_paragraph()
     fmt = para.paragraph_format
-    fmt.space_before = Pt(6)
-    fmt.space_after = Pt(3)
+    fmt.space_before = Pt(ROLE_BEFORE)
+    fmt.space_after = Pt(GAP)
     fmt.keep_with_next = True        # never split a job from its first bullet
     fmt.tab_stops.add_tab_stop(Inches(TEXT_WIDTH_IN), WD_TAB_ALIGNMENT.RIGHT)
 
@@ -192,7 +221,7 @@ def _add_role(document: Document, text: str, *, bold_title: bool = True) -> None
 def _add_school(document: Document, text: str) -> None:
     """The university line of an education entry, in bold."""
     para = _add(document, text, bold=True)
-    para.paragraph_format.space_after = Pt(3)
+    para.paragraph_format.space_after = Pt(GAP)
 
 
 def _add_title(document: Document, text: str) -> None:
@@ -200,14 +229,14 @@ def _add_title(document: Document, text: str) -> None:
     para = _add(document, _tidy_contact(text), bold=True, size=BODY_SIZE,
                 align=WD_ALIGN_PARAGRAPH.CENTER)
     para.paragraph_format.space_before = Pt(0)
-    para.paragraph_format.space_after = Pt(6)
+    para.paragraph_format.space_after = Pt(TITLE_AFTER)
 
 
 def _add_contact(document: Document, text: str) -> None:
     """The contact line, with the LinkedIn address as a linked word."""
     para = document.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    para.paragraph_format.space_after = Pt(3)
+    para.paragraph_format.space_after = Pt(GAP)
     items = [i for i in _tidy_contact(text).split(" \u00b7 ") if i]
     for n, item in enumerate(items):
         if n:
@@ -238,7 +267,7 @@ def _hyperlink(para, shown: str, url: str) -> None:
     link.set(qn("r:id"), rel)
     run = OxmlElement("w:r")
     props = OxmlElement("w:rPr")
-    for tag, attr, value in (("w:rFonts", "w:ascii", FONT), ("w:color", "w:val", "000000"),
+    for tag, attr, value in (("w:rFonts", "w:ascii", FONT), ("w:color", "w:val", str(INK)),
                              ("w:u", "w:val", "single"), ("w:sz", "w:val", str(int(CONTACT_SIZE.pt * 2)))):
         el = OxmlElement(tag)
         el.set(qn(attr), value)
@@ -258,7 +287,7 @@ def _add_skill(document: Document, text: str, keywords: list[str] | None = None)
     label, _, items = text.partition(": ")
     para = document.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    para.paragraph_format.space_after = Pt(3)
+    para.paragraph_format.space_after = Pt(GAP)
     run = para.add_run(label + ": ")
     run.bold = True
     run.font.name = FONT
@@ -269,7 +298,7 @@ def _add_skill(document: Document, text: str, keywords: list[str] | None = None)
 def _add_subheading(document: Document, text: str) -> None:
     """A grouping inside one job ("Cloud Infrastructure & Scalability")."""
     para = _add(document, text, bold=True, space_before=2)
-    para.paragraph_format.space_after = Pt(3)
+    para.paragraph_format.space_after = Pt(GAP)
     para.paragraph_format.keep_with_next = True
     return para
 
@@ -298,7 +327,7 @@ def _add_bullet(document: Document, text: str, keywords: list[str] | None = None
     fmt.left_indent = BULLET_TEXT_AT
     fmt.first_line_indent = BULLET_AT - BULLET_TEXT_AT
     fmt.tab_stops.add_tab_stop(BULLET_TEXT_AT)
-    fmt.space_after = Pt(3)
+    fmt.space_after = Pt(GAP)
     fmt.keep_together = True             # a bullet is not split across pages
     _emphasised(para, "\u2022\t", strip_bullet(text), keywords)
 
@@ -760,6 +789,13 @@ def write_tailored_resume(
     details, employers, dates, education — is copied through from the base
     resume untouched, because those are exactly the fields nothing should edit.
     """
+    from ml.resume.style import style_for
+    with _STYLE_LOCK:
+        _apply_style(style_for(result))
+        return _write_tailored(base, result, output_path, header_lines)
+
+
+def _write_tailored(base, result, output_path, header_lines):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -771,7 +807,7 @@ def write_tailored_resume(
         if kind == "name":
             name = _add(document, text, bold=True, size=NAME_SIZE,
                         align=WD_ALIGN_PARAGRAPH.CENTER)
-            name.paragraph_format.space_after = Pt(3)
+            name.paragraph_format.space_after = Pt(GAP)
         elif kind == "contact":
             _add_contact(document, text)
         elif kind == "title":
@@ -793,7 +829,7 @@ def write_tailored_resume(
         else:
             para = document.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            para.paragraph_format.space_after = Pt(3)
+            para.paragraph_format.space_after = Pt(GAP)
             _emphasised(para, "", text, keywords)
 
     document.save(output_path)

@@ -37,6 +37,10 @@
       <option value="auto" selected>Automatic (by your experience)</option>
       <option value="1">1 page</option><option value="2">2 pages</option><option value="3-4">3–4 pages</option>
     </select>
+    <label class="hint" for="template">Template</label>
+    <select id="template" class="chip" title="How the resume looks. Every template is ATS-safe.">
+      {% for t in templates %}<option value="{{ t.key }}" title="{{ t.description }}" {% if t.key == template %}selected{% endif %}>{{ t.label }}</option>{% endfor %}
+    </select>
     <button class="btn primary" id="create">Create tailored resume</button>
     <span class="hint" id="create-hint">Takes about five to ten minutes: Claude reads the posting, judges the evidence and writes the draft.</span>
   </div>
@@ -76,7 +80,11 @@
       <span class="hint">Preview:</span>
       <button class="chip on" data-view="docx">Word document</button>
       <button class="chip" data-view="pdf">PDF</button>
-      <button class="btn" id="edit-toggle" style="margin-left:auto">Edit the text</button>
+      <span class="hint" style="margin-left:auto">Template:</span>
+      <select id="switch-template" class="chip" title="Draw this resume in another template: same words, no new tailoring">
+        {% for t in templates %}<option value="{{ t.key }}">{{ t.label }}</option>{% endfor %}
+      </select>
+      <button class="btn" id="edit-toggle">Edit the text</button>
     </div>
     <div id="checks"></div>
     <div class="t-pages" id="pages"></div>
@@ -163,6 +171,7 @@ $('create').onclick = async () => {
   if ($('jd-file').files[0]) form.append('jd_file', $('jd-file').files[0]);
   form.append('jd_text', $('jd-text').value);
   form.append('length', $('length').value);
+  form.append('template', $('template').value);
   $('create').disabled = true;
   let r;
   try { r = await (await fetch('/tailor/start', {method: 'POST', body: form})).json(); }
@@ -231,6 +240,8 @@ async function load() {
     + (ex.text ? `<details><summary>Show the text read from the resume</summary><pre>${esc(ex.text)}</pre></details>` : '');
   renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps(); renderReview();
   loadKeywords(); renderRoadmap();
+  $('switch-template').value = ((RESULT.draft || {}).result || {}).template || '{{ template }}';
+  if (RESULT.template_note) $('checks').insertAdjacentHTML('afterbegin', `<div class="t-warn">⚠ ${esc(RESULT.template_note)}</div>`);
 }
 
 // -- skill roadmap ---------------------------------------------------------------
@@ -488,6 +499,16 @@ async function checkEdits() {
     t.insertAdjacentHTML('afterend', `<div class="kw-line-warn">This edit removes ${terms.map(esc).join(', ')}, the posting asks for ${terms.length > 1 ? 'them' : 'it'}, and no other line has ${terms.length > 1 ? 'them' : 'it'}.</div>`);
   });
 }
+$('switch-template').onchange = async () => {
+  const pick = $('switch-template');
+  pick.disabled = true;
+  $('checks').innerHTML = '<p class="hint">Drawing it again in the new template…</p>';
+  const r = await (await fetch(`/tailor/${RUN}/template`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                          body: JSON.stringify({template: pick.value})})).json();
+  pick.disabled = false;
+  if (!r.ok) { $('checks').innerHTML = `<p class="t-error">${esc(r.error)}</p>`; return; }
+  await load();
+};
 $('cancel-edits').onclick = () => { $('editor').hidden = true; $('pages').hidden = false; };
 $('save-edits').onclick = async () => {
   const edits = {};
