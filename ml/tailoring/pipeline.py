@@ -429,6 +429,31 @@ def restore_line(folder: Path, line: str) -> dict:
     return data
 
 
+def roadmap_for(folder: Path, cfg=None) -> dict:
+    """Build the skill roadmap for a run's gaps and keep it with the run."""
+    from datetime import datetime
+    from ml.tailoring import roadmap
+    data = json.loads((folder / "result.json").read_text())
+    jd, _ = run_posting(folder)
+    if not jd:
+        raise ValueError("This run's job posting was not kept, so there is nothing to plan against.")
+    try:
+        master = _texts(folder)[0]
+    except (StopIteration, FileNotFoundError):
+        master = data.get("extraction", {}).get("text") or ""
+    missing = ((data.get("review") or {}).get("recruiter") or {}).get("missing_keywords") or []
+    gaps = roadmap.gaps_of((data.get("report") or {}).get("matches") or [], missing)
+    if not gaps:
+        raise ValueError("No gaps: the resume shows everything this posting asks for.")
+    if cfg is None:
+        from backend.config.loader import load_config
+        cfg = load_config()
+    skills = roadmap.build(master, jd, gaps, cfg)
+    data["roadmap"] = {"skills": skills, "made": datetime.now().isoformat(timespec="minutes")}
+    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    return data["roadmap"]
+
+
 def _place_if_job(folder: Path, data: dict) -> None:
     """A job's run, once the person changes it, is what that job's application attaches."""
     job = job_of_run(folder)

@@ -2454,6 +2454,21 @@ def tailor_keywords_check(run_id):
         return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
 
 
+@app.post("/tailor/<run_id>/roadmap")
+def tailor_roadmap(run_id):
+    """Build the skill roadmap for this run's gaps (one model call, a minute or two)."""
+    from ml.tailoring.pipeline import roadmap_for
+    folder = _tailor_run(run_id)
+    if folder is None or not (folder / "result.json").exists():
+        return jsonify(ok=False, error="No result yet."), 404
+    try:
+        return jsonify(ok=True, **roadmap_for(folder, cfg()))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(ok=False, error=f"The roadmap could not be written: {type(exc).__name__}: {exc}"), 500
+
+
 @app.post("/tailor/<run_id>/restore")
 def tailor_restore(run_id):
     """Put back one line of the master that the tailoring cut or rewrote."""

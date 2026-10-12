@@ -63,6 +63,7 @@
     <button class="t-tab" data-tab="versions" role="tab" id="tab-versions" aria-controls="panel-versions" aria-selected="false" tabindex="-1">Version Checks</button>
     <button class="t-tab" data-tab="changes" role="tab" id="tab-changes" aria-controls="panel-changes" aria-selected="false" tabindex="-1">Changes Made</button>
     <button class="t-tab" data-tab="gaps" role="tab" id="tab-gaps" aria-controls="panel-gaps" aria-selected="false" tabindex="-1">Gaps</button>
+    <button class="t-tab" data-tab="roadmap" role="tab" id="tab-roadmap" aria-controls="panel-roadmap" aria-selected="false" tabindex="-1">Skill Roadmap</button>
   </div>
 
   <div class="t-panel" data-panel="resume" role="tabpanel" id="panel-resume" aria-labelledby="tab-resume" tabindex="0">
@@ -95,6 +96,7 @@
   <div class="t-panel" data-panel="versions" role="tabpanel" id="panel-versions" aria-labelledby="tab-versions" tabindex="0" hidden><div id="versions"></div></div>
   <div class="t-panel" data-panel="changes" role="tabpanel" id="panel-changes" aria-labelledby="tab-changes" tabindex="0" hidden><div id="changes"></div></div>
   <div class="t-panel" data-panel="gaps" role="tabpanel" id="panel-gaps" aria-labelledby="tab-gaps" tabindex="0" hidden><div id="gaps"></div></div>
+  <div class="t-panel" data-panel="roadmap" role="tabpanel" id="panel-roadmap" aria-labelledby="tab-roadmap" tabindex="0" hidden><div id="roadmap"></div></div>
 </section>
 
 <script>
@@ -222,7 +224,45 @@ async function load() {
       .filter(Boolean).map(w => `<div>⚠ ${esc(w)}</div>`).join('')
     + (ex.text ? `<details><summary>Show the text read from the resume</summary><pre>${esc(ex.text)}</pre></details>` : '');
   renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps(); renderReview();
-  loadKeywords();
+  loadKeywords(); renderRoadmap();
+}
+
+// -- skill roadmap ---------------------------------------------------------------
+// For each gap: what it is, the closest thing already on the resume (quoted,
+// checked), a plan with named resources and hours, a project, a certification,
+// and an honest interview answer. Never written into the resume.
+function renderRoadmap(working) {
+  const rm = RESULT.roadmap;
+  const intro = `<p class="hint">How to close each gap this posting shows: built from your own resume, never added to it.</p>`;
+  const button = `<button class="btn primary" id="rm-build" ${working ? 'disabled' : ''}>${working ? 'Writing your roadmap… (a minute or two)' : rm ? 'Write it again' : 'Build my skill roadmap'}</button>`;
+  if (!rm || !(rm.skills || []).length) {
+    $('roadmap').innerHTML = intro + button + (rm ? '<p class="hint">No roadmap could be written for this run.</p>' : '');
+  } else {
+    const total = rm.skills.reduce((n, k) => n + (k.hours || 0), 0);
+    $('roadmap').innerHTML = intro + `<p><b>${rm.skills.length} skills</b> · about <b>${total} hours</b> in all · written ${esc(rm.made || '')} ${button}</p>`
+      + rm.skills.map(k => `<div class="rm-card">
+        <div class="rm-head"><span class="rm-skill">${esc(k.skill)}</span>
+          <span class="pill ${k.priority === 'required' ? 'bad' : 'muted'}">${esc(k.priority || 'asked')}</span>
+          ${k.status === 'unclear' ? '<span class="pill review">partly shown</span>' : ''}
+          <span class="rm-hours">~${k.hours || 0} h</span></div>
+        <div>${esc(k.what_it_is)}</div>
+        ${k.why_here ? `<div class="hint">${esc(k.why_here)}</div>` : ''}
+        ${k.you_have || k.how_it_transfers ? `<div class="rm-bridge">${k.you_have ? `<div class="rm-label">You already have</div><q>${esc(k.you_have)}</q>` : ''}
+          ${k.how_it_transfers ? `<div>${esc(k.how_it_transfers)}</div>` : ''}</div>` : ''}
+        ${(k.plan || []).length ? `<div class="rm-label">Plan</div><ol class="rm-plan">${k.plan.map(p => `<li>${esc(p.step)}${p.resource ? ` <span class="hint">· ${esc(p.resource)}</span>` : ''}${p.hours ? ` <span class="hint">· ${p.hours} h</span>` : ''}</li>`).join('')}</ol>` : ''}
+        ${k.project ? `<div class="rm-label">Prove it</div><div>${esc(k.project)}</div>` : ''}
+        ${k.certification ? `<div class="rm-label">Certification</div><div>${esc(k.certification)}</div>` : ''}
+        ${k.interview_answer ? `<div class="rm-label">If asked in an interview today</div><div><q>${esc(k.interview_answer)}</q></div>
+          ${k.check_answer ? '<div class="kw-line-warn">This answer says you are already learning or building it. Say that only once you have started the plan.</div>' : ''}` : ''}
+      </div>`).join('');
+  }
+  $('rm-build').onclick = async () => {
+    renderRoadmap(true);
+    const r = await (await fetch(`/tailor/${RUN}/roadmap`, {method: 'POST'})).json();
+    if (!r.ok) { renderRoadmap(); $('roadmap').insertAdjacentHTML('beforeend', `<p class="t-error">${esc(r.error)}</p>`); return; }
+    RESULT.roadmap = {skills: r.skills, made: r.made};
+    renderRoadmap();
+  };
 }
 
 // -- keywords --------------------------------------------------------------------
