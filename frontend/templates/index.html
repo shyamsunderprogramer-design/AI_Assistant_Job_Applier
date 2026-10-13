@@ -598,7 +598,8 @@ async function pollProbe() {
   const pct = d.percent ?? 0;
   $('probe-fill').style.width = Math.max(pct, 0.3) + '%';
   $('probe-dot').className = 'probe-dot' + (d.running ? ' live' : '');
-  $('probe-btn').textContent = d.stopping ? 'Stopping…' : d.running ? 'Stop' : 'Start';
+  const finished = !d.running && d.state === 'finished';
+  $('probe-btn').textContent = d.stopping ? 'Stopping…' : d.running ? 'Stop' : finished ? 'Search again' : 'Start';
   $('probe-btn').disabled = !!d.stopping;
 
   const done = (d.done ?? 0).toLocaleString();
@@ -613,13 +614,22 @@ async function pollProbe() {
           : secs < 3600 ? ` · last moved ${Math.round(secs / 60)} min ago`
           : ` · last moved ${Math.round(secs / 3600)} h ago`;
   }
-  $('probe-sub').textContent = `${done} of ${total} companies · ${pct}%${moved}`;
+  const when = iso => new Date(iso).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+  const last = d.last_pass;
+  $('probe-sub').textContent = finished
+    ? `All ${total} companies checked${last && last.finished_at ? ' · finished ' + when(last.finished_at) : ''}`
+    : `${done} of ${total} companies · ${pct}%${moved}`
+      + (last && last.finished_at ? ` · the whole list was last checked ${when(last.finished_at)}` : '');
 
   // Boards found is the number that matters — the rest is bookkeeping.
   const found = `${(d.found ?? 0).toLocaleString()} new boards found`;
   if (d.stopping) {
     $('probe-title').textContent = 'Stopping';
-    $('probe-foot').textContent = found + ' · finishing the current batch of 40 names first';
+    $('probe-foot').textContent = found + ' · finishing the company being checked now (a few seconds)';
+  } else if (finished) {
+    $('probe-title').textContent = 'Board search finished';
+    $('probe-foot').textContent = found + ' · every daily fetch reads these boards. Search again only after adding '
+      + 'companies to the list: the ones already checked are answered from memory.';
   } else if (d.running) {
     const rate = d.rate ? ` · ${d.rate.toLocaleString()}/hr` : '';
     const eta = d.eta_hours
@@ -638,7 +648,10 @@ async function pollProbe() {
 
 $('probe-btn').addEventListener('click', async e => {
   const b = e.currentTarget;
-  const starting = b.textContent === 'Start';
+  const starting = b.textContent === 'Start' || b.textContent === 'Search again';
+  if (b.textContent === 'Search again' && !confirm('Every company on the list has been checked already. Search it again? '
+      + 'Companies already answered are skipped; only the checks that failed last time are asked again, and the '
+      + 'boards that failed them are slow to answer, so this can run for days. You can stop it at any time.')) return;
   b.disabled = true;
   b.textContent = starting ? 'Starting…' : 'Stopping…';
   const d = await ask('/run/probe/' + (starting ? 'start' : 'stop'), {method: 'POST'});

@@ -2028,8 +2028,8 @@ def probe_status():
             alive = False
 
     done, total = state.get("done") or 0, state.get("total") or 0
-    # Stop is honoured between batches, so the process outlives the click. Say
-    # so, or the button flips back to "Stop" and reads as though it was ignored.
+    # Stop is honoured after the company being checked, so the process outlives the
+    # click by seconds. Say so, or the button flips back to "Stop" and reads as ignored.
     stopping = alive and (PROJECT_ROOT / "data" / "probe_runner.stop").exists()
     return jsonify(
         ok=True, ever_run=True, running=alive, stopping=stopping,
@@ -2040,6 +2040,8 @@ def probe_status():
         eta_hours=state.get("eta_hours"),
         state=state.get("status"),
         updated=state.get("updated_at"),
+        # The last time the whole list was checked: a later pass resets the counters, not this.
+        last_pass=state.get("last_pass"),
     )
 
 
@@ -2056,7 +2058,7 @@ def probe_control(action: str):
             os.kill(pid, signal.SIGTERM)
         except (OSError, ValueError):
             pass
-        return jsonify(ok=True, note="stopping after the current batch")
+        return jsonify(ok=True, note="stopping after the company being checked now")
 
     # The refined list first: it holds the 22% of companies that can plausibly
     # have a board, and the button pointed past it at the raw 1.75M file.

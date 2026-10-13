@@ -17,7 +17,7 @@ What this adds on top is the ability to leave it alone:
   * it holds the Mac awake while it runs, and lets it sleep the moment it stops
   * it waits out a lost internet connection instead of dying on it
   * it writes what it is doing to a state file, so a page can show progress
-  * it stops cleanly when asked, mid-batch, without losing the batch
+  * it stops within one company when asked, keeping everything checked so far
 
     python -m devops.probe_runner                # start, resume, keep going
     python -m devops.probe_runner --status       # what is it doing
@@ -207,10 +207,35 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
     done = resume_at
     stopping = False
 
+    found_live = 0                   # boards found in the batch under way, counted as they come
+
+    def count_find(progress, result):
+        nonlocal found_live
+        if getattr(result, "new", False):
+            found_live += 1
+
     def ask_to_stop(signum, frame):
+        """Stop now, not after the batch.
+
+        Waiting was the bug: a name whose probe a busy board was slow to answer
+        held a Stop for minutes, and the button read as broken. Nothing is lost
+        by leaving at once -- every probe and every board is written to the
+        database the moment it is answered -- so the state is saved and the
+        process exits. The batch under way is redone next time, from cache.
+        """
         nonlocal stopping
         stopping = True
-        log("Stop requested — finishing the current batch first.")
+        log("Stop requested — stopping now; everything checked so far is saved.")
+        write_state(status="stopped", done=done, found_total=found_total + found_live)
+        log(f"=== stopped: {done:,}/{total:,} names, {found_total + found_live:,} boards found ===")
+        PIDFILE.unlink(missing_ok=True)
+        STOPFILE.unlink(missing_ok=True)
+        if awake is not None:
+            awake.terminate()
+        os._exit(0)
+
+    def should_stop() -> bool:
+        return stopping or STOPFILE.exists()
 
     signal.signal(signal.SIGTERM, ask_to_stop)
     signal.signal(signal.SIGINT, ask_to_stop)
@@ -266,8 +291,11 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
             # Counted from the results, not from `progress`: discover_from_names
             # starts a fresh progress object each call, so "after minus before"
             # subtracted the previous batch's finds and the total never grew.
-            results = discoverer.discover_from_names(chunk, sources, max_slugs=max_slugs)
+            found_live = 0
+            results = discoverer.discover_from_names(chunk, sources, max_slugs=max_slugs,
+                                                     should_stop=should_stop, on_progress=count_find)
             found = sum(1 for r in results if r.new)
+            found_live = 0
         except KeyboardInterrupt:
             log("Interrupted.")
             break
@@ -277,7 +305,9 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
             log(f"Batch at {start} failed ({type(exc).__name__}: {exc}) — continuing.")
             found = 0
 
-        done = min(start + len(chunk), total)
+        # A Stop mid-batch leaves the rest of it for next time (answered from cache then).
+        taken = getattr(discoverer, "consumed", len(chunk))
+        done = min(start + taken, total)
         found_total += found
 
         # Rate over the last half hour, not the whole run. A restart replays
@@ -299,10 +329,17 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
             log(f"{done:,}/{total:,} names · {found_total:,} boards found · "
                 f"{rate*3600:,.0f}/hr{eta}")
 
-    write_state(status="stopped" if (stopping or STOPFILE.exists()) else "finished",
-                done=done, found_total=found_total)
-    log(f"=== stopped: {done:,}/{total:,} names, {found_total:,} boards found ===")
-    log("Resuming later costs nothing — probes already sent are answered from cache.")
+    finished = not (stopping or STOPFILE.exists()) and done >= total
+    if finished:
+        # Kept apart from the counters, which a later pass starts again from 0: the
+        # page can still say the whole list was checked, when, and what it found.
+        write_state(status="finished", done=done, found_total=found_total, finished_at=now(),
+                    last_pass={"total": total, "found_total": found_total, "finished_at": now()})
+        log(f"=== finished: all {total:,} names checked, {found_total:,} boards found ===")
+    else:
+        write_state(status="stopped", done=done, found_total=found_total)
+        log(f"=== stopped: {done:,}/{total:,} names, {found_total:,} boards found ===")
+        log("Resuming later costs nothing — probes already sent are answered from cache.")
 
     PIDFILE.unlink(missing_ok=True)
     STOPFILE.unlink(missing_ok=True)

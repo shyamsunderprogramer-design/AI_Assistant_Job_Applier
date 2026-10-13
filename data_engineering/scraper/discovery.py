@@ -91,9 +91,15 @@ def candidate_slugs(
 
 
 def load_probe_cache() -> dict[tuple[str, str], bool]:
-    """Every (source, slug) already probed, mapped to whether it was a hit."""
+    """Every (source, slug) already probed, mapped to whether it was a hit.
+
+    Three columns, not whole rows: at 3.5 million probes, building an ORM
+    object per row took over five minutes, and a Stop pressed meanwhile waited
+    for all of it. As plain columns it takes about three seconds.
+    """
     with get_session() as session:
-        return {(row.source, row.slug): row.found for row in session.query(ProbeLog).all()}
+        return {(source, slug): bool(found) for source, slug, found
+                in session.query(ProbeLog.source, ProbeLog.slug, ProbeLog.found)}
 
 
 def record_probe(source: str, slug: str, found: bool, company_name: str | None = None) -> None:
@@ -254,12 +260,16 @@ class CompanyDiscoverer:
         sources: list[str] | None = None,
         on_progress=None,
         max_slugs: int = 0,
+        should_stop=None,
     ) -> list[DiscoveryResult]:
         """Probe every name. Safe to interrupt — findings persist as they happen.
 
         A name may be "Company" or "Company,domain.com"; the domain becomes the
-        first slug guess.
+        first slug guess. `should_stop()` is asked after every name: a Stop is
+        honoured within one name, not after the whole batch. `self.consumed`
+        says how many of `names` were taken, so a stopped batch can be resumed.
         """
+        self.consumed = 0
         # Loaded once per discoverer: every probe it sends is added as it goes.
         # Reloading all of probe_log (850,000 rows, four seconds) before each
         # batch of forty names was pure waste.
@@ -289,18 +299,21 @@ class CompanyDiscoverer:
             done = pool.map(one, names)
         try:
             for result in done:
-                if result is None:
-                    continue
-                self.progress.names += 1
-                results.append(result)
-                if result.found:
-                    self.progress.found += 1
-                    self._save(result.name, result.slug, result.source, origin="discovery")
-                if on_progress is not None:
-                    on_progress(self.progress, result)
+                self.consumed += 1
+                if result is not None:
+                    self.progress.names += 1
+                    results.append(result)
+                    if result.found:
+                        self.progress.found += 1
+                        self._save(result.name, result.slug, result.source, origin="discovery")
+                    if on_progress is not None:
+                        on_progress(self.progress, result)
+                if should_stop is not None and should_stop():
+                    break
         finally:
             if pool is not None:
-                pool.shutdown(wait=True)
+                # Names not yet started are dropped; the ones in flight finish (seconds).
+                pool.shutdown(wait=True, cancel_futures=True)
         return results
 
     def _save(self, name: str, slug: str, source: str, origin: str) -> None:

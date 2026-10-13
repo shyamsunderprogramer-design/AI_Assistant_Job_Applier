@@ -257,3 +257,20 @@ def test_single_host_systems_try_only_the_first_name_variant(db):
     pairs = d.plan("Ramp Financial, Inc.", max_slugs=2)
     assert [s for src, s in pairs if src == "greenhouse"] == ["rampfinancial"]
     assert [s for src, s in pairs if src == "recruitee"] == ["rampfinancial", "ramp-financial"]
+
+
+def test_a_stop_is_honoured_after_the_name_in_hand(db):
+    gh = CountingScraper("greenhouse", ["b"])
+    d = discoverer_with(greenhouse=gh)
+    asked = []
+    results = d.discover_from_names(["A", "B", "C", "D"], ["greenhouse"],
+                                    should_stop=lambda: asked.append(1) or len(asked) >= 2)
+    assert [r.name for r in results] == ["A", "B"] and d.consumed == 2
+    assert gh.calls == ["a", "b"]                      # C and D never asked
+    assert d.progress.found == 1                       # B's board kept
+
+
+def test_the_probe_cache_loads_as_plain_pairs(db):
+    record_probe("greenhouse", "acme", True)
+    record_probe("lever", "nope", False)
+    assert load_probe_cache() == {("greenhouse", "acme"): True, ("lever", "nope"): False}
