@@ -2042,7 +2042,32 @@ def probe_status():
         updated=state.get("updated_at"),
         # The last time the whole list was checked: a later pass resets the counters, not this.
         last_pass=state.get("last_pass"),
+        current=Path(state.get("names_file") or "").name,
+        lists=_probe_lists(state),
     )
+
+
+_LIST_SIZES: dict[str, int] = {}
+
+
+def _probe_lists(state: dict) -> list[dict]:
+    """Each list the page can start: its size, how far its own pass got, and what it found."""
+    from devops.probe_runner import LISTS, pass_of
+    out = []
+    for key, (file, label) in LISTS.items():
+        path = PROJECT_ROOT / "data" / file
+        if not path.exists():
+            continue
+        if file not in _LIST_SIZES:
+            with path.open(encoding="utf-8") as handle:
+                _LIST_SIZES[file] = sum(1 for line in handle if line.strip() and not line.startswith("#"))
+        entry = pass_of(state, file)
+        found = (entry.get("found_total") or 0) - (entry.get("found_before") or 0) if entry else 0
+        out.append({"key": key, "file": file, "label": label, "total": entry.get("total") or _LIST_SIZES[file],
+                    "done": entry.get("done") or 0, "status": entry.get("status") or "not started",
+                    "finished_at": entry.get("finished_at"), "found": max(0, found),
+                    "rate": entry.get("names_per_hour")})
+    return out
 
 
 @app.post("/run/probe/<action>")
@@ -2060,9 +2085,12 @@ def probe_control(action: str):
             pass
         return jsonify(ok=True, note="stopping after the company being checked now")
 
-    # The refined list first: it holds the 22% of companies that can plausibly
-    # have a board, and the button pointed past it at the raw 1.75M file.
-    names = PROJECT_ROOT / "data" / "refined_names_worthwhile.txt"
+    # The list the page asked for; else the refined list, which holds the 22% of
+    # companies that can plausibly have a board (the button once pointed past it
+    # at the raw 1.75M file).
+    from devops.probe_runner import list_path
+    wanted = str((request.get_json(silent=True) or {}).get("list") or request.args.get("list") or "")
+    names = PROJECT_ROOT / list_path(wanted) if list_path(wanted) else PROJECT_ROOT / "data" / "refined_names_worthwhile.txt"
     if not names.exists():
         names = PROJECT_ROOT / "data" / "refined_names_all.txt"
     if not names.exists():

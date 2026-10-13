@@ -182,3 +182,27 @@ def test_one_answer_resets_the_doubling(monkeypatch):
     with pytest.raises(RateLimited):
         client.get("https://apply.workable.com/c")
     assert client._cooling_until["apply.workable.com"] - now[0] == client.settings.rate_limit_cooldown_seconds
+
+
+def test_each_list_keeps_its_own_progress(monkeypatch, tmp_path):
+    from devops import probe_runner as pr
+    monkeypatch.setattr(pr, "STATE", tmp_path / "state.json")
+    pr.write_state(names_file="data/a.txt", status="finished", done=100, total=100, found_total=7,
+                   sources=["lever"], finished_at="2026-10-13T06:46:11+00:00", found_before=0)
+    pr.write_state(names_file="data/b.txt", status="stopped", done=40, total=1000, found_total=9,
+                   sources=["lever"], finished_at=None, found_before=7)
+    state = pr.read_state()
+    a, b = pr.pass_of(state, "data/a.txt"), pr.pass_of(state, "data/b.txt")
+    assert a["status"] == "finished" and a["done"] == 100 and a["finished_at"]
+    assert b["done"] == 40 and b["found_total"] - b["found_before"] == 2
+    # Back to b after a: it resumes where b stopped, not at 0.
+    assert pr.resume_point({**b}, "data/b.txt", 1000, ["lever"], 40) == 40
+    # a finished: searching it again starts from the top.
+    assert pr.resume_point({**a}, "data/a.txt", 100, ["lever"], 40) == 0
+
+
+def test_the_page_starts_the_list_it_names():
+    from devops.probe_runner import list_path
+    assert list_path("small").name == "refined_names_small.txt"
+    assert list_path("worthwhile").name == "refined_names_worthwhile.txt"
+    assert list_path("../../etc/passwd") is None

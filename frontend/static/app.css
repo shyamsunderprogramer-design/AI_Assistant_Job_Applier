@@ -226,6 +226,10 @@ ol.steps{list-style:none;margin:0;padding:0}
 .probe-track i{display:block;height:100%;background:var(--signal);
   transition:width .6s ease}
 .probe-foot{margin-top:7px;font-size:11px;color:var(--faint)}
+.probe-lists{margin-top:9px;display:grid;gap:6px;border-top:1px solid var(--line);padding-top:8px}
+.probe-list{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;color:var(--ink-2)}
+.probe-list.done{color:var(--muted)}
+.probe-list b{font-weight:600;color:var(--ink)}
 
 /* The details form. Plain, close-set, and quick to fill: it is the one screen
    standing between having the tool and being able to apply with it. */

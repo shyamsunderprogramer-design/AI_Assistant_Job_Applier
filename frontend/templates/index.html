@@ -85,6 +85,7 @@
   </div>
   <div class="probe-track"><i id="probe-fill"></i></div>
   <div class="probe-foot" id="probe-foot"></div>
+  <div class="probe-lists" id="probe-lists"></div>
 </section>
 
 <section class="stats">
@@ -599,8 +600,11 @@ async function pollProbe() {
   $('probe-fill').style.width = Math.max(pct, 0.3) + '%';
   $('probe-dot').className = 'probe-dot' + (d.running ? ' live' : '');
   const finished = !d.running && d.state === 'finished';
-  $('probe-btn').textContent = d.stopping ? 'Stopping…' : d.running ? 'Stop' : finished ? 'Search again' : 'Start';
+  // The main button only stops a run; each list below has its own Start.
+  $('probe-btn').hidden = !d.running && !d.stopping;
+  $('probe-btn').textContent = d.stopping ? 'Stopping…' : 'Stop';
   $('probe-btn').disabled = !!d.stopping;
+  renderLists(d);
 
   const done = (d.done ?? 0).toLocaleString();
   const total = (d.total ?? 0).toLocaleString();
@@ -646,15 +650,44 @@ async function pollProbe() {
   setTimeout(pollProbe, d.running ? 10000 : 30000);
 }
 
+// One row per company list: how far its own pass got, what it found, and its own Start.
+function renderLists(d) {
+  const lists = d.lists || [];
+  const fast = Math.max(...lists.map(l => l.rate || 0), 0) || 3000;     // names an hour, last measured
+  const when = iso => new Date(iso).toLocaleDateString([], {month: 'short', day: 'numeric'});
+  $('probe-lists').innerHTML = lists.map(l => {
+    const here = d.running && l.file === d.current;
+    const pct = l.total ? Math.round(1000 * l.done / l.total) / 10 : 0;
+    const days = Math.max(1, Math.round((l.total - l.done) / fast / 24));
+    const say = l.status === 'finished'
+      ? `all ${l.total.toLocaleString()} checked${l.finished_at ? ' · ' + when(l.finished_at) : ''} · ${l.found.toLocaleString()} boards`
+      : here ? `checking now · ${l.done.toLocaleString()} of ${l.total.toLocaleString()} (${pct}%) · ${l.found.toLocaleString()} boards so far`
+      : l.done ? `${l.done.toLocaleString()} of ${l.total.toLocaleString()} (${pct}%) · ${l.found.toLocaleString()} boards so far · about ${days} days left`
+      : `${l.total.toLocaleString()} companies · not started · about ${days} days running`;
+    const label = l.status === 'finished' ? 'Search again' : l.done ? 'Continue' : 'Start';
+    const button = here ? '' : `<button class="btn small" data-list="${l.key}" data-label="${label}"
+        ${d.running || d.stopping ? 'disabled title="One search at a time: stop the one running first"' : ''}>${label}</button>`;
+    return `<div class="probe-list${l.status === 'finished' ? ' done' : ''}"><span>${l.status === 'finished' ? '✓ ' : ''}<b>${l.label}</b> — ${say}</span>${button}</div>`;
+  }).join('');
+  document.querySelectorAll('[data-list]').forEach(b => b.onclick = async () => {
+    if (b.dataset.label === 'Search again' && !confirm('Every company on this list has been checked already. Search it again? '
+        + 'Companies already answered are skipped; only the checks that failed last time are asked again, and the '
+        + 'boards that failed them are slow to answer, so this can run for days. You can stop it at any time.')) return;
+    if (b.dataset.label === 'Start' && !confirm('Start searching this list? It runs in the background for days, keeps '
+        + 'the Mac awake while it runs (keep it plugged in), and can be stopped at any time without losing anything.')) return;
+    b.disabled = true; b.textContent = 'Starting…';
+    const r = await ask('/run/probe/start', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                             body: JSON.stringify({list: b.dataset.list})});
+    if (!r.ok) $('probe-foot').textContent = r.error || 'Could not start.';
+    setTimeout(pollProbe, 1500);
+  });
+}
+
 $('probe-btn').addEventListener('click', async e => {
   const b = e.currentTarget;
-  const starting = b.textContent === 'Start' || b.textContent === 'Search again';
-  if (b.textContent === 'Search again' && !confirm('Every company on the list has been checked already. Search it again? '
-      + 'Companies already answered are skipped; only the checks that failed last time are asked again, and the '
-      + 'boards that failed them are slow to answer, so this can run for days. You can stop it at any time.')) return;
   b.disabled = true;
-  b.textContent = starting ? 'Starting…' : 'Stopping…';
-  const d = await ask('/run/probe/' + (starting ? 'start' : 'stop'), {method: 'POST'});
+  b.textContent = 'Stopping…';
+  const d = await ask('/run/probe/stop', {method: 'POST'});
   if (!d.ok) { $('probe-foot').textContent = d.error || 'Could not do that.'; }
   b.disabled = false;
   setTimeout(pollProbe, 1500);

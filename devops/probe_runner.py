@@ -107,6 +107,23 @@ def resume_point(previous: dict, names_file: str, total: int, sources, batch: in
     return max(0, min(done - done % batch, total))
 
 
+# The lists the page can start, in the order they are meant to run.
+LISTS = {
+    "worthwhile": ("refined_names_worthwhile.txt", "Companies with 11 or more employees"),
+    "small": ("refined_names_small.txt", "Companies with 1 to 10 employees"),
+}
+
+
+def list_path(key: str) -> Path | None:
+    entry = LISTS.get(key)
+    return Path("data") / entry[0] if entry else None
+
+
+def pass_of(state: dict, names_file: str) -> dict:
+    """What is known about one list's pass: kept per list, so switching lists loses neither."""
+    return (state.get("passes") or {}).get(Path(names_file).name) or {}
+
+
 def read_state() -> dict:
     try:
         return json.loads(STATE.read_text(encoding="utf-8"))
@@ -117,6 +134,14 @@ def read_state() -> dict:
 def write_state(**fields) -> None:
     state = read_state()
     state.update(fields, updated_at=now())
+    # The same numbers under this list's own name, for when another list runs.
+    names_file = state.get("names_file")
+    if names_file:
+        keep = ("status", "done", "total", "found_total", "finished_at", "sources", "names_per_hour",
+                "updated_at", "found_before")
+        passes = state.setdefault("passes", {})
+        entry = passes.setdefault(Path(names_file).name, {})
+        entry.update({k: state[k] for k in keep if k in state}, names_file=names_file)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -192,6 +217,9 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
 
     sources = cfg.get("discovery.probe_sources", [])
     previous = read_state()
+    # Where THIS list stopped, even if another list ran since.
+    if previous.get("names_file") != str(names_path):
+        previous = {**pass_of(previous, str(names_path)), "found_total": previous.get("found_total")}
     resume_at = resume_point(previous, str(names_path), total, sources, batch)
     if resume_at:
         log(f"Resuming at name {resume_at:,}: same list, same systems as last time")
@@ -240,9 +268,11 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
     signal.signal(signal.SIGTERM, ask_to_stop)
     signal.signal(signal.SIGINT, ask_to_stop)
 
+    # Boards found before this list's pass began, so the page can say what this list found.
+    found_before = (int(previous.get("found_before") or 0) if resume_at else found_total)
     write_state(status="running", pid=os.getpid(), total=total, done=resume_at,
                 found_total=found_total, started_at=now(), names_file=str(names_path),
-                sources=sorted(sources))
+                sources=sorted(sources), finished_at=None, found_before=found_before)
 
     from data_engineering.scraper.discovery import CompanyDiscoverer
     from data_engineering.scraper.http_client import HttpSettings, PoliteClient
