@@ -279,8 +279,14 @@ def fill(page, job_id: int, url: str, applicant: Applicant, resume_path: Path | 
 
     result.captcha = bool(re.search(r"recaptcha|hcaptcha", html, re.I))
     try:
+        # The form itself, not the page: JazzHR shows it in its own panel, and a page
+        # screenshot held only the posting (13 Oct 2026), so it proved nothing was attached.
         shot = (evidence or _evidence_dir(job_id)) / "form.png"
-        page.screenshot(path=str(shot), full_page=True)
+        form = page.query_selector("#form_submit_new_resume")
+        if form is not None:
+            form.screenshot(path=str(shot))
+        else:
+            page.screenshot(path=str(shot), full_page=True)
         result.screenshot = str(shot)
     except Exception:
         pass
