@@ -269,7 +269,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant, resume_path: Path | 
                 element.fill(reply)
             else:
                 _type(page, element, reply)
-            result.filled[q["label"][:60]] = reply
+            result.filled[q["label"][:300]] = reply   # whole: the Applied page shows the question
             _pause(page)
         except Exception as exc:
             log.debug("JazzHR %s: %r not filled: %s", job_id, q["label"], exc)

@@ -54,6 +54,9 @@ h2{font-family:var(--cond);font-size:17px;font-weight:600;margin:0 0 10px}
 /* A count means little without its denominator: 413 matches reads very
    differently beside 59,284 postings scanned. */
 .stat .note{display:block;margin-top:5px;font-size:11px;line-height:1.35;color:var(--faint)}
+a.stat-link{text-decoration:none;color:inherit;display:block}
+a.stat-link:hover{background:var(--raised)}
+a.stat-link .note{color:var(--signal-ink)}
 @media(max-width:1000px){.stats{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:720px){.stats{grid-template-columns:repeat(2,1fr)}}
 

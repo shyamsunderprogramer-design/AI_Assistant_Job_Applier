@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Applied{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Applied</h1>
+    <div class="sub">Every job you applied to, newest first. Open one to see the posting, the day it went, what was sent,
+      and to record what happens next: a reply, interviews, an offer or a rejection.</div>
+  </div>
+</header>
+
+<section class="stats ap-stats">
+  <div class="stat"><span class="k">Applied</span><span class="v">{{ items|length }}</span><span class="note">in all</span></div>
+  <div class="stat"><span class="k">Waiting</span><span class="v">{{ counts['Applied'] }}</span><span class="note">no interview yet</span></div>
+  <div class="stat lead"><span class="k">Interviewing</span><span class="v">{{ counts['Interviewing'] }}</span><span class="note">in progress</span></div>
+  <div class="stat"><span class="k">Offers</span><span class="v">{{ counts['Offer'] }}</span><span class="note">&nbsp;</span></div>
+  <div class="stat"><span class="k">Rejected</span><span class="v">{{ counts['Rejected'] }}</span><span class="note">&nbsp;</span></div>
+</section>
+
+<section class="card">
+  {% if items %}
+  <div class="row" style="margin-bottom:8px">
+    <input type="search" id="q" class="chip" placeholder="Search company or title" aria-label="Search">
+    <select id="f" class="chip" aria-label="Show">
+      <option value="">Every stage</option>
+      {% for s in ['Applied', 'Interviewing', 'Offer', 'Rejected'] %}<option>{{ s }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="t-table-wrap"><table class="t-table ap-table"><thead><tr>
+    <th>Applied</th><th>Job</th><th>Where it stands</th><th class="num">Days</th><th></th>
+  </tr></thead><tbody>
+    {% for a in items %}
+    <tr data-status="{{ a.status }}" data-text="{{ (a.company ~ ' ' ~ a.title)|lower }}">
+      <td class="hint">{{ a.applied_at[:10] if a.applied_at else '—' }}</td>
+      <td><a href="{{ url_for('application_page', job_id=a.job_id) }}"><b>{{ a.title }}</b></a>
+        <div class="hint">{{ a.company }}{% if not a.open %} · posting closed{% endif %}</div></td>
+      <td><span class="pill ap-{{ a.status|lower }}">{{ a.stage }}</span></td>
+      <td class="num">{{ a.days if a.days is not none else '' }}</td>
+      <td><a href="{{ url_for('application_page', job_id=a.job_id) }}">Open →</a></td>
+    </tr>
+    {% endfor %}
+  </tbody></table></div>
+  {% else %}
+  <p class="hint">No applications yet. Mark a job Applied on the Jobs page, or apply through Auto-apply.</p>
+  {% endif %}
+</section>
+
+<style>
+.ap-stats{margin-bottom:14px}
+.ap-table td{vertical-align:top}
+.ap-applied{background:var(--signal-soft);color:var(--signal-ink)}
+.ap-interviewing{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.ap-offer{background:color-mix(in srgb,var(--good) 20%,transparent);color:var(--good)}
+.ap-rejected{background:var(--sunk);color:var(--muted)}
+</style>
+<script>
+const rows = [...document.querySelectorAll('.ap-table tbody tr')];
+function filter() {
+  const q = (document.getElementById('q')?.value || '').toLowerCase(), f = document.getElementById('f')?.value || '';
+  rows.forEach(r => r.hidden = (q && !r.dataset.text.includes(q)) || (f && r.dataset.status !== f));
+}
+document.getElementById('q')?.addEventListener('input', filter);
+document.getElementById('f')?.addEventListener('change', filter);
+</script>
+{% endblock %}

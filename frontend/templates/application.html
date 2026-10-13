@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ a.company }} — {{ a.title }}{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <div class="hint"><a href="{{ url_for('applications_page') }}">← All applications</a></div>
+    <h1>{{ a.title }}</h1>
+    <div class="sub">{{ a.company }}{% if a.location %} · {{ a.location }}{% endif %}{% if a.workplace %} · {{ a.workplace }}{% endif %}
+      {% if a.salary %} · ${{ "{:,}".format(a.salary[0] or 0) }}{% if a.salary[1] %}–${{ "{:,}".format(a.salary[1]) }}{% endif %}{% endif %}</div>
+    <div class="row" style="margin-top:8px">
+      {% if a.posting_url %}<a class="btn" href="{{ a.posting_url }}" target="_blank" rel="noopener">The posting ↗</a>{% endif %}
+      <a class="btn" href="{{ url_for('job_detail', job_id=a.job_id) }}">Job page</a>
+      {% if not a.open %}<span class="pill muted">the posting has closed</span>{% endif %}
+    </div>
+  </div>
+  <div class="ap-now">
+    <div class="hint">Where it stands</div>
+    <div class="ap-stage" id="now">{{ a.current }}</div>
+    <div class="hint" id="days">{% if a.days == 0 %}applied today{% elif a.days is not none %}{{ a.days }} day{{ '' if a.days == 1 else 's' }} since you applied{% endif %}</div>
+  </div>
+</header>
+
+<div class="ap-grid">
+  <section class="card">
+    <h2 class="sk-h">Stages</h2>
+    <ol class="ap-line" id="line"></ol>
+    <div class="t-warn" id="follow" {% if not a.follow_up %}hidden{% endif %}>No reply after {{ a.days }} days. A short, polite
+      follow-up to the recruiter is normal after about {{ follow_up_days }} days, or record “No response”.</div>
+    <h3 class="ap-h3">What happened next?</h3>
+    <div class="ap-add">
+      <select id="stage" class="chip" aria-label="What happened">
+        {% for key, (label, _) in stages.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select>
+      <input type="date" id="on" class="chip" aria-label="When">
+      <input type="text" id="note" class="chip ap-note" placeholder="A note (optional): who, what was asked, next step">
+      <button class="btn primary" id="add">Add</button>
+    </div>
+    <div class="hint" id="say" role="status"></div>
+  </section>
+
+  <section class="card">
+    <h2 class="sk-h">What you sent</h2>
+    {% if a.record %}
+      <div class="hint">{% if a.record.how == 'auto' %}Sent by the app{% else %}Filled by the app; you pressed Submit{% endif %}
+        · resume: {{ a.record.resume_source or 'yours' }}{% if a.record.cover_letter %} · with a cover letter{% endif %}</div>
+      <div class="row" style="margin:8px 0">
+        {% for f in a.record.files %}
+          {% if f.endswith('.pdf') %}<a class="btn" href="{{ url_for('application_file', job_id=a.job_id, name=f) }}" target="_blank">📄 {{ 'Resume' if f.startswith('resume') else 'Cover letter' }} (PDF)</a>
+          {% elif f.endswith('.docx') %}<a class="btn" href="{{ url_for('application_file', job_id=a.job_id, name=f) }}">📄 Resume (DOCX)</a>
+          {% elif f.endswith('.png') %}<a class="btn" href="{{ url_for('application_file', job_id=a.job_id, name=f) }}" target="_blank">🖼 {{ 'The filled form' if f == 'form.png' else 'The “Thank you” page' }}</a>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% if a.record.answers %}
+      <details class="ap-answers" open><summary>The answers given ({{ a.record.answers|length }})</summary>
+        <dl>
+        {% for q, v in a.record.answers.items() %}
+          {% if ' ' in q %}
+          <dt>{{ q }}</dt><dd>{{ v }}</dd>
+          {% endif %}
+        {% endfor %}
+        </dl>
+      </details>
+      {% endif %}
+    {% else %}
+      <p class="hint">You marked this one Applied yourself, so the app has no copy of what was sent.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <details><summary><b>The posting, as it was when you applied</b> <span class="hint">· kept even after it is taken down</span></summary>
+    <div class="ap-posting">{{ a.description }}</div>
+  </details>
+</section>
+
+<style>
+.ap-now{text-align:right}
+.ap-stage{font:700 1.6em var(--cond)}
+.ap-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.ap-grid{grid-template-columns:1fr}.ap-now{text-align:left}}
+.sk-h{font-size:1.1em;margin:4px 0 10px}
+.ap-h3{font-size:.98em;margin:16px 0 6px}
+.ap-line{list-style:none;margin:0;padding:0 0 0 18px;border-left:2px solid var(--line)}
+.ap-line li{position:relative;margin:0 0 14px;padding-left:6px}
+.ap-line li::before{content:"";position:absolute;left:-25px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--signal);border:2px solid var(--surface)}
+.ap-line li.applied::before{background:var(--ink-2)}
+.ap-line li.rejected::before,.ap-line li.withdrew::before{background:var(--faint)}
+.ap-line li.offer::before{background:var(--good)}
+.ap-line .when{font-family:var(--mono);font-size:.82em;color:var(--muted)}
+.ap-line .x{border:0;background:none;color:var(--faint);cursor:pointer;margin-left:6px}
+.ap-add{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.ap-note{flex:1;min-width:200px}
+.ap-answers dl{margin:6px 0;display:grid;gap:4px}
+.ap-answers dt{font-size:.86em;color:var(--muted)}
+.ap-answers dd{margin:0 0 6px;white-space:pre-wrap;font-size:.93em}
+.ap-posting{white-space:pre-wrap;font-size:.92em;margin-top:10px;max-height:60vh;overflow:auto}
+</style>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const JOB = {{ a.job_id }};
+let A = {{ a|tojson }};
+const fmt = iso => iso ? new Date(iso.length === 10 ? iso + 'T12:00' : iso).toLocaleDateString([], {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'}) : '';
+function draw() {
+  const items = [`<li class="applied"><b>Applied</b> <span class="when">${fmt(A.applied_at)}${A.applied_at && A.applied_at.length > 10 ? ' · ' + new Date(A.applied_at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : ''}</span>
+      <div class="hint">${A.record ? (A.record.how === 'auto' ? 'Sent by the app' : 'Filled by the app; you pressed Submit') : 'Marked Applied by you'}</div></li>`]
+    .concat(A.stages.map((s, i) => `<li class="${esc(s.stage)}"><b>${esc(s.label)}</b> <span class="when">${fmt(s.at)}</span>
+      <button class="x" data-rm="${i}" title="Remove this stage" aria-label="Remove ${esc(s.label)}">✕</button>
+      ${s.note ? `<div>${esc(s.note)}</div>` : ''}</li>`));
+  $('line').innerHTML = items.join('');
+  $('now').textContent = A.current;
+  $('follow').hidden = !A.follow_up;
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this stage?')) return;
+    const r = await (await fetch(`/applications/${JOB}/stage/remove`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                                       body: JSON.stringify({index: +b.dataset.rm})})).json();
+    if (r.ok) { A = r.application; draw(); } else $('say').textContent = r.error;
+  });
+}
+$('on').value = new Date().toISOString().slice(0, 10);
+$('on').max = $('on').value;
+$('add').onclick = async () => {
+  $('add').disabled = true;
+  const r = await (await fetch(`/applications/${JOB}/stage`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({stage: $('stage').value, on: $('on').value, note: $('note').value})})).json();
+  $('add').disabled = false;
+  if (!r.ok) { $('say').textContent = r.error; return; }
+  A = r.application; $('note').value = ''; $('say').textContent = 'Added.'; draw();
+};
+draw();
+</script>
+{% endblock %}

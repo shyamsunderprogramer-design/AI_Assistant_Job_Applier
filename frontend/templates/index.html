@@ -105,10 +105,10 @@
     <span class="k">Strong fit</span><span class="v">{{ strong }}</span>
     <span class="note">scored 70%+ against your resume</span>
   </div>
-  <div class="stat">
-    <span class="k">Applied</span><span class="v" id="n-applied">0</span>
-    <span class="note">marked by you</span>
-  </div>
+  <a class="stat stat-link" href="{{ url_for('applications_page') }}" title="Every application: the posting, the day it went, what was sent, and its stages">
+    <span class="k">Applied</span><span class="v" id="n-applied">{{ applied_total }}</span>
+    <span class="note">{% if interviewing_total %}{{ interviewing_total }} interviewing · {% endif %}see each one →</span>
+  </a>
 </section>
 
 <div class="bar">
@@ -309,7 +309,7 @@ function visible() {
 function render() {
   const rows = visible();
   $('count').textContent = `${rows.length} of ${ROWS.length} shown`;
-  $('n-applied').textContent = ROWS.filter(r => r.status === 'Applied').length;
+  // The count is every application from the server (closed postings too), not only the open ones listed here.
   const band = s => s >= 70 ? 'hot' : s >= 60 ? 'warm' : 'cool';
   const cls = s => s === 'Applied' ? 'applied' : s === 'Manual Review' ? 'review' : '';
   $('rows').replaceChildren(...rows.map(r => {

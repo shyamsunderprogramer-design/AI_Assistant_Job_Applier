@@ -191,6 +191,9 @@ def index():
         )
         auth = my_authorisation()
         rows = collapse_repeats([with_eligibility(job_row(j), j, auth) for j in jobs])
+        # Every application, open or since closed, so the count does not shrink as postings come down.
+        applied = session.query(Job).filter(Job.status.in_(("Applied", "Interviewing", "Offer", "Rejected"))).count()
+        interviewing = session.query(Job).filter(Job.status.in_(("Interviewing", "Offer"))).count()
 
     resume = current_resume()
     return render_template(
@@ -207,6 +210,7 @@ def index():
         my_years=derived_years(),
         applicant=applicant_state(),
         unscored=sum(1 for r in rows if r["score"] is None),
+        applied_total=applied, interviewing_total=interviewing,
         **last_run_stats(),
     )
 
@@ -2687,3 +2691,4 @@ def health_report():
 
 # The Resume pages (build, check, tailored versions) register on this app.
 from backend.api import resume_pages  # noqa: E402,F401
+from backend.api import tracker_pages  # noqa: E402,F401
