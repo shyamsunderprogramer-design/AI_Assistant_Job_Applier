@@ -626,7 +626,8 @@ async function pollProbe() {
       + (last && last.finished_at ? ` · the whole list was last checked ${when(last.finished_at)}` : '');
 
   // Boards found is the number that matters — the rest is bookkeeping.
-  const found = `${(d.found ?? 0).toLocaleString()} new boards found`;
+  // Each board is added to Boards watched the moment it is found: this count is inside that one, not on top of it.
+  const found = `${(d.found ?? 0).toLocaleString()} new boards found, each already counted in Boards watched`;
   if (d.stopping) {
     $('probe-title').textContent = 'Stopping';
     $('probe-foot').textContent = found + ' · finishing the company being checked now (a few seconds)';
