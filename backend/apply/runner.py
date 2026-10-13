@@ -430,7 +430,7 @@ def _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note
         waiting.append("required: " + ", ".join(result.required_blank[:4]))
     say(f"   Waiting for you — check the answers, {'; '.join(waiting) or 'look it over'}, then press "
         f"Submit Application at the bottom. Close the tab to skip this one.")
-    verdict, answers = jazzhr.watch_submission(page, wait_s)
+    verdict, answers = jazzhr.watch_submission(page, wait_s, evidence=evidence)
     _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter, result,
             evidence, answers)
     return outcome

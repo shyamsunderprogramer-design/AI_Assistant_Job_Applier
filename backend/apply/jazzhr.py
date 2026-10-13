@@ -305,8 +305,13 @@ def is_confirmed(page) -> bool:
     return any(marker in text for marker in CONFIRM_TEXT)
 
 
-def watch_submission(page, timeout_s: float, *, poll_ms: int = 2000, clock=time.monotonic):
-    """("submitted" | "skipped" | "timeout", answers): the person's Submit, or their closing the tab."""
+def watch_submission(page, timeout_s: float, *, poll_ms: int = 2000, clock=time.monotonic,
+                     evidence: Path | None = None):
+    """("submitted" | "skipped" | "timeout", answers): the person's Submit, or their closing the tab.
+
+    On a Submit the confirmation page is kept (confirmation.png and its text) beside the
+    resume that went: proof it went through, not only that the app thought so.
+    """
     answers: dict[str, str] = {}
     deadline = clock() + timeout_s
     while clock() < deadline:
@@ -316,6 +321,16 @@ def watch_submission(page, timeout_s: float, *, poll_ms: int = 2000, clock=time.
         except Exception:
             return "skipped", answers
         if is_confirmed(page):
+            if evidence is not None:
+                try:
+                    page.screenshot(path=str(evidence / "confirmation.png"), full_page=True)
+                    (evidence / "confirmation.txt").write_text(page.inner_text("body") or "", encoding="utf-8")
+                except Exception:
+                    pass
+            try:
+                page.wait_for_timeout(6000)       # the thank-you page stays up long enough to be read
+            except Exception:
+                pass
             return "submitted", answers
         answers = snapshot_answers(page) or answers
         try:

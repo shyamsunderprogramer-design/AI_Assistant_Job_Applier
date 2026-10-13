@@ -73,3 +73,23 @@ def test_years_count_only_the_jobs_in_the_named_field():
     assert jazzhr.years_for("How many years of DevOps experience?", JOBS) >= 8
     assert jazzhr.years_for("How many years of professional experience?", JOBS) >= 14
     assert jazzhr.years_for("How many years of data science experience?", JOBS) is None
+
+
+def test_a_submit_keeps_the_confirmation_page(tmp_path):
+    class Page:
+        def is_closed(self): return False
+        def query_selector(self, sel): return None                      # the form is gone
+        def inner_text(self, sel): return "Thank you for applying! We received your application."
+        def screenshot(self, path, full_page): open(path, "wb").write(b"png")
+        def wait_for_timeout(self, ms): pass
+        def evaluate(self, js): return {}
+    verdict, _ = jazzhr.watch_submission(Page(), 5, evidence=tmp_path)
+    assert verdict == "submitted"
+    assert (tmp_path / "confirmation.png").exists() and "Thank you" in (tmp_path / "confirmation.txt").read_text()
+
+
+def test_the_form_still_there_is_not_a_submit():
+    class Page:
+        def query_selector(self, sel): return object()                 # the form is still on the page
+        def inner_text(self, sel): return "Thank you for applying"     # in the posting's own text
+    assert jazzhr.is_confirmed(Page()) is False
