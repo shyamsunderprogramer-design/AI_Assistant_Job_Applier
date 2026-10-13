@@ -179,6 +179,15 @@ input[type=checkbox],input[type=radio]{accent-color:var(--signal);width:16px;hei
 .out.bad{border-color:color-mix(in srgb,var(--crit) 35%,transparent)}
 .pill{border:1px solid transparent}
 
+/* -- half-screen windows ------------------------------------------------------------ */
+/* The ten links need about 910px beside the app's name: below 1000px the logo stands alone and the
+   links sit closer, so none runs under the theme button or off the side of the page. */
+@media (min-width:821px) and (max-width:1000px){
+  .brand-name{display:none}
+  .appbar-in{gap:10px;padding-left:14px;padding-right:14px}
+  .nav a{padding:7px 8px}
+}
+
 /* -- phones and narrow windows -------------------------------------------------- */
 @media (max-width:820px){
   .appbar-in{flex-wrap:wrap;gap:6px 10px;padding:8px 14px 0;min-height:0}
@@ -283,13 +292,9 @@ tr.ineligible td{opacity:.72}
 /* 5,770 rows: the browser skips laying out the ones off screen. */
 #rows tr{content-visibility:auto;contain-intrinsic-size:auto 52px}
 @media (min-width:821px){
-  /* The Jobs list's headings stay in view while it scrolls: under the app bar and the filter bar.
-     Only that table (.tw): every other table sits in a scrolling box (.t-table-wrap), where the
-     same offset pushed its heading row down over its first rows. */
-  .tw{overflow:visible}
-  .tw thead th{position:sticky;top:calc(var(--appbar-h) + var(--bar-h, 0px));z-index:3;
-    box-shadow:inset 0 -1px 0 var(--line)}
-  html{scroll-padding-top:calc(var(--appbar-h) + var(--bar-h, 0px) + 48px)}
+  /* No table pins its heading row: pinned, it sat over the rows scrolling under it. Only the app bar
+     and the Jobs filter bar stay at the top, so a row brought into view lands just below them. */
+  html{scroll-padding-top:calc(var(--appbar-h) + var(--bar-h, 0px) + 12px)}
 }
 @media (max-width:820px){
   .phone-only{display:block;margin:12px 0 0}

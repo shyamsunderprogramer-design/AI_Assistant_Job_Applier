@@ -494,9 +494,12 @@ td.elig.el-good{color:#22764a;font-weight:600}
   :root:not([data-theme="light"]) td.elig.el-good{color:#8fe0b0}}
 :root[data-theme="dark"] td.elig.el-bar{color:#f0c27a}
 :root[data-theme="dark"] td.elig.el-good{color:#8fe0b0}
-/* A very long company name no longer pushes the table off the side of the page. */
+/* A very long company name, or a role with one long unbroken word ("Innovation_Delivery_Transformation",
+   a URL), no longer pushes the table wider than its card. */
 #rows td.co{max-width:126px;overflow:hidden;text-overflow:ellipsis}
-#rows td.ti{max-width:200px}
+#rows td.ti{min-width:200px;max-width:200px;overflow-wrap:anywhere}
+/* Twelve columns fit the 1,200px card with the role at its full 200px: 10px each side, not 12. */
+.tw thead th,#rows td:not(.elig){padding-left:10px;padding-right:10px}
 /* Sort by, then by, then by */
 .sortbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 10px}
 .sortbar select{font:inherit;font-size:13px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;
