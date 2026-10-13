@@ -2137,6 +2137,62 @@ def _lock_started(task: str) -> str:
                             else "%b %-d, %H:%M")
 
 
+DAILY_LOG = PROJECT_ROOT / "data" / "daily_run.log"
+
+
+def _daily_progress() -> dict:
+    """How far the scheduled run has got, read off its own log (data/daily_run.log).
+
+    The page showed only "Scheduled run in progress", so a run that started on
+    its own at 6am was invisible and the Fetch button looked broken. This is the
+    same progress a Fetch from the page shows: boards done of the total, the
+    board in hand, the time left, and how long since it last moved, which is
+    how a Mac asleep with its lid closed shows up.
+    """
+    import re
+    from datetime import datetime, timedelta
+    try:
+        size = DAILY_LOG.stat().st_size
+        with DAILY_LOG.open("rb") as handle:
+            handle.seek(max(0, size - 6_000_000))          # a whole day's run is about 2 MB
+            text = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return {}
+    start = text.rfind("=== daily starting ===")
+    if start == -1:
+        return {}
+    head = text.rfind("\n", 0, start) + 1
+    try:
+        began = datetime.strptime(text[head:start].strip()[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return {}
+    lines = text[start:].splitlines()
+    total = next((int(m.group(1)) for ln in lines if (m := re.search(r"scraping (\d+) companies", ln))), 0)
+    boards = [ln for ln in lines if "data_engineering.scraper.runner" in ln and " seen " in ln]
+
+    def when(line: str):
+        try:
+            clock = datetime.strptime(line[:8], "%H:%M:%S").time()
+        except ValueError:
+            return None
+        moment = datetime.combine(began.date(), clock)
+        return moment + timedelta(days=1) if moment < began - timedelta(minutes=5) else moment
+
+    stamps = [t for t in (when(ln) for ln in lines) if t]
+    last = stamps[-1] if stamps else began
+    now = datetime.now()
+    recent = [t for t in (when(ln) for ln in boards[-400:]) if t and t > now - timedelta(minutes=10)]
+    rate = len(recent) / 600 if len(recent) > 3 else None             # boards a second, lately
+    done = len(boards)
+    fetching = total and done < total * 0.99
+    current = boards[-1].split()[4] if boards and len(boards[-1].split()) > 4 else None
+    return {"started": began.strftime("%H:%M"), "done": done, "total": total,
+            "percent": round(done / total * 100, 1) if total else None, "current": current,
+            "stage": "fetching" if fetching else "scoring and preparing",
+            "eta": int((total - done) / rate) if fetching and rate else None,
+            "quiet_for": int((now - last).total_seconds())}
+
+
 def _first_log_time(lines: list[str]) -> float | None:
     """When this run actually began, from its own first timestamp."""
     from datetime import datetime
@@ -2221,11 +2277,13 @@ def run_status(task: str):
             "Nothing to score", "No new jobs", "done:", "Run finished",
             "below threshold", "Run `export`",
         ))
-    # The 6am run holds the same work; the page says so rather than "idle".
+    # The 6am run holds the same work; the page shows its progress rather than "idle".
     scheduled = None if running else _scheduled_run_holding(task)
+    daily = _daily_progress() if scheduled == "daily" else None
     return jsonify(
         ok=True, running=running, tail=tail, progress=progress,
         scheduled=scheduled, scheduled_since=_lock_started(scheduled) if scheduled else None,
+        daily=daily,
         done=done, total=total, current=current, eta=eta,
         percent=round(done / total * 100, 1) if total else None,
         exit=None if running else (0 if ok_finish else 1),

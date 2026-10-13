@@ -529,6 +529,45 @@ function setRunning(task, d) {
   }
 }
 
+// The 6am run, shown like a Fetch from this page: it was invisible, and the Fetch
+// button it holds back looked broken. Polls until it lets go, then reloads.
+function showScheduled(d) {
+  const p = d.daily || {};
+  $('statusbox').className = 'statusbox';
+  $('sb-dot').className = 'sb-dot on';
+  $('sb-title').textContent = `6 AM fetch running · started ${p.started || d.scheduled_since}`;
+  $('sb-eta').textContent = mins(p.eta);
+  const asleep = p.quiet_for > 300
+    ? ` · no progress for ${Math.round(p.quiet_for / 60)} min: the Mac may be asleep (lid closed or unplugged)` : '';
+  if (p.total && p.stage === 'fetching') {
+    $('sb-track').hidden = false;
+    $('sb-fill').style.width = (p.percent || 0) + '%';
+    $('sb-detail').textContent = `${p.percent}% · ${p.done.toLocaleString()}/${p.total.toLocaleString()} boards`
+      + (p.current ? ` · ${p.current}` : '') + asleep;
+  } else {
+    $('sb-track').hidden = true;
+    $('sb-detail').textContent = (p.total ? `All ${p.total.toLocaleString()} boards read · scoring the new postings and preparing applications`
+                                          : 'starting…') + asleep;
+  }
+  ['scrape', 'score'].forEach(t => {
+    $('run-'+t).disabled = true;
+    $('run-'+t).textContent = t === 'scrape' ? '6 AM fetch running…' : 'Scoring after the 6 AM fetch…';
+    $('run-'+t).title = 'The 6 AM run is doing this now; the button comes back when it finishes.';
+  });
+}
+function watchScheduled(first) {
+  showScheduled(first);
+  const poll = async () => {
+    const d = await ask('/run/scrape/status');
+    if (d.ok && d.scheduled) { showScheduled(d); setTimeout(poll, 5000); return; }
+    $('sb-title').textContent = 'The 6 AM run finished';
+    $('sb-detail').textContent = 'Reloading with the new postings…';
+    $('sb-track').hidden = true;
+    setTimeout(() => location.reload(), 2500);
+  };
+  setTimeout(poll, 5000);
+}
+
 async function watch(task, button) {
   const out = $('run-out');
   out.hidden = false; out.className = 'out';
@@ -700,18 +739,7 @@ pollProbe();
 // pretending nothing is happening.
 ['scrape','score','apply'].forEach(async task => {
   const d = await ask(`/run/${task}/status`);
-  if (d.scheduled && !d.running && task === 'scrape') {
-    // The 6am run is fetching and scoring already: the buttons would only be
-    // refused, so say what is going on instead of "All jobs idle".
-    $('statusbox').className = 'statusbox';
-    $('sb-dot').className = 'sb-dot on';
-    $('sb-title').textContent = `Scheduled ${d.scheduled} run in progress`;
-    $('sb-detail').textContent = `Started ${d.scheduled_since} · new postings and scores arrive when it finishes`;
-    ['scrape', 'score'].forEach(t => {
-      $('run-'+t).disabled = true;
-      $('run-'+t).title = `Waiting for the scheduled ${d.scheduled} run (started ${d.scheduled_since}), which does the same work`;
-    });
-  }
+  if (d.scheduled && !d.running && task === 'scrape') watchScheduled(d);
   if (d.running) {
     const b = $('run-'+task);
     b.disabled = true;
