@@ -244,6 +244,27 @@
           <span class="lbl">Your cover letter:</span>
           <a class="btn file" id="doc-letter" href="/job/{{ job.id }}/file/letter"
              target="_blank" rel="noopener">📄 Read it</a>
+          <button class="btn" id="edit-letter" type="button">✏️ Edit it here</button>
+        </div>
+        <div class="le" id="letter-editor" hidden>
+          <div class="le-grid">
+            <div class="le-text">
+              <label class="le-lbl">Greeting<input id="le-greeting" type="text"></label>
+              <div id="le-paras"></div>
+              <button class="btn" id="le-add" type="button">+ Add a paragraph</button>
+              <label class="le-lbl">Closing, with your name under it<textarea id="le-closing" rows="2"></textarea></label>
+            </div>
+            <aside class="le-side">
+              <div class="le-count" id="le-count"></div>
+              <div id="le-findings"></div>
+              <div class="row"><button class="btn primary" id="le-save" type="button">Save</button>
+                <button class="btn" id="le-close" type="button">Close</button></div>
+              <div class="hint" id="le-say" role="status"></div>
+              <div class="row"><a class="btn" id="le-pdf" href="/job/{{ job.id }}/letter/download/pdf">Download PDF</a>
+                <a class="btn" id="le-docx" href="/job/{{ job.id }}/letter/download/docx">Download DOCX</a></div>
+              <details class="le-versions"><summary>Earlier versions</summary><div id="le-versions"></div></details>
+            </aside>
+          </div>
         </div>
         <details class="fold" id="fold-letter">
           <summary>Prompt, and where the reply goes</summary>
@@ -919,5 +940,144 @@ $('prep-make')?.addEventListener('click', async e => {
   if (!r.ok) { show('prep-out', r.error, 'bad'); return; }
   $('prep-out').hidden = true; showPrep(r.prep);
 });
+
+// -- the cover letter, edited here -------------------------------------------------------
+(() => {
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const post = async (url, body) => ask(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                              body: JSON.stringify(body)});
+  let L = null, timer = null, dirty = false, lastCheck = null;
+  const HOW = [['shorter', 'Shorter'], ['plainer', 'Plainer'], ['specific', 'More about this employer'], ['story', 'As one story']];
+  const grow = el => { el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px'; };
+
+  function current() {
+    return {greeting: $('le-greeting').value, closing: $('le-closing').value,
+            paragraphs: [...document.querySelectorAll('.le-para textarea')].map(t => t.value)};
+  }
+  function joined() {
+    const p = current();
+    return [p.greeting, ...p.paragraphs, p.closing].map(x => x.trim()).filter(Boolean).join('\n\n') + '\n';
+  }
+  function paras(list) {
+    $('le-paras').innerHTML = list.map((t, i) => `<div class="le-para" data-i="${i}">
+      <div class="le-para-head"><span class="hint">Paragraph ${i + 1}</span><span class="le-tools">
+        <select data-how="${i}" aria-label="Rewrite paragraph ${i + 1}"><option value="">Rewrite…</option>
+          ${HOW.map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+        <button type="button" data-up="${i}" title="Move up">↑</button><button type="button" data-down="${i}" title="Move down">↓</button>
+        <button type="button" data-cut="${i}" title="Remove">✕</button></span></div>
+      <textarea rows="4">${esc(t)}</textarea><div class="le-alt" id="le-alt-${i}"></div></div>`).join('');
+    document.querySelectorAll('.le-para textarea').forEach(t => { grow(t); t.addEventListener('input', () => { grow(t); changed(); }); });
+    document.querySelectorAll('[data-up],[data-down]').forEach(b => b.onclick = () => {
+      const p = current().paragraphs, i = +(b.dataset.up ?? b.dataset.down), j = b.dataset.up != null ? i - 1 : i + 1;
+      if (j < 0 || j >= p.length) return;
+      [p[i], p[j]] = [p[j], p[i]]; paras(p); changed();
+    });
+    document.querySelectorAll('[data-cut]').forEach(b => b.onclick = () => {
+      const p = current().paragraphs; if (p[+b.dataset.cut].trim() && !confirm('Remove this paragraph?')) return;
+      p.splice(+b.dataset.cut, 1); paras(p); changed();
+    });
+    document.querySelectorAll('[data-how]').forEach(sel => sel.onchange = () => rewrite(+sel.dataset.how, sel));
+  }
+  function load(d) {
+    L = d;
+    $('le-greeting').value = d.parts.greeting || 'Dear Hiring Manager,';
+    $('le-closing').value = d.parts.closing || '';
+    grow($('le-closing'));
+    paras(d.parts.paragraphs.length ? d.parts.paragraphs : ['']);
+    showCheck(d.check);
+    $('le-versions').innerHTML = d.versions.length ? d.versions.map(v => `<div class="le-ver"><span>${esc(v.when)} · ${v.words} words
+        <span class="hint">“${esc(v.start)}…”</span></span><button class="btn small" type="button" data-ver="${esc(v.id)}">Bring back</button></div>`).join('')
+      : '<div class="hint">None yet: each save keeps the version it replaces here.</div>';
+    document.querySelectorAll('[data-ver]').forEach(b => b.onclick = async () => {
+      if (dirty && !confirm('Your unsaved changes will be lost. Bring this version back?')) return;
+      const r = await post(`/job/${JOB}/letter/restore`, {id: b.dataset.ver});
+      if (!r.ok) { $('le-say').textContent = r.error; return; }
+      dirty = false; load(r); $('le-say').textContent = 'Brought back. The one it replaced is kept too.';
+    });
+  }
+  function showCheck(c) {
+    lastCheck = c;
+    if (!c) { $('le-count').textContent = ''; $('le-findings').innerHTML = ''; return; }
+    $('le-count').innerHTML = `<b>${c.words}</b> words · ${c.paragraphs} paragraph${c.paragraphs === 1 ? '' : 's'}`
+      + (c.findings.length ? '' : ' · <span class="le-good">no problems found</span>');
+    $('le-findings').innerHTML = c.findings.map(f => `<div class="le-f ${f.severity}"><b>${esc(f.title)}</b>
+      ${f.detail ? `<div>${esc(f.detail)}</div>` : ''}${f.quotes.length ? `<div class="hint">“${esc(f.quotes[0].slice(0, 160))}”</div>` : ''}</div>`).join('');
+  }
+  function changed() {
+    dirty = true; $('le-say').textContent = 'Not saved yet';
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const r = await post(`/job/${JOB}/letter/check`, {text: joined()});
+      if (r.ok) showCheck(r.check);
+    }, 700);
+  }
+  async function rewrite(i, sel) {
+    const how = sel.value; if (!how) return;
+    const box = $('le-alt-' + i), para = current().paragraphs[i];
+    sel.disabled = true; box.innerHTML = '<div class="hint">Rewriting… (under a minute)</div>';
+    const r = await post(`/job/${JOB}/letter/rewrite`, {paragraph: para, how, text: joined()});
+    sel.disabled = false; sel.value = '';
+    if (!r.ok) { box.innerHTML = `<div class="le-f problem">${esc(r.error)}</div>`; return; }
+    const claims = [...new Set((r.claims || []).map(c => c.value))];
+    box.innerHTML = `<div class="le-suggest"><div>${esc(r.paragraph)}</div>
+      ${claims.length ? `<div class="le-flag">Not on your resume: ${esc(claims.join(', '))}. Keep it only if it is true.</div>` : ''}
+      <div class="row"><button class="btn primary small" type="button" data-use>Use it</button><button class="btn small" type="button" data-keep>Keep mine</button></div></div>`;
+    box.querySelector('[data-use]').onclick = () => {
+      const p = current().paragraphs; p[i] = r.paragraph; paras(p); changed();
+    };
+    box.querySelector('[data-keep]').onclick = () => { box.innerHTML = ''; };
+  }
+  $('edit-letter')?.addEventListener('click', async () => {
+    const r = await ask(`/job/${JOB}/letter`);
+    if (!r.ok) { show('out-letter', r.error, 'bad'); return; }
+    if (!r.exists) { show('out-letter', 'Write the letter first, then edit it here.', 'bad'); return; }
+    $('letter-editor').hidden = false; load(r); dirty = false; $('le-say').textContent = '';
+    $('letter-editor').scrollIntoView({behavior: 'smooth', block: 'start'});
+  });
+  $('le-greeting').addEventListener('input', changed);
+  $('le-closing').addEventListener('input', () => { grow($('le-closing')); changed(); });
+  $('le-add').onclick = () => { const p = current().paragraphs; p.push(''); paras(p); changed(); };
+  $('le-close').onclick = () => {
+    if (dirty && !confirm('Close without saving your changes?')) return;
+    $('letter-editor').hidden = true; dirty = false;
+  };
+  $('le-save').onclick = async () => {
+    clearTimeout(timer);
+    const c = (await post(`/job/${JOB}/letter/check`, {text: joined()})).check;
+    if (c) showCheck(c);
+    const problems = (c?.findings || []).filter(f => f.severity === 'problem');
+    if (problems.length && !confirm(`Before you save:\n\n${problems.map(f => '• ' + f.title).join('\n')}\n\nSave anyway?`)) return;
+    $('le-save').disabled = true; $('le-say').textContent = 'Saving and writing the PDF and DOCX…';
+    const r = await post(`/job/${JOB}/letter/save`, {text: joined()});
+    $('le-save').disabled = false;
+    if (!r.ok) { $('le-say').textContent = r.error; return; }
+    dirty = false; load(r);
+    $('le-say').textContent = r.saved ? 'Saved. Your application will attach this version.' : 'Nothing had changed.';
+    refreshDocs();
+  };
+  window.addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });
+})();
 </script>
+<style>
+.le{margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--raised)}
+.le-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}
+@media (max-width:900px){.le-grid{grid-template-columns:1fr}}
+.le-lbl{display:grid;gap:3px;font-size:.88em;color:var(--ink-2);margin:6px 0}
+.le input,.le textarea{font:inherit;font-size:.95em;padding:7px 9px;border:1px solid var(--line);border-radius:6px;
+  background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
+.le textarea{resize:vertical;overflow:hidden;line-height:1.45}
+.le-para{margin:10px 0}
+.le-para-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.le-tools{display:flex;gap:4px;align-items:center}
+.le-tools button,.le-tools select{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:5px;padding:2px 7px;font-size:.85em}
+.le-side{position:sticky;top:70px;display:grid;gap:8px}
+.le-count{font-size:.95em}
+.le-good{color:var(--good)}
+.le-f{border-left:3px solid var(--faint);padding:4px 8px;margin:5px 0;font-size:.88em;background:var(--surface);border-radius:4px}
+.le-f.problem{border-left-color:var(--crit)} .le-f.warning{border-left-color:var(--warn)} .le-f.tip{border-left-color:var(--signal)}
+.le-suggest{margin-top:6px;border:1px dashed var(--signal);border-radius:6px;padding:8px;background:var(--signal-soft);font-size:.93em}
+.le-flag{color:var(--crit);font-size:.86em;margin-top:4px}
+.le-ver{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:6px 0;font-size:.88em}
+.le-versions summary{cursor:pointer;font-size:.9em}
+</style>
 {% endblock %}

@@ -163,12 +163,25 @@ def choose_resume(cfg, job, *, tailor: bool = True) -> tuple[Path | None, str]:
 
 
 def cover_letter(cfg, job, evidence: Path) -> Path | None:
-    """The drafted letter, as a .txt Greenhouse will accept, if one exists."""
+    """The letter as it goes out: the formatted PDF when the person saved one, else the text.
+
+    The PDF is written when the letter is saved on the job page (ml/resume/letter_edit.py),
+    with the name and contact line on top. It is used only when it is newer than the
+    text, so an edit made outside the page is never sent stale.
+    """
+    import shutil
+    from ml.resume.letter_edit import PDF_FILE
     from ml.resume.packet import LETTER_FILE, packet_dir
 
-    letter = packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id) / LETTER_FILE
+    folder = packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id)
+    letter = folder / LETTER_FILE
     if not letter.exists():
         return None
+    pdf = folder / PDF_FILE
+    if pdf.exists() and pdf.stat().st_mtime >= letter.stat().st_mtime:
+        target = evidence / "cover-letter.pdf"
+        shutil.copy2(pdf, target)
+        return target
     target = evidence / "cover-letter.txt"
     target.write_text(letter.read_text(encoding="utf-8"), encoding="utf-8")
     return target

@@ -7,6 +7,7 @@ they share its config, its database and its localhost-only binding.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -316,3 +317,156 @@ def history_delete():
         except (ValueError, PermissionError) as exc:
             kept.append({"id": run_id, "why": str(exc)})
     return jsonify(ok=True, deleted=deleted, kept=kept)
+
+
+# -- the cover letter, edited in the browser --------------------------------------------------
+
+def _letter_job(job_id: int) -> dict | None:
+    """The job's letter folder and what checking its letter needs; None for an unknown job."""
+    from data_engineering.db.models import Job
+    from data_engineering.db.session import get_session
+    from ml.resume.packet import packet_dir
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return None
+        info = {"company": job.company or "", "title": job.title or "",
+                "jd": f"{job.title}\n\n{job.description or ''}", "external": job.external_id or ""}
+    info["folder"] = packet_dir(cfg(), info["company"], info["title"], info["external"], job_id=job_id)
+    return info
+
+
+def _letter_resume(info: dict) -> str:
+    """The resume that goes with this letter: the job's tailored copy, else the master."""
+    from ml.tailoring.reader import read_document
+    for name in ("resume.docx", "resume.pdf"):
+        path = info["folder"] / name
+        if path.exists():
+            try:
+                return read_document(path).text
+            except Exception:
+                pass
+    from ml.resume.pipeline import load_base_resume
+    return load_base_resume(cfg()).text()
+
+
+def _letter_look(job_id: int) -> tuple[list[str], str | None, dict | None]:
+    """(header lines, template, look) for the letter's documents: the job's tailored resume's, else the default."""
+    from ml.resume.parser import parse_resume
+    from ml.resume.pipeline import base_resume_path
+    from ml.tailoring.draft import header_of
+    try:
+        header = header_of(parse_resume(base_resume_path(cfg())))
+    except Exception:
+        header = []
+    template, look = cfg().get("resume.template") or None, None
+    try:
+        from ml.tailoring.pipeline import JOBS, RUNS
+        record = json.loads((JOBS / f"{job_id}.json").read_text())
+        run = record.get("best") or record.get("run")
+        drawn = json.loads((RUNS / run / "result.json").read_text())["draft"]["result"]
+        template, look = drawn.get("template") or template, drawn.get("look") or None
+    except Exception:
+        pass
+    return header, template, look
+
+
+def _letter_state(job_id: int, info: dict, text: str | None = None) -> dict:
+    from ml.resume import letter_edit
+    from ml.resume.packet import LETTER_FILE
+    path = info["folder"] / LETTER_FILE
+    if text is None:
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    return {"exists": path.exists(), "text": text, "parts": letter_edit.parse(text),
+            "check": letter_edit.check(text, _letter_resume(info), info["jd"], info["company"]) if text.strip() else None,
+            "versions": letter_edit.versions(info["folder"]), "company": info["company"], "title": info["title"],
+            "files": {k: (info["folder"] / f).exists() for k, f in (("docx", letter_edit.DOCX_FILE),
+                                                                    ("pdf", letter_edit.PDF_FILE))}}
+
+
+@app.get("/job/<int:job_id>/letter")
+def letter_get(job_id: int):
+    info = _letter_job(job_id)
+    if info is None:
+        return jsonify(ok=False, error="No such job."), 404
+    return jsonify(ok=True, **_letter_state(job_id, info))
+
+
+@app.post("/job/<int:job_id>/letter/check")
+def letter_check(job_id: int):
+    from ml.resume import letter_edit
+    info = _letter_job(job_id)
+    if info is None:
+        return jsonify(ok=False, error="No such job."), 404
+    text = str((request.get_json(silent=True) or {}).get("text") or "")
+    return jsonify(ok=True, check=letter_edit.check(text, _letter_resume(info), info["jd"], info["company"]))
+
+
+@app.post("/job/<int:job_id>/letter/save")
+def letter_save(job_id: int):
+    """Save the person's letter: the version it replaces is kept, the .docx and .pdf written again."""
+    from ml.resume import letter_edit
+    info = _letter_job(job_id)
+    if info is None:
+        return jsonify(ok=False, error="No such job."), 404
+    text = str((request.get_json(silent=True) or {}).get("text") or "").strip()
+    if len(text.split()) < 20:
+        return jsonify(ok=False, error="That is too short to be a letter."), 400
+    header, template, look = _letter_look(job_id)
+    out = letter_edit.save(info["folder"], text, header, template, look)
+    return jsonify(ok=True, saved=out["saved"], **_letter_state(job_id, info))
+
+
+@app.post("/job/<int:job_id>/letter/restore")
+def letter_restore(job_id: int):
+    from ml.resume import letter_edit
+    info = _letter_job(job_id)
+    if info is None:
+        return jsonify(ok=False, error="No such job."), 404
+    header, template, look = _letter_look(job_id)
+    try:
+        letter_edit.restore(info["folder"], str((request.get_json(silent=True) or {}).get("id") or ""),
+                            header, template, look)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, **_letter_state(job_id, info))
+
+
+@app.post("/job/<int:job_id>/letter/rewrite")
+def letter_rewrite(job_id: int):
+    """One paragraph rewritten (shorter, plainer, more specific, or as a story); claims checked."""
+    from ml.resume import letter_edit
+    info = _letter_job(job_id)
+    if info is None:
+        return jsonify(ok=False, error="No such job."), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        out = letter_edit.rewrite_paragraph(str(body.get("paragraph") or ""), str(body.get("how") or ""),
+                                            _letter_resume(info), info["jd"], info["company"], info["title"],
+                                            cfg(), whole=str(body.get("text") or ""))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(ok=False, error=f"The model could not be used: {type(exc).__name__}: {exc}"), 500
+    return jsonify(ok=True, **out)
+
+
+@app.get("/job/<int:job_id>/letter/download/<kind>")
+def letter_download(job_id: int, kind: str):
+    from ml.resume import letter_edit
+    info = _letter_job(job_id)
+    name = {"docx": letter_edit.DOCX_FILE, "pdf": letter_edit.PDF_FILE}.get(kind)
+    if info is None or name is None:
+        return ("No such file.", 404)
+    path = info["folder"] / name
+    if not path.exists():
+        header, template, look = _letter_look(job_id)
+        from ml.resume.packet import LETTER_FILE
+        letter = info["folder"] / LETTER_FILE
+        if not letter.exists():
+            return ("No cover letter yet for this job.", 404)
+        letter_edit._documents(info["folder"], letter.read_text(encoding="utf-8"), header, template, look)
+    if not path.exists():
+        return ("The document could not be made.", 500)
+    company = re.sub(r"[^\w -]+", "", info["company"])[:40] or "job"
+    return send_file(path, as_attachment=True, download_name=f"Cover letter - {company}.{kind}")
