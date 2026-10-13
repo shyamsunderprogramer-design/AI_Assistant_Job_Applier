@@ -304,9 +304,13 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
             # This form's own answers, given on the Apply page, for this job only.
             saved = dict(applicant.answers)
             applicant.job = job
-            if job.id in ready:
+            entry = ready.get(job.id)
+            if entry is None:
+                from backend.apply.prepare import load as load_prepared
+                entry = load_prepared().get(str(job.id))
+            if entry is not None:
                 from backend.apply.answers import normalise
-                own = {normalise(k): v for k, v in (ready[job.id].get("answers") or {}).items()}
+                own = {normalise(k): v for k, v in (entry.get("answers") or {}).items()}
                 applicant.answers.update(own)
                 applicant.job_answers = own
             outcome = apply_one(cfg, page, job, applicant, head, auto=auto, tailor=tailor, wait_s=wait_s)
@@ -355,6 +359,8 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
     if job.source == "workday":
         return _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter,
                               resume_note, evidence, wait_s)
+    if job.source == "jazzhr":
+        return _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s)
 
     url = greenhouse.form_url(job.company_slug, job.external_id)
     result = greenhouse.fill(page, job.id, url, applicant, kept, letter,
@@ -405,6 +411,28 @@ def _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter, resum
         return outcome
     _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter,
             result, evidence, result.given)
+    return outcome
+
+
+def _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s) -> Outcome:
+    """JazzHR: every field the profile and the person's answers cover is filled; the
+    Human Check and Submit are the person's."""
+    from backend.apply import jazzhr
+    say(f"{head}: opening the JazzHR form · {resume_note}")
+    result = jazzhr.fill(page, job.id, job.application_url, applicant, kept, evidence=evidence)
+    if not result.ok:
+        say(f"{head}: {result.summary()}")
+        outcome.detail = result.error or ""
+        return outcome
+    say(f"{head}: {result.summary()}")
+    waiting = ["tick “I'm not a robot” (the Human Check, outlined in orange)"] if result.captcha else []
+    if result.required_blank:
+        waiting.append("required: " + ", ".join(result.required_blank[:4]))
+    say(f"   Waiting for you — check the answers, {'; '.join(waiting) or 'look it over'}, then press "
+        f"Submit Application at the bottom. Close the tab to skip this one.")
+    verdict, answers = jazzhr.watch_submission(page, wait_s)
+    _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter, result,
+            evidence, answers)
     return outcome
 
 

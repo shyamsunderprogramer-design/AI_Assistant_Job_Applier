@@ -47,9 +47,23 @@ BOILERPLATE = re.compile(
 
 
 def requirements_only(jd_text: str) -> str:
-    """The posting without its pay, benefits and legal paragraphs."""
+    """The posting without its pay, benefits and legal paragraphs.
+
+    A paragraph that mentions pay or benefits is dropped -- but a posting written
+    with no blank lines at all (JazzHR's are) is ONE paragraph, and dropping it
+    dropped the whole posting: a tailoring for UberEther (13 Oct 2026) read only the
+    job title and found no requirements. A long paragraph is filtered line by line.
+    """
     paragraphs = re.split(r"\n\s*\n|\n(?=\s)", jd_text or "")
-    kept = [p for p in paragraphs if not BOILERPLATE.search(p)]
+    kept = []
+    for p in paragraphs:
+        if not BOILERPLATE.search(p):
+            kept.append(p)
+            continue
+        lines = p.splitlines()
+        if len(lines) > 3 or len(p) > 600:
+            kept.append("\n".join(l for l in lines if not BOILERPLATE.search(l)))
+    kept = [k for k in kept if k.strip()]
     return "\n\n".join(kept) if kept else jd_text
 
 

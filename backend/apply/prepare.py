@@ -140,6 +140,13 @@ def answer_all(answers: list[dict]) -> int:
 def open_questions(job, applicant) -> list[dict]:
     """The Greenhouse form's questions no profile or saved answer covers."""
     from backend.apply.greenhouse import HANDLED
+    if job.source == "jazzhr" and job.application_url:
+        from backend.apply import jazzhr
+        out = []
+        for q in jazzhr.fetch_questions(job.application_url):
+            if jazzhr.answer(q, applicant) is None:
+                out.append({"label": q["label"], "required": q["required"], "options": q["options"][:30]})
+        return out
     if job.source != "greenhouse" or not job.company_slug or not job.external_id:
         return []
     try:

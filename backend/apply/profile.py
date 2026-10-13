@@ -148,6 +148,16 @@ class Applicant:
         if "portfolio" in text or "website" in text or "personal site" in text:
             return str(self.links.get("portfolio") or "").strip() or None
 
+        # Before the address parts: "Washington State" in the list is not a State field.
+        # "Are you currently residing in one of the following states: DC, Florida, ...?"
+        if re.search(r"\b(resid|live|living|located)\w*\b.*\b(following|these|one of)\b", text) \
+                and re.search(r"\bstates?\b", text):
+            mine = str(self.location.get("state") or "").strip()
+            if mine:
+                listed = _states_in(text)
+                if listed:
+                    return "Yes" if _state_code(mine) in listed else "No"
+
         # Address parts, however the form words them ("Please provide your
         # City *", "Zip Code", "State/Province"). Whole words only: "city" must
         # not match "citizenship", nor "state" "statement".
@@ -173,6 +183,12 @@ class Applicant:
         if "sponsor" in text:
             needs = self.authorisation.get("requires_sponsorship")
             return None if needs is None else ("Yes" if needs else "No")
+        # "Are you a US Citizen?" -- a yes/no about the person, asked outright (the status
+        # question above is a choice of statuses). Only what the profile states.
+        if re.search(r"\b(u\.?s\.?|united states) citizen\b", text) and "?" in text \
+                and not re.search(r"\b(describe|status|select|which)\b", text):
+            citizen = self.authorisation.get("us_citizen")
+            return None if citizen is None else ("Yes" if citizen else "No")
         if "authorized to work" in text or "authorised to work" in text \
                 or "legally authorized" in text or "legally authorised" in text:
             allowed = self.authorisation.get("authorised_to_work")
@@ -204,6 +220,46 @@ class Applicant:
             return None if willing is None else ("Yes" if willing else "No")
 
         return None
+
+
+US_STATES = {
+    "AL": "alabama", "AK": "alaska", "AZ": "arizona", "AR": "arkansas", "CA": "california", "CO": "colorado",
+    "CT": "connecticut", "DE": "delaware", "DC": "district of columbia", "FL": "florida", "GA": "georgia",
+    "HI": "hawaii", "ID": "idaho", "IL": "illinois", "IN": "indiana", "IA": "iowa", "KS": "kansas",
+    "KY": "kentucky", "LA": "louisiana", "ME": "maine", "MD": "maryland", "MA": "massachusetts",
+    "MI": "michigan", "MN": "minnesota", "MS": "mississippi", "MO": "missouri", "MT": "montana",
+    "NE": "nebraska", "NV": "nevada", "NH": "new hampshire", "NJ": "new jersey", "NM": "new mexico",
+    "NY": "new york", "NC": "north carolina", "ND": "north dakota", "OH": "ohio", "OK": "oklahoma",
+    "OR": "oregon", "PA": "pennsylvania", "RI": "rhode island", "SC": "south carolina", "SD": "south dakota",
+    "TN": "tennessee", "TX": "texas", "UT": "utah", "VT": "vermont", "VA": "virginia", "WA": "washington",
+    "WV": "west virginia", "WI": "wisconsin", "WY": "wyoming"}
+
+
+def _state_code(value: str) -> str:
+    v = value.strip()
+    if v.upper() in US_STATES:
+        return v.upper()
+    return next((code for code, name in US_STATES.items() if name == v.lower()), v.upper())
+
+
+def _states_in(text: str) -> set[str]:
+    """The states a question lists, by name ("Washington DC", "Texas") or code ("TX")."""
+    low = text.lower()
+    found = set()
+    if re.search(r"\b(washington,? d\.?c\.?|district of columbia|\bdc\b)", low):
+        found.add("DC")
+        low = re.sub(r"washington,? d\.?c\.?", " ", low)
+    for code, name in sorted(US_STATES.items(), key=lambda kv: -len(kv[1])):
+        if code == "DC":
+            continue
+        if re.search(rf"\b{re.escape(name)}\b", low):
+            found.add(code)
+            low = re.sub(rf"\b{re.escape(name)}\b", " ", low)
+    for code in re.findall(r"\b([A-Z]{2})\b", text):
+        if code in US_STATES and code not in ("IN", "OR", "ME", "OK", "HI", "OH") or code in ("OH", "OR", "IN") and \
+                re.search(rf"(,|\s)\s*{code}\s*(,|\.|\?|$)", text):
+            found.add(code)
+    return found
 
 
 def load(path=None) -> Applicant:
