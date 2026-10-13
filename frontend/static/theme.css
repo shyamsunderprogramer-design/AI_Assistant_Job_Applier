@@ -283,9 +283,11 @@ tr.ineligible td{opacity:.72}
 /* 5,770 rows: the browser skips laying out the ones off screen. */
 #rows tr{content-visibility:auto;contain-intrinsic-size:auto 52px}
 @media (min-width:821px){
-  /* Headings stay in view while the list scrolls: under the app bar and the filter bar. */
+  /* The Jobs list's headings stay in view while it scrolls: under the app bar and the filter bar.
+     Only that table (.tw): every other table sits in a scrolling box (.t-table-wrap), where the
+     same offset pushed its heading row down over its first rows. */
   .tw{overflow:visible}
-  thead th{position:sticky;top:calc(var(--appbar-h) + var(--bar-h, 0px));z-index:3;
+  .tw thead th{position:sticky;top:calc(var(--appbar-h) + var(--bar-h, 0px));z-index:3;
     box-shadow:inset 0 -1px 0 var(--line)}
   html{scroll-padding-top:calc(var(--appbar-h) + var(--bar-h, 0px) + 48px)}
 }
