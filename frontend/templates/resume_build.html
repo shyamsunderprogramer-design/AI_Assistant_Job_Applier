@@ -38,6 +38,14 @@
         </select>
         <button class="btn primary" id="preview">Preview</button>
       </div>
+      <div class="row" style="margin-top:6px">
+        <label class="hint" for="font">Font</label>
+        <select id="font" class="chip"><option value="">The template's</option>
+          {% for f in looks.fonts %}<option value="{{ f }}">{{ f }}</option>{% endfor %}</select>
+        <label class="hint" for="accent">Colour</label>
+        <select id="accent" class="chip"><option value="">The template's</option>
+          {% for a in looks.accents %}<option value="{{ a.key }}">{{ a.label }}</option>{% endfor %}</select>
+      </div>
       <div id="to-do" class="rb-todo"></div>
       <div id="health" class="rb-health" hidden></div>
       <div class="row rb-downloads" id="downloads" hidden>
@@ -394,6 +402,7 @@ async function writeSummary() {
 async function preview() {
   clearTimeout(timer); dirty = false;
   D.template = $('template').value;
+  D.look = {font: $('font').value, accent: $('accent').value};
   const btn = $('preview'); btn.disabled = true; btn.textContent = 'Drawing…';
   const r = await post('/resume/build/preview', {data: D});
   btn.disabled = false; btn.textContent = 'Preview';
@@ -429,6 +438,7 @@ function hasContent() { return D && (D.contact.name || D.experience.length || D.
 async function load(out, label) {
   if (!out.ok) { $('start-note').textContent = out.error; return; }
   D = out.data; D.template = $('template').value || 'classic';
+  D.look = {font: $('font').value, accent: $('accent').value};
   $('import-warn').hidden = !out.warnings?.length;
   $('import-warn').innerHTML = out.warnings?.length ? '<b>Check these, the reader was unsure:</b><br>' + out.warnings.map(esc).join('<br>') : '';
   $('start-note').textContent = label;
@@ -455,12 +465,18 @@ $('blank').onclick = async () => {
 };
 $('preview').onclick = preview;
 $('master').onclick = makeMaster;
-$('template').onchange = () => { D.template = $('template').value; changed(); if (!$('pages-card').hidden) preview(); };
+function setLook() {
+  D.template = $('template').value;
+  D.look = {font: $('font').value, accent: $('accent').value};
+  changed(); if (!$('pages-card').hidden) preview();
+}
+['template', 'font', 'accent'].forEach(id => $(id).onchange = setLook);
 window.addEventListener('beforeunload', e => { if (dirty) { save(); e.preventDefault(); } });
 
 (async () => {
   const r = await (await fetch('/resume/build/data')).json();
   D = r.data; STATE = r; $('template').value = D.template || 'classic';
+  $('font').value = (D.look || {}).font || ''; $('accent').value = (D.look || {}).accent || '';
   if (!D.contact.name && !D.experience.length) {
     D.experience.push(NEW.experience()); D.skills.push(NEW.skills()); D.education.push(NEW.education());
     $('start-note').textContent = 'Start blank below, or fill the form from a resume you have.';

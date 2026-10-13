@@ -2324,10 +2324,10 @@ def tailor_page():
             saved = base_resume_path(cfg()).name
         except Exception:
             saved = ""
-    from ml.resume.style import DEFAULT, choices
+    from ml.resume.style import DEFAULT, choices, look_choices
     return render_template("tailor.html", accepted=",".join(TAILOR_TYPES), jd=jd, saved=saved,
                            autostart=bool(jd and saved and request.args.get("start")),
-                           templates=choices(),
+                           templates=choices(), looks=look_choices(),
                            template=(cfg().get("resume.template", DEFAULT) if cfg() is not None else DEFAULT) or DEFAULT)
 
 
@@ -2370,7 +2370,8 @@ def tailor_start():
     template = request.form.get("template") or None
     if template not in TEMPLATES:
         template = None
-    start(folder, resume_path, jd_text, jd_path, cfg(), length=length, template=template)
+    look = {"font": request.form.get("font") or "", "accent": request.form.get("accent") or ""}
+    start(folder, resume_path, jd_text, jd_path, cfg(), length=length, template=template, look=look)
     return jsonify(ok=True, run=folder.name)
 
 
@@ -2390,7 +2391,9 @@ def tailor_status(run_id):
     try:
         return jsonify(ok=True, **json.loads((folder / "progress.json").read_text()))
     except (OSError, ValueError):
-        return jsonify(ok=True, stage=0, done=False, error=None, note="")
+        # A run made without the page (from the command line) has its result and no progress file.
+        done = (folder / "result.json").exists()
+        return jsonify(ok=True, stage=6 if done else 0, done=done, error=None, note="")
 
 
 @app.get("/tailor/<run_id>/result")
@@ -2521,7 +2524,9 @@ def tailor_template(run_id):
     if folder is None or not (folder / "result.json").exists():
         return jsonify(ok=False, error="No result yet."), 404
     try:
-        data = change_template(folder, str((request.get_json(silent=True) or {}).get("template") or ""))
+        body = request.get_json(silent=True) or {}
+        data = change_template(folder, str(body.get("template") or ""),
+                               body.get("look") if isinstance(body.get("look"), dict) else None)
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 400
     except Exception as exc:

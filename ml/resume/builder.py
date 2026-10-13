@@ -62,6 +62,7 @@ def empty() -> dict:
         "certifications": [],
         "extra": [],
         "template": "classic",
+        "look": {},
         "updated": "",
     }
 
@@ -137,8 +138,9 @@ def clean(data: dict) -> dict:
         if heading:
             out["extra"].append({"id": _text(x.get("id"), 16) or _id(), "heading": heading,
                                  "lines": _lines(x.get("lines"), 15)})
-    from ml.resume.style import TEMPLATES
+    from ml.resume.style import TEMPLATES, clean_look
     out["template"] = data.get("template") if data.get("template") in TEMPLATES else "classic"
+    out["look"] = clean_look(data.get("look"))
     return out
 
 
@@ -255,7 +257,8 @@ def render(data: dict, template: str | None = None) -> dict:
     from ml.resume.writer import plan_document, write_tailored_resume
     from ml.tailoring.documents import page_images, visual_checks
     base, header = to_resume(data)
-    result = TailorResult(summary=None, template=template or data.get("template") or "classic")
+    result = TailorResult(summary=None, template=template or data.get("template") or "classic",
+                          look=dict(data.get("look") or {}))
     OUT.mkdir(parents=True, exist_ok=True)
     for old in OUT.glob("page*.png"):
         old.unlink()

@@ -42,6 +42,14 @@
     <select id="template" class="chip" title="How the resume looks. Every template is ATS-safe.">
       {% for t in templates %}<option value="{{ t.key }}" title="{{ t.description }}" {% if t.key == template %}selected{% endif %}>{{ t.label }}</option>{% endfor %}
     </select>
+    <label class="hint" for="font">Font</label>
+    <select id="font" class="chip" title="The typeface, in place of the template's own">
+      <option value="">The template's</option>{% for f in looks.fonts %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+    </select>
+    <label class="hint" for="accent">Colour</label>
+    <select id="accent" class="chip" title="The colour of the section headings and their lines">
+      <option value="">The template's</option>{% for a in looks.accents %}<option value="{{ a.key }}">{{ a.label }}</option>{% endfor %}
+    </select>
     <button class="btn primary" id="create">Create tailored resume</button>
     <span class="hint" id="create-hint">Takes about five to ten minutes: Claude reads the posting, judges the evidence and writes the draft.</span>
   </div>
@@ -84,6 +92,12 @@
       <span class="hint" style="margin-left:auto">Template:</span>
       <select id="switch-template" class="chip" title="Draw this resume in another template: same words, no new tailoring">
         {% for t in templates %}<option value="{{ t.key }}">{{ t.label }}</option>{% endfor %}
+      </select>
+      <select id="switch-font" class="chip" title="The typeface" aria-label="Font">
+        <option value="">Template's font</option>{% for f in looks.fonts %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+      </select>
+      <select id="switch-accent" class="chip" title="The colour of the headings" aria-label="Colour">
+        <option value="">Template's colour</option>{% for a in looks.accents %}<option value="{{ a.key }}">{{ a.label }}</option>{% endfor %}
       </select>
       <button class="btn" id="edit-toggle">Edit the text</button>
     </div>
@@ -173,6 +187,8 @@ $('create').onclick = async () => {
   form.append('jd_text', $('jd-text').value);
   form.append('length', $('length').value);
   form.append('template', $('template').value);
+  form.append('font', $('font').value);
+  form.append('accent', $('accent').value);
   $('create').disabled = true;
   let r;
   try { r = await (await fetch('/tailor/start', {method: 'POST', body: form})).json(); }
@@ -241,7 +257,10 @@ async function load() {
     + (ex.text ? `<details><summary>Show the text read from the resume</summary><pre>${esc(ex.text)}</pre></details>` : '');
   renderResume(); renderReport(); renderAlignment(); renderVersions(); renderChanges(); renderGaps(); renderReview();
   loadKeywords(); renderRoadmap();
-  $('switch-template').value = ((RESULT.draft || {}).result || {}).template || '{{ template }}';
+  const drawn = (RESULT.draft || {}).result || {};
+  $('switch-template').value = drawn.template || '{{ template }}';
+  $('switch-font').value = (drawn.look || {}).font || '';
+  $('switch-accent').value = (drawn.look || {}).accent || '';
   if (RESULT.template_note) $('checks').insertAdjacentHTML('afterbegin', `<div class="t-warn">⚠ ${esc(RESULT.template_note)}</div>`);
 }
 
@@ -500,16 +519,18 @@ async function checkEdits() {
     t.insertAdjacentHTML('afterend', `<div class="kw-line-warn">This edit removes ${terms.map(esc).join(', ')}, the posting asks for ${terms.length > 1 ? 'them' : 'it'}, and no other line has ${terms.length > 1 ? 'them' : 'it'}.</div>`);
   });
 }
-$('switch-template').onchange = async () => {
-  const pick = $('switch-template');
-  pick.disabled = true;
-  $('checks').innerHTML = '<p class="hint">Drawing it again in the new template…</p>';
+async function redraw() {
+  const picks = ['switch-template', 'switch-font', 'switch-accent'].map($);
+  picks.forEach(p => p.disabled = true);
+  $('checks').innerHTML = '<p class="hint">Drawing it again in the new look…</p>';
   const r = await (await fetch(`/tailor/${RUN}/template`, {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                                          body: JSON.stringify({template: pick.value})})).json();
-  pick.disabled = false;
+    body: JSON.stringify({template: $('switch-template').value,
+                          look: {font: $('switch-font').value, accent: $('switch-accent').value}})})).json();
+  picks.forEach(p => p.disabled = false);
   if (!r.ok) { $('checks').innerHTML = `<p class="t-error">${esc(r.error)}</p>`; return; }
   await load();
-};
+}
+['switch-template', 'switch-font', 'switch-accent'].forEach(id => $(id).onchange = redraw);
 $('cancel-edits').onclick = () => { $('editor').hidden = true; $('pages').hidden = false; };
 $('save-edits').onclick = async () => {
   const edits = {};

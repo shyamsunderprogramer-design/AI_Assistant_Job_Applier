@@ -142,8 +142,8 @@ def _builder_state(data: dict) -> dict:
 @app.get("/resume/build")
 def builder_page():
     """Build a resume from scratch, or from the one you have, in the same templates as a tailored one."""
-    from ml.resume.style import choices
-    return render_template("resume_build.html", templates=choices())
+    from ml.resume.style import choices, look_choices
+    return render_template("resume_build.html", templates=choices(), looks=look_choices())
 
 
 @app.get("/resume/build/data")

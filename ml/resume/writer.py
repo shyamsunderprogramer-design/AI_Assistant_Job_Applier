@@ -69,6 +69,9 @@ TEXT_WIDTH_IN = PAGE_WIDTH_IN - 2 * SIDE_MARGIN_IN
 
 BULLET_AT = Inches(0.15)       # the "•", from the left text margin
 BULLET_TEXT_AT = Inches(0.30)  # its text, and every wrapped line under it
+RULE_ON = True                 # a hairline under each section heading
+INDENT = Inches(0)             # the content moved right of a rail of headings (the sidebar)
+HEADER_ALIGN = WD_ALIGN_PARAGRAPH.CENTER
 
 # The values above are the classic template; a render sets them from the
 # draft's template (ml/resume/style.py) under this lock, so two renders at
@@ -80,8 +83,10 @@ _STYLE_LOCK = threading.RLock()
 def _apply_style(st) -> None:
     global FONT, BODY_SIZE, HEADING_SIZE, NAME_SIZE, CONTACT_SIZE, INK, MUTED, HEADING_COLOR
     global RULE_COLOR, GAP, HEAD_BEFORE, HEAD_AFTER, ROLE_BEFORE, TITLE_AFTER, SIDE_MARGIN_IN
-    global TEXT_WIDTH_IN, BULLET_AT, BULLET_TEXT_AT
+    global TEXT_WIDTH_IN, BULLET_AT, BULLET_TEXT_AT, RULE_ON, INDENT, HEADER_ALIGN
     FONT = st.font
+    RULE_ON, INDENT = st.rule, Inches(st.indent_in)
+    HEADER_ALIGN = WD_ALIGN_PARAGRAPH.LEFT if st.header_align == "left" else WD_ALIGN_PARAGRAPH.CENTER
     BODY_SIZE, HEADING_SIZE, NAME_SIZE, CONTACT_SIZE = Pt(st.body), Pt(st.heading), Pt(st.name), Pt(st.contact)
     INK = MUTED = RGBColor.from_string(st.ink)
     HEADING_COLOR = RGBColor.from_string(st.heading_color)
@@ -188,7 +193,8 @@ def _add_heading(document: Document, text: str) -> None:
         run.font.name = FONT
         run.font.size = HEADING_SIZE
         run.font.color.rgb = HEADING_COLOR
-    _rule_under(para)
+    if RULE_ON:
+        _rule_under(para)
 
 
 def _add_role(document: Document, text: str, *, bold_title: bool = True) -> None:
@@ -204,6 +210,8 @@ def _add_role(document: Document, text: str, *, bold_title: bool = True) -> None
     fmt.space_before = Pt(ROLE_BEFORE)
     fmt.space_after = Pt(GAP)
     fmt.keep_with_next = True        # never split a job from its first bullet
+    fmt.left_indent = INDENT
+    # Tab stops are measured from the page margin, not the indent: the dates still reach the margin.
     fmt.tab_stops.add_tab_stop(Inches(TEXT_WIDTH_IN), WD_TAB_ALIGNMENT.RIGHT)
 
     run = para.add_run(title + ("  \t" if dates else ""))
@@ -222,12 +230,13 @@ def _add_school(document: Document, text: str) -> None:
     """The university line of an education entry, in bold."""
     para = _add(document, text, bold=True)
     para.paragraph_format.space_after = Pt(GAP)
+    para.paragraph_format.left_indent = INDENT
 
 
 def _add_title(document: Document, text: str) -> None:
     """The professional title and primary technologies under the contact line."""
     para = _add(document, _tidy_contact(text), bold=True, size=BODY_SIZE,
-                align=WD_ALIGN_PARAGRAPH.CENTER)
+                align=HEADER_ALIGN)
     para.paragraph_format.space_before = Pt(0)
     para.paragraph_format.space_after = Pt(TITLE_AFTER)
 
@@ -235,7 +244,7 @@ def _add_title(document: Document, text: str) -> None:
 def _add_contact(document: Document, text: str) -> None:
     """The contact line, with the LinkedIn address as a linked word."""
     para = document.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    para.alignment = HEADER_ALIGN
     para.paragraph_format.space_after = Pt(GAP)
     items = [i for i in _tidy_contact(text).split(" \u00b7 ") if i]
     for n, item in enumerate(items):
@@ -288,6 +297,7 @@ def _add_skill(document: Document, text: str, keywords: list[str] | None = None)
     para = document.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.LEFT
     para.paragraph_format.space_after = Pt(GAP)
+    para.paragraph_format.left_indent = INDENT
     run = para.add_run(label + ": ")
     run.bold = True
     run.font.name = FONT
@@ -300,6 +310,7 @@ def _add_subheading(document: Document, text: str) -> None:
     para = _add(document, text, bold=True, space_before=2)
     para.paragraph_format.space_after = Pt(GAP)
     para.paragraph_format.keep_with_next = True
+    para.paragraph_format.left_indent = INDENT
     return para
 
 
@@ -324,9 +335,9 @@ def _add_bullet(document: Document, text: str, keywords: list[str] | None = None
     para = document.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     fmt = para.paragraph_format
-    fmt.left_indent = BULLET_TEXT_AT
+    fmt.left_indent = BULLET_TEXT_AT + INDENT
     fmt.first_line_indent = BULLET_AT - BULLET_TEXT_AT
-    fmt.tab_stops.add_tab_stop(BULLET_TEXT_AT)
+    fmt.tab_stops.add_tab_stop(BULLET_TEXT_AT + INDENT)
     fmt.space_after = Pt(GAP)
     fmt.keep_together = True             # a bullet is not split across pages
     _emphasised(para, "\u2022\t", strip_bullet(text), keywords)
@@ -806,7 +817,7 @@ def _write_tailored(base, result, output_path, header_lines):
     for kind, text in plan_document(base, result, header_lines):
         if kind == "name":
             name = _add(document, text, bold=True, size=NAME_SIZE,
-                        align=WD_ALIGN_PARAGRAPH.CENTER)
+                        align=HEADER_ALIGN)
             name.paragraph_format.space_after = Pt(GAP)
         elif kind == "contact":
             _add_contact(document, text)
@@ -830,6 +841,7 @@ def _write_tailored(base, result, output_path, header_lines):
             para = document.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             para.paragraph_format.space_after = Pt(GAP)
+            para.paragraph_format.left_indent = INDENT
             _emphasised(para, "", text, keywords)
 
     document.save(output_path)

@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 from reportlab.lib.colors import Color
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
@@ -55,6 +55,13 @@ _CANDIDATES = [
     ("Calibri", "/Library/Fonts/Calibri.ttf", "/Library/Fonts/Calibri Bold.ttf"),
     ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf",
      "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+    # The other faces a look can choose (ml/resume/style.py FONTS).
+    ("Aptos", str(_WORD_FONTS / "Aptos.ttf"), str(_WORD_FONTS / "Aptos-Bold.ttf")),
+    ("Georgia", "/System/Library/Fonts/Supplemental/Georgia.ttf",
+     "/System/Library/Fonts/Supplemental/Georgia Bold.ttf"),
+    ("Book Antiqua", str(_WORD_FONTS / "Book Antiqua.ttf"), str(_WORD_FONTS / "Book Antiqua Bold.ttf")),
+    ("Times New Roman", "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+     "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf"),
     ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
 ]
@@ -72,6 +79,9 @@ ROLE_BEFORE, TITLE_AFTER = 6, 6
 
 SIDE_MARGIN = 0.65 * inch
 TOP_MARGIN = 0.65 * inch
+RULE_ON = True                   # a hairline under each section heading
+INDENT = 0.0                     # the content moved right of a left rail of headings (the sidebar)
+HEADER_ALIGN = TA_CENTER
 BULLET_AT = 0.15 * inch          # the "•", from the left text margin
 BULLET_TEXT_AT = 0.30 * inch     # its text, and every wrapped line
 
@@ -154,8 +164,10 @@ def _apply_style(st) -> None:
     """Set this module's type and spacing from a template (ml/resume/style.py)."""
     global FONT, FONT_BOLD, BULLET, BODY, LEADING, INK, MUTED, RULE, HEADING_INK, NAME_SIZE, HEAD_SIZE
     global GAP, HEAD_BEFORE, HEAD_AFTER, ROLE_BEFORE, TITLE_AFTER, SIDE_MARGIN, TOP_MARGIN
-    global BULLET_AT, BULLET_TEXT_AT
+    global BULLET_AT, BULLET_TEXT_AT, RULE_ON, INDENT, HEADER_ALIGN
     FONT, FONT_BOLD = _register_font(st.font)
+    RULE_ON, INDENT = st.rule, st.indent_in * inch
+    HEADER_ALIGN = TA_LEFT if st.header_align == "left" else TA_CENTER
     BULLET = "-" if FONT == "Helvetica" else "\u2022"
     BODY, LEADING, NAME_SIZE, HEAD_SIZE = st.body, st.leading, st.name, st.heading
     INK = MUTED = _hex(st.ink)
@@ -194,30 +206,31 @@ def _styles() -> dict[str, ParagraphStyle]:
     )
     return {
         "name": ParagraphStyle("name", parent=base, fontName=FONT_BOLD,
-                               fontSize=NAME_SIZE, leading=NAME_SIZE * LEADING, alignment=TA_CENTER,
+                               fontSize=NAME_SIZE, leading=NAME_SIZE * LEADING, alignment=HEADER_ALIGN,
                                spaceAfter=3),
-        "contact": ParagraphStyle("contact", parent=base, alignment=TA_CENTER, spaceAfter=3),
+        "contact": ParagraphStyle("contact", parent=base, alignment=HEADER_ALIGN, spaceAfter=3),
         "title": ParagraphStyle("title", parent=base, fontName=FONT_BOLD,
-                                alignment=TA_CENTER, spaceAfter=TITLE_AFTER),
+                                alignment=HEADER_ALIGN, spaceAfter=TITLE_AFTER),
         # keepWithNext: a heading, a group title or a role line is never
         # left alone at the foot of a page with its lines on the next.
         "heading": ParagraphStyle("heading", parent=base, fontName=FONT_BOLD, textColor=HEADING_INK,
                                   fontSize=HEAD_SIZE, leading=HEAD_SIZE * LEADING, spaceBefore=HEAD_BEFORE,
-                                  spaceAfter=1, keepWithNext=1),
+                                  spaceAfter=1 if RULE_ON else HEAD_AFTER, keepWithNext=1),
         "role": ParagraphStyle("role", parent=base, fontName=FONT_BOLD, spaceBefore=ROLE_BEFORE,
-                               spaceAfter=GAP, keepWithNext=1),
-        "degree": ParagraphStyle("degree", parent=base, spaceBefore=max(2, ROLE_BEFORE - 2), keepWithNext=1),
+                               spaceAfter=GAP, keepWithNext=1, leftIndent=INDENT),
+        "degree": ParagraphStyle("degree", parent=base, spaceBefore=max(2, ROLE_BEFORE - 2), keepWithNext=1,
+                                 leftIndent=INDENT),
         "subheading": ParagraphStyle("subheading", parent=base,
                                      fontName=FONT_BOLD, spaceBefore=2,
-                                     spaceAfter=GAP, keepWithNext=1),
+                                     spaceAfter=GAP, keepWithNext=1, leftIndent=INDENT),
         # The bullet at its position, its text and every wrapped line at the text position.
         "bullet": ParagraphStyle("bullet", parent=base, alignment=TA_JUSTIFY,
-                                 leftIndent=BULLET_TEXT_AT, bulletIndent=BULLET_AT,
+                                 leftIndent=BULLET_TEXT_AT + INDENT, bulletIndent=BULLET_AT + INDENT,
                                  bulletFontName=FONT, bulletFontSize=BODY),
         # Body text justified: straight right edges, the last line of each
         # paragraph left as it falls.
-        "text": ParagraphStyle("text", parent=base, alignment=TA_JUSTIFY),
-        "skill": ParagraphStyle("skill", parent=base),          # left aligned
+        "text": ParagraphStyle("text", parent=base, alignment=TA_JUSTIFY, leftIndent=INDENT),
+        "skill": ParagraphStyle("skill", parent=base, leftIndent=INDENT),          # left aligned
     }
 
 
@@ -258,15 +271,16 @@ class _DatedLine(Flowable):
     """
 
     def __init__(self, title: str, dates: str, font: str, size: float,
-                 space_before: float, space_after: float):
+                 space_before: float, space_after: float, indent: float = 0.0):
         super().__init__()
         self.title, self.dates, self.font, self.size = title, dates, font, size
+        self.indent = indent
         self.spaceBefore, self.spaceAfter = space_before, space_after
         self.keepWithNext = 1           # a job is never split from its first line
 
     def fits(self, width: float) -> bool:
         gap = stringWidth("    ", self.font, self.size)
-        return (stringWidth(self.title, self.font, self.size) + gap
+        return (self.indent + stringWidth(self.title, self.font, self.size) + gap
                 + stringWidth(self.dates, self.font, self.size)) <= width
 
     def wrap(self, avail_w, avail_h):
@@ -278,7 +292,7 @@ class _DatedLine(Flowable):
         c.setFillColor(INK)
         c.setFont(self.font, self.size)
         baseline = self.size * (LEADING - 1) / 2 + self.size * 0.22
-        c.drawString(0, baseline, self.title + "  ")
+        c.drawString(self.indent, baseline, self.title + "  ")
         c.drawRightString(self.width, baseline, self.dates)
 
 
@@ -287,7 +301,8 @@ def _dated(text: str, width: float, font: str, style: ParagraphStyle):
     from ml.resume.writer import _split_dates
     title, dates = _split_dates(text)
     if dates:
-        line = _DatedLine(title, dates, font, style.fontSize, style.spaceBefore, style.spaceAfter)
+        line = _DatedLine(title, dates, font, style.fontSize, style.spaceBefore, style.spaceAfter,
+                          indent=style.leftIndent)
         if line.fits(width):
             return line
     bold = font == FONT_BOLD
@@ -376,7 +391,8 @@ def _write_pdf(base, result, output_path, header_lines):
                                    styles["contact"]))
         elif kind == "heading":
             story.append(Paragraph(_escape(text.upper()), styles["heading"]))
-            story.append(_Rule(text_w))
+            if RULE_ON:
+                story.append(_Rule(text_w))
         elif kind == "title":
             from ml.resume.writer import _tidy_contact as tidy
             story.append(Paragraph(_escape(tidy(text)), styles["title"]))

@@ -60,3 +60,52 @@ def test_a_title_is_never_left_at_the_foot_of_a_page():
     out = _kept_with_next([title, bullet, Paragraph("After.", ParagraphStyle("b"))])
     assert len(out) == 2 and isinstance(out[0], KeepTogether)
     assert out[0]._content[0] is title                     # the title travels with its bullet
+
+
+def test_sidebar_moves_the_content_right_of_the_headings_and_keeps_one_column(tmp_path):
+    from docx.shared import Inches
+    base = _resume(tmp_path)
+    doc = Document(str(write_tailored_resume(base, TailorResult(summary=None, template="sidebar"),
+                                             tmp_path / "s.docx")))
+    by_text = {p.text.split("\t")[0].strip(): p for p in doc.paragraphs}
+    heading = next(p for p in doc.paragraphs if p.style.name == "Heading 1")
+    assert heading.paragraph_format.left_indent in (None, 0)          # the rail
+    role = next(p for p in doc.paragraphs if p.text.startswith("Engineer, Acme"))
+    assert role.paragraph_format.left_indent == Inches(1.3)            # the work, beside it
+    bullet = next(p for p in doc.paragraphs if "Built deployment" in p.text)
+    assert bullet.paragraph_format.left_indent == Inches(1.3 + 0.30)
+    body = doc.element.body
+    from docx.oxml.ns import qn
+    assert not doc.tables and not body.findall(".//" + qn("w:txbxContent"))
+    cols = [c for c in body.iter(qn("w:cols")) if int(c.get(qn("w:num"), "1") or 1) > 1]
+    assert not cols and by_text
+
+
+def test_minimal_has_no_rules_and_a_left_header(tmp_path):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    base = _resume(tmp_path)
+    doc = Document(str(write_tailored_resume(base, TailorResult(summary=None, template="minimal"),
+                                             tmp_path / "m.docx")))
+    assert not doc.element.body.findall(".//" + qn("w:pBdr"))
+    assert doc.paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.LEFT
+
+
+def test_a_look_changes_the_font_and_the_heading_colour(tmp_path):
+    from pypdf import PdfReader
+    from ml.resume.pdf import write_pdf
+    base = _resume(tmp_path)
+    result = TailorResult(summary=None, template="classic", look={"font": "Georgia", "accent": "7A1F2B"})
+    doc = Document(str(write_tailored_resume(base, result, tmp_path / "g.docx")))
+    assert doc.styles["Normal"].font.name == "Georgia"
+    assert str(doc.styles["Heading 1"].font.color.rgb) == "7A1F2B"
+    pdf = write_pdf(base, result, tmp_path / "g.pdf")
+    fonts = {str(f["/BaseFont"]) for f in PdfReader(str(pdf)).pages[0]["/Resources"]["/Font"].values()
+             for f in [f.get_object()]}
+    assert any("Georgia" in f for f in fonts), fonts
+
+
+def test_an_unknown_font_or_colour_is_ignored():
+    from ml.resume.style import clean_look
+    assert clean_look({"font": "Comic Sans", "accent": "#ff00ff", "x": 1}) == {}
+    assert clean_look({"font": "Arial", "accent": "#1f3864"}) == {"font": "Arial", "accent": "1F3864"}
