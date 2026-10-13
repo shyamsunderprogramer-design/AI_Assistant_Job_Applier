@@ -54,9 +54,11 @@ resume:
   # max_pages and min_pages above decide.
   length: auto
   # The look of a tailored resume (ml/resume/style.py): classic (Cambria,
-  # black: your own format), modern (Calibri, dark blue headings) or compact
-  # (smaller and tighter, for one or two pages). The tailoring page can
-  # choose another for one resume, and switch a finished one.
+  # black: your own format), modern (Calibri, dark blue headings), compact
+  # (smaller and tighter, for one or two pages), minimal (wide margins, no
+  # lines) or sidebar (section names in a left rail, one column underneath).
+  # The tailoring page can choose another for one resume, with a font and a
+  # colour, and switch a finished one.
   template: classic
   # Re-tailor a job that already has an output file?
   overwrite: false
