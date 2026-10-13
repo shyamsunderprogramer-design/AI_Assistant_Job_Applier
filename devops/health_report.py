@@ -38,6 +38,42 @@ def _db(root: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{root / 'data' / 'jobs.db'}?mode=ro", uri=True)
 
 
+# "2026-10-08 06:03:47 -0500 Sleep  Entering Sleep state due to 'Maintenance Sleep':... Using Batt (Charge:4%) 941 secs"
+_SLEEP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) [+-]\d{4} Sleep\s+Entering Sleep state due to '([^']+)'"
+                    r".*?Using (AC|Batt)(?: \(Charge:\s*(\d+)%\))?\s+(\d+) secs")
+
+
+def sleep_log() -> str:
+    """macOS's own record of when it slept (`pmset -g log`), or "" where there is none."""
+    import subprocess
+    try:
+        return subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def slept_during(start: datetime, end: datetime, log_text: str) -> dict:
+    """How long the Mac slept between start and end, and why: what a slow run usually is.
+
+    A run of 12 hours on 8 Oct 2026 was the Mac asleep on battery at 4%, waking for a
+    few seconds every quarter hour; the report said only "took 12 hours".
+    """
+    seconds, battery, lid, low = 0, False, False, None
+    for line in log_text.splitlines():
+        m = _SLEEP.match(line)
+        if not m:
+            continue
+        at = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        if not (start <= at <= end):
+            continue
+        seconds += int(m.group(5))
+        battery |= m.group(3) == "Batt"
+        lid |= "Clamshell" in m.group(2)
+        if m.group(4):
+            low = min(low, int(m.group(4))) if low is not None else int(m.group(4))
+    return {"hours": round(seconds / 3600, 1), "battery": battery, "lid": lid, "charge": low}
+
+
 def morning_runs(root: Path, since: date) -> dict[str, dict | None]:
     """Each day's daily run from the pipeline log, by the day it STARTED.
 
@@ -61,15 +97,27 @@ def morning_runs(root: Path, since: date) -> dict[str, dict | None]:
             elif run:
                 run["exit"] = int(m.group(3))
                 run["hours"] = round((at - run["start"]).total_seconds() / 3600, 1)
+                run["end"] = at
                 run = None
             continue
         # The digest names a failed stage as "  adzuna: ReadTimeout: ...".
         stage = re.match(r"  ([a-z][\w-]*): ([A-Z]\w*(?:Error|Timeout|Exception|Limited))\b", line)
         if run and stage:
             run["failed"].append(f"{stage.group(1)} ({stage.group(2)})")
+    sleeping = None
     for r in days.values():
         if r:
+            if r["hours"] > LONG_RUN_HOURS and r.get("end"):
+                sleeping = sleep_log() if sleeping is None else sleeping
+                r["slept"] = slept_during(r["start"], r["end"], sleeping)
+            # The mornings this run was still going on: no new run starts while one holds the lock.
+            # A run with no end that a later run followed simply died; it held nothing.
+            later = [x for x in days.values() if x and x.get("start") and x["start"] > r["start"]]
+            end = r.get("end") or (None if later else datetime.now())
+            r["held"] = ([d for d in days if r["start"].date().isoformat() < d <= end.date().isoformat()]
+                         if end else [])
             r.pop("start", None)
+            r.pop("end", None)
     return days
 
 
@@ -117,19 +165,34 @@ def problems(r: dict) -> list[str]:
     today = date.today().isoformat()
     for day, run in r["runs"].items():
         if run is None:
-            if day != today:
+            holder = next((d for d, x in r["runs"].items() if x and day in (x.get("held") or [])), None)
+            if holder:
+                out.append(f"No morning run started on {day}: the run from {holder} was still going "
+                           f"(a new one waits for it).")
+            elif day != today:
                 out.append(f"No morning run started on {day}.")
         elif run["exit"] and run["failed"]:
             out.append(f"On {day} part of the morning run failed: {', '.join(run['failed'])}; the rest ran.")
         elif run["exit"]:
             out.append(f"The morning run on {day} failed (exit {run['exit']}).")
         elif run["hours"] > LONG_RUN_HOURS:
-            out.append(f"The morning run on {day} took {run['hours']:.0f} hours.")
+            slept = run.get("slept") or {}
+            if slept.get("hours", 0) >= 1:
+                how = ("with the lid closed" if slept["lid"] else "") + (
+                    (" and " if slept["lid"] else "") + "on battery"
+                    + (f" (down to {slept['charge']}%)" if slept.get("charge") is not None else "")
+                    if slept["battery"] else "")
+                out.append(f"The morning run on {day} took {run['hours']:.0f} hours: the Mac was asleep for "
+                           f"{slept['hours']:.0f} of them{(' ' + how) if how else ''}. Keep it plugged in "
+                           f"with the lid open and the run takes about an hour and a half.")
+            else:
+                out.append(f"The morning run on {day} took {run['hours']:.0f} hours.")
     for row in r["scrapes"]:
         if row["boards"] and row["failed"] / row["boards"] > FAIL_RATE_WARN:
             out.append(f"{row['failed']} of {row['boards']} board scrapes failed on {row['day']}.")
     if r["failing"]:
-        out.append(f"{len(r['failing'])} board(s) failed 3+ times this week.")
+        out.append(f"{len(r['failing'])} board(s) failed 3+ times this week. A board that fails five times in a "
+                   f"row is switched off by itself: the company has usually moved to another job-board system.")
     if not r["backup"]:
         out.append("No database backup found.")
     elif r["backup"]["hours"] > BACKUP_MAX_HOURS:

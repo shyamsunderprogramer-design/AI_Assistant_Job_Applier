@@ -108,6 +108,9 @@ def parse_result(result: dict) -> AdzunaJob | None:
     )
 
 
+RETRY_PAUSES = (10, 30)          # seconds before the second and third try of a search that timed out
+
+
 class AdzunaClient:
     """Keyed calls to the search API, paced and counted."""
 
@@ -130,21 +133,44 @@ class AdzunaClient:
                 self._sleep(wait)
         self._last = self._clock()
         self.calls += 1
-        resp = self.session.get(
-            API.format(country=country, page=page),
-            params={"app_id": self.app_id, "app_key": self.app_key,
-                    "title_only": title, "max_days_old": max_days_old,
-                    "results_per_page": PER_PAGE, "sort_by": "date",
-                    "content-type": "application/json"},
-            timeout=30,
-        )
+        import requests
+        # A read that times out is Adzuna slow for a moment, not refusing: on 9 and
+        # 13 Oct 2026 one 30-second timeout failed the whole stage. Asked again,
+        # after a pause, twice.
+        for attempt, pause in enumerate(RETRY_PAUSES + (None,)):
+            try:
+                resp = self.session.get(
+                    API.format(country=country, page=page),
+                    params={"app_id": self.app_id, "app_key": self.app_key,
+                            "title_only": title, "max_days_old": max_days_old,
+                            "results_per_page": PER_PAGE, "sort_by": "date",
+                            "content-type": "application/json"},
+                    timeout=30,
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                if pause is None:
+                    # Named without the address: it carries the key in its query string.
+                    raise requests.ConnectionError(f"Adzuna did not answer: {type(exc).__name__}") from None
+                log.warning("Adzuna did not answer (%s) for %r — asking again in %ss",
+                            type(exc).__name__, title, pause)
+                self._sleep(pause)
+                continue
+            # "503 Service Temporarily Unavailable" (10 Oct 2026) is a moment, like a timeout.
+            if resp.status_code >= 500 and pause is not None:
+                log.warning("Adzuna answered %s for %r — asking again in %ss", resp.status_code, title, pause)
+                self._sleep(pause)
+                continue
+            break
         if resp.status_code in (401, 403):
             raise PermissionError("Adzuna refused the key — check ADZUNA_APP_ID and ADZUNA_APP_KEY")
         if resp.status_code == 429:
             log.warning("Adzuna rate limit reached — stopping this run's searches")
             self.calls = self.max_calls
             return []
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Not raise_for_status(): its message is the full address, app_key and all, and it
+            # was being written into the run log and the morning digest.
+            raise requests.HTTPError(f"Adzuna answered HTTP {resp.status_code} for {title!r}")
         return (resp.json() or {}).get("results") or []
 
 
@@ -157,9 +183,16 @@ def collect(client: AdzunaClient, titles: list[str], job_filter, *,
             pages: int = DEFAULT_PAGES, max_days_old: int = 3) -> list[AdzunaJob]:
     """Every posting the searches return that passes the person's filter."""
     found: dict[str, AdzunaJob] = {}
+    import requests
     for title in titles:
         for page in range(1, pages + 1):
-            results = client.search(title, page=page, max_days_old=max_days_old)
+            try:
+                results = client.search(title, page=page, max_days_old=max_days_old)
+            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
+                # One title that will not answer must not lose the others' postings.
+                log.warning("Adzuna search for %r failed after retries (%s) — going on with the rest",
+                            title, type(exc).__name__)
+                break
             for result in results:
                 job = parse_result(result)
                 if job and job.raw.external_id not in found and job_filter.matches(job.raw):

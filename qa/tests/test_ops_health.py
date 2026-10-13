@@ -60,7 +60,8 @@ def write_log(root, lines):
     (root / "data" / "daily_run.log").write_text("\n".join(lines) + "\n")
 
 
-def test_runs_are_counted_on_the_day_they_started_and_name_the_failed_stage(tmp_path):
+def test_runs_are_counted_on_the_day_they_started_and_name_the_failed_stage(tmp_path, monkeypatch):
+    monkeypatch.setattr(health_report, "sleep_log", lambda: "")      # not this Mac's own record
     d0 = date.today() - timedelta(days=3)
     d1, d2 = d0 + timedelta(days=1), d0 + timedelta(days=2)
     write_log(tmp_path, [
@@ -71,7 +72,8 @@ def test_runs_are_counted_on_the_day_they_started_and_name_the_failed_stage(tmp_
         f"{d2} 09:00:00  === daily finished, exit 1 ===",
     ])
     runs = health_report.morning_runs(tmp_path, d0)
-    assert runs[str(d0)] == {"exit": 0, "hours": 36.0, "failed": []}
+    assert {k: runs[str(d0)][k] for k in ("exit", "hours", "failed")} == {"exit": 0, "hours": 36.0, "failed": []}
+    assert runs[str(d0)]["held"] == [str(d1)]                         # still going on d1's morning
     assert runs[str(d1)] is None
     assert runs[str(d2)]["failed"] == ["adzuna (ReadTimeout)"]
     found = health_report.problems({"runs": runs, "scrapes": [], "failing": [],
@@ -88,3 +90,32 @@ def test_a_quiet_week_has_no_problems_and_a_stale_backup_is_one():
     assert health_report.problems(base) == []
     assert health_report.problems({**base, "backup": {"hours": 50}}) == ["The last backup is 50 hours old."]
     assert health_report.problems({**base, "backup": None}) == ["No database backup found."]
+
+
+def test_a_slow_run_says_the_mac_was_asleep(tmp_path, monkeypatch):
+    d0 = date.today() - timedelta(days=2)
+    write_log(tmp_path, [f"{d0} 06:00:00  === daily starting ===",
+                         f"{d0} 18:00:00  === daily finished, exit 0 ==="])
+    pmset = "\n".join([
+        f"{d0} 06:05:00 -0500 Sleep               \tEntering Sleep state due to 'Clamshell Sleep':TCPKeepAlive=active "
+        f"Using Batt (Charge:40%) 18000 secs",
+        f"{d0} 12:00:00 -0500 Sleep               \tEntering Sleep state due to 'Maintenance Sleep':TCPKeepAlive=active "
+        f"Using Batt (Charge:9%) 18000 secs",
+        f"{d0 - timedelta(days=1)} 07:00:00 -0500 Sleep  \tEntering Sleep state due to 'Idle Sleep' Using AC 99999 secs"])
+    monkeypatch.setattr(health_report, "sleep_log", lambda: pmset)
+    runs = health_report.morning_runs(tmp_path, d0)
+    assert runs[str(d0)]["slept"] == {"hours": 10.0, "battery": True, "lid": True, "charge": 9}
+    found = health_report.problems({"runs": runs, "scrapes": [], "failing": [], "backup": {"hours": 2}, "free_gb": 100})
+    assert any("asleep for 10 of them with the lid closed and on battery (down to 9%)" in p for p in found), found
+
+
+def test_a_run_that_died_holds_no_later_morning(tmp_path, monkeypatch):
+    monkeypatch.setattr(health_report, "sleep_log", lambda: "")
+    d0 = date.today() - timedelta(days=3)
+    write_log(tmp_path, [f"{d0} 06:00:00  === daily starting ===",                 # never finished
+                         f"{d0 + timedelta(days=2)} 06:00:00  === daily starting ===",
+                         f"{d0 + timedelta(days=2)} 08:00:00  === daily finished, exit 0 ==="])
+    runs = health_report.morning_runs(tmp_path, d0)
+    assert runs[str(d0)]["held"] == []
+    found = health_report.problems({"runs": runs, "scrapes": [], "failing": [], "backup": {"hours": 2}, "free_gb": 100})
+    assert f"No morning run started on {d0 + timedelta(days=1)}." in found

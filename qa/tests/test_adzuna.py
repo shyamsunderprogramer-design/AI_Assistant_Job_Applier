@@ -169,3 +169,62 @@ def test_without_keys_nothing_runs(monkeypatch):
     monkeypatch.delenv("ADZUNA_APP_ID", raising=False)
     monkeypatch.delenv("ADZUNA_APP_KEY", raising=False)
     assert adzuna.run(cfg=None).skipped
+
+
+def test_a_timeout_is_asked_again_and_one_bad_title_does_not_lose_the_rest():
+    import requests
+    from data_engineering.scraper import adzuna
+
+    class Resp:
+        status_code = 200
+        def json(self): return {"results": []}
+        def raise_for_status(self): pass
+
+    calls = []
+
+    class Session:
+        def get(self, url, params, timeout):
+            calls.append(params["title_only"])
+            if params["title_only"] == "flaky" and calls.count("flaky") < 3:
+                raise requests.ReadTimeout("slow")
+            if params["title_only"] == "dead":
+                raise requests.ReadTimeout("never")
+            return Resp()
+
+    pauses = []
+    client = adzuna.AdzunaClient("id", "key", session=Session(), sleep=pauses.append, clock=lambda: 0.0)
+    assert client.search("flaky") == []                     # third try answered
+    assert calls.count("flaky") == 3 and adzuna.RETRY_PAUSES[0] in pauses
+
+    class Pass:
+        def matches(self, raw): return True
+    out = adzuna.collect(client, ["dead", "devops"], Pass(), pages=1)
+    assert out == [] and calls.count("dead") == 3 and "devops" in calls   # went on after "dead"
+
+
+def test_a_503_is_asked_again_and_an_error_never_carries_the_key():
+    import pytest
+    import requests
+    from data_engineering.scraper import adzuna
+
+    class Resp:
+        def __init__(self, code): self.status_code = code
+        def json(self): return {"results": []}
+
+    codes = [503, 200]
+
+    class Session:
+        def get(self, url, params, timeout):
+            return Resp(codes.pop(0))
+
+    client = adzuna.AdzunaClient("id", "SECRETKEY", session=Session(), sleep=lambda s: None, clock=lambda: 0.0)
+    assert client.search("devops") == [] and not codes          # the 503 was asked again
+
+    class Always400:
+        def get(self, url, params, timeout):
+            return Resp(400)
+
+    client = adzuna.AdzunaClient("id", "SECRETKEY", session=Always400(), sleep=lambda s: None, clock=lambda: 0.0)
+    with pytest.raises(requests.HTTPError) as err:
+        client.search("devops")
+    assert "SECRETKEY" not in str(err.value)
