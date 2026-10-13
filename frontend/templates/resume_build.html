@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+{% block title %}Resume Builder{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Resume Builder</h1>
+    <div class="sub">Write a resume from scratch, or start from the one you have. It saves as you type and is drawn in
+      the same ATS-safe templates as a tailored resume. Claude can turn rough notes into bullets, but only from what
+      you wrote: a number or tool you did not give is flagged, never slipped in.</div>
+  </div>
+</header>
+{% include "_resume_tabs.html" %}
+
+<section class="card rb-start" id="start">
+  <div class="row">
+    <b>Start from</b>
+    <button class="btn" id="from-master">My master resume</button>
+    <input type="file" id="from-file" accept=".docx,.pdf" hidden>
+    <button class="btn" id="pick-file">Another file…</button>
+    <button class="btn" id="blank">A blank page</button>
+    <span class="hint" id="start-note" role="status"></span>
+  </div>
+  <div class="t-warn" id="import-warn" hidden></div>
+</section>
+
+<div class="rb-grid">
+  <div class="rb-form" id="form"></div>
+
+  <aside class="rb-side">
+    <section class="card">
+      <div class="row" style="justify-content:space-between">
+        <b>Your resume</b><span class="hint" id="saved" role="status"></span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="hint" for="template">Template</label>
+        <select id="template" class="chip">
+          {% for t in templates %}<option value="{{ t.key }}" title="{{ t.description }}">{{ t.label }}</option>{% endfor %}
+        </select>
+        <button class="btn primary" id="preview">Preview</button>
+      </div>
+      <div id="to-do" class="rb-todo"></div>
+      <div id="health" class="rb-health" hidden></div>
+      <div class="row rb-downloads" id="downloads" hidden>
+        <a class="btn" href="/resume/build/download/pdf">Download PDF</a>
+        <a class="btn" href="/resume/build/download/docx">Download DOCX</a>
+      </div>
+      <div id="master-box" hidden>
+        <button class="btn" id="master">Make this my master resume</button>
+        <div class="hint">Every tailoring starts from the master. Your current one is kept, not deleted.</div>
+        <div class="hint" id="master-note" role="status"></div>
+      </div>
+    </section>
+    <section class="card" id="pages-card" hidden>
+      <div class="hint" id="pages-note"></div>
+      <div id="pages" class="rb-pages"></div>
+    </section>
+  </aside>
+</div>
+
+<style>
+.rb-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+@media (max-width:1000px){.rb-grid{grid-template-columns:1fr}}
+.rb-side{position:sticky;top:12px;display:grid;gap:12px}
+@media (max-width:1000px){.rb-side{position:static}}
+.rb-sec h2{font-size:1.1em;margin:0 0 4px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rb-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:8px}
+.rb-fields label,.rb-lbl{display:grid;gap:3px;font-size:.88em;color:var(--ink-2)}
+.rb-form input[type=text],.rb-form input[type=month],.rb-form input[type=email],.rb-form input[type=url],.rb-form textarea{
+  font:inherit;font-size:.95em;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
+.rb-form textarea{resize:vertical;min-height:2.4em;overflow:hidden}
+.rb-form .wide{grid-column:1/-1}
+.rb-item{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px;background:var(--raised)}
+.rb-item-head{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.rb-item-head b{font-size:.98em}
+.rb-tools{display:flex;gap:4px}
+.rb-tools button,.rb-b button{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:5px;
+  padding:2px 7px;cursor:pointer;font-size:.85em}
+.rb-tools button:hover,.rb-b button:hover{border-color:var(--signal);color:var(--ink)}
+.rb-b{display:grid;grid-template-columns:14px 1fr auto;gap:6px;align-items:start;margin:5px 0}
+.rb-b>span{padding-top:7px;color:var(--muted)}
+.rb-b .rb-tools{padding-top:3px}
+.rb-ai{margin-top:8px;border:1px dashed var(--signal);border-radius:6px;padding:8px 10px;background:var(--signal-soft)}
+.rb-ai label{display:flex;gap:8px;align-items:flex-start;margin:4px 0}
+.rb-flag{color:var(--crit);font-size:.86em}
+.rb-checks{margin-top:6px;font-size:.88em}
+.rb-checks div{margin:2px 0;color:var(--ink-2)}
+.rb-checks .problem::before{content:"● ";color:var(--crit)} .rb-checks .warning::before{content:"● ";color:var(--warn)}
+.rb-checks .tip::before{content:"● ";color:var(--signal)}
+.rb-todo{margin-top:10px;font-size:.9em}
+.rb-todo ul{margin:4px 0;padding-left:18px} .rb-todo li{margin:2px 0}
+.rb-todo a{color:var(--ink-2)}
+.rb-health{margin-top:10px;font-size:.9em}
+.rb-health .score{font:600 1.6em var(--cond)}
+.rb-downloads{margin-top:10px}
+#master-box{margin-top:10px;display:grid;gap:4px}
+.rb-pages{display:grid;gap:10px;margin-top:8px}
+.rb-pages img{width:100%;border:1px solid var(--line);border-radius:4px;background:#fff}
+.rb-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.rb-chips button{border:1px dashed var(--signal);background:var(--surface);color:var(--signal-ink);border-radius:999px;padding:3px 10px;cursor:pointer;font-size:.88em}
+.rb-start .row{flex-wrap:wrap}
+.rb-check,.rb-fields label.rb-check{display:flex;gap:6px;align-items:center;font-size:.9em;color:var(--ink-2);align-self:end;padding-bottom:8px}
+</style>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const post = async (url, body) => (await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                     body: JSON.stringify(body)})).json();
+const uid = () => Math.random().toString(16).slice(2, 10);
+let D = null, STATE = {}, timer = null, dirty = false;
+
+// -- reading and writing the form ----------------------------------------------------------
+function getPath(path) { return path.split('.').reduce((o, k) => o?.[k], D); }
+function setPath(path, value) {
+  const keys = path.split('.'); const last = keys.pop();
+  const o = keys.reduce((o, k) => o[k], D); o[last] = value;
+}
+function field(path, label, opts = {}) {
+  const v = getPath(path) ?? '';
+  const type = opts.type || 'text';
+  if (type === 'textarea')
+    return `<label class="${opts.wide ? 'wide' : ''}">${label}<textarea data-k="${path}" rows="${opts.rows || 3}"
+      placeholder="${esc(opts.ph || '')}">${esc(v)}</textarea></label>`;
+  if (type === 'lines')
+    return `<label class="${opts.wide ? 'wide' : ''}">${label}<textarea data-lines="${path}" rows="${opts.rows || 3}"
+      placeholder="${esc(opts.ph || '')}">${esc((v || []).join('\n'))}</textarea></label>`;
+  if (type === 'checkbox')
+    return `<label class="rb-check"><input type="checkbox" data-k="${path}" ${v ? 'checked' : ''}> ${label}</label>`;
+  return `<label class="${opts.wide ? 'wide' : ''}">${label}<input type="${type}" data-k="${path}" value="${esc(v)}"
+    placeholder="${esc(opts.ph || '')}" ${opts.disabled ? 'disabled' : ''}></label>`;
+}
+function tools(list, i, extra = '') {
+  return `<span class="rb-tools">${extra}
+    <button data-move="${list}.${i}.-1" title="Move up" aria-label="Move up">↑</button>
+    <button data-move="${list}.${i}.1" title="Move down" aria-label="Move down">↓</button>
+    <button data-del="${list}.${i}" title="Remove" aria-label="Remove">✕</button></span>`;
+}
+
+// -- the form -----------------------------------------------------------------------------
+function bulletsBlock(kind, i, item) {
+  const list = `${kind}.${i}.bullets`;
+  return `<div class="rb-lbl" style="margin-top:8px">What you did (one bullet each; start with a verb, end with the result)</div>
+    ${item.bullets.map((b, j) => `<div class="rb-b"><span>•</span>
+      <textarea data-k="${list}.${j}" rows="2">${esc(b)}</textarea>
+      ${tools(list, j, `<button data-improve="${kind}.${i}.${j}" title="Make this bullet stronger">✨</button>`)}</div>`).join('')}
+    <div class="row"><button class="btn" data-add="${list}">+ Add a bullet</button>
+      <button class="btn primary" data-write="${kind}.${i}">Write bullets from my notes</button></div>
+    <div id="ai-${item.id}"></div>
+    <div class="rb-checks" id="checks-${item.id}"></div>`;
+}
+
+function renderForm() {
+  const c = 'contact';
+  const html = [];
+  html.push(`<section class="card rb-sec" id="sec-contact"><h2>About you</h2>
+    <div class="rb-fields">
+      ${field(`${c}.name`, 'Full name', {ph: 'Jane Doe'})}
+      ${field(`${c}.title`, 'Headline (optional)', {ph: 'Senior DevOps Engineer | AWS | Kubernetes'})}
+      ${field(`${c}.email`, 'Email', {type: 'email'})}
+      ${field(`${c}.phone`, 'Phone')}
+      ${field(`${c}.city`, 'City', {ph: 'Denver'})}
+      ${field(`${c}.region`, 'State or country', {ph: 'CO'})}
+      ${field(`${c}.linkedin`, 'LinkedIn', {ph: 'linkedin.com/in/your-name'})}
+      ${field(`${c}.website`, 'Website or GitHub (optional)')}
+      ${field(`${c}.relocate`, 'Open to relocate', {type: 'checkbox'})}
+    </div></section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-summary"><h2>Summary <button class="btn" id="write-summary">Write it from my resume</button></h2>
+    <div class="hint">Two to four lines: your title, years, strongest areas and one or two results with numbers.</div>
+    <div class="rb-fields">${field('summary', '', {type: 'textarea', rows: 4, wide: true})}</div>
+    <div id="ai-summary"></div></section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-experience"><h2>Experience <button class="btn" data-add="experience">+ Add a job</button></h2>
+    <div class="hint">Newest first. Internships, contract work and volunteering count.</div>
+    ${D.experience.map((j, i) => `<div class="rb-item" id="job-${j.id}">
+      <div class="rb-item-head"><b>${esc(j.title || 'New job')}${j.company ? ' · ' + esc(j.company) : ''}</b>${tools('experience', i)}</div>
+      <div class="rb-fields">
+        ${field(`experience.${i}.title`, 'Job title')}
+        ${field(`experience.${i}.company`, 'Employer')}
+        ${field(`experience.${i}.location`, 'Place (optional)', {ph: 'Denver, CO or Remote'})}
+        ${field(`experience.${i}.start`, 'Started', {type: 'month'})}
+        ${field(`experience.${i}.end`, 'Ended', {type: 'month', disabled: j.current})}
+        ${field(`experience.${i}.current`, 'I work here now', {type: 'checkbox'})}
+        ${field(`experience.${i}.notes`, 'Rough notes for Claude (not printed)', {type: 'textarea', wide: true, rows: 3,
+          ph: 'What you did, with what tools, and what came of it. Numbers if you know them: how many, how much, how fast.'})}
+      </div>${bulletsBlock('experience', i, j)}</div>`).join('')}
+  </section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-skills"><h2>Skills <button class="btn" data-add="skills">+ Add a group</button></h2>
+    <div class="hint">In groups, each a short list: “Cloud: AWS, Azure, GCP”.</div>
+    ${D.skills.map((g, i) => `<div class="rb-fields" style="grid-template-columns:200px 1fr auto;align-items:end">
+      ${field(`skills.${i}.label`, i ? '' : 'Group', {ph: 'Cloud'})}
+      ${field(`skills.${i}.items`, i ? '' : 'Skills, separated by commas', {ph: 'AWS, Azure, GCP'})}
+      ${tools('skills', i)}</div>`).join('')}
+    <div id="suggest"></div></section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-education"><h2>Education <button class="btn" data-add="education">+ Add</button></h2>
+    ${D.education.map((e, i) => `<div class="rb-item"><div class="rb-item-head"><b>${esc(e.degree || e.school || 'New entry')}</b>${tools('education', i)}</div>
+      <div class="rb-fields">
+        ${field(`education.${i}.degree`, 'Degree', {ph: 'Master of Science'})}
+        ${field(`education.${i}.field`, 'Field (optional)', {ph: 'Computer Science'})}
+        ${field(`education.${i}.school`, 'School')}
+        ${field(`education.${i}.location`, 'Place (optional)')}
+        ${field(`education.${i}.start`, 'Started (optional)', {type: 'month'})}
+        ${field(`education.${i}.end`, 'Finished', {type: 'month'})}
+        ${field(`education.${i}.details`, 'Details (optional, one per line: GPA, honours, coursework)', {type: 'lines', wide: true, rows: 2})}
+      </div></div>`).join('')}</section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-projects"><h2>Projects <button class="btn" data-add="projects">+ Add a project</button></h2>
+    <div class="hint">Most useful early in a career, or for a skill no job shows yet.</div>
+    ${D.projects.map((p, i) => `<div class="rb-item" id="job-${p.id}"><div class="rb-item-head"><b>${esc(p.name || 'New project')}</b>${tools('projects', i)}</div>
+      <div class="rb-fields">
+        ${field(`projects.${i}.name`, 'Name')}
+        ${field(`projects.${i}.link`, 'Link (optional)', {ph: 'github.com/you/project'})}
+        ${field(`projects.${i}.start`, 'Started (optional)', {type: 'month'})}
+        ${field(`projects.${i}.end`, 'Finished (optional)', {type: 'month'})}
+        ${field(`projects.${i}.notes`, 'Rough notes for Claude (not printed)', {type: 'textarea', wide: true, rows: 2})}
+      </div>${bulletsBlock('projects', i, p)}</div>`).join('')}</section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-certifications"><h2>Certifications <button class="btn" data-add="certifications">+ Add</button></h2>
+    ${D.certifications.map((x, i) => `<div class="rb-fields" style="grid-template-columns:2fr 1.3fr 150px auto;align-items:end">
+      ${field(`certifications.${i}.name`, i ? '' : 'Certification', {ph: 'AWS Certified Solutions Architect – Associate'})}
+      ${field(`certifications.${i}.issuer`, i ? '' : 'Issued by', {ph: 'Amazon Web Services'})}
+      ${field(`certifications.${i}.date`, i ? '' : 'When', {type: 'month'})}
+      ${tools('certifications', i)}</div>`).join('')}</section>`);
+
+  html.push(`<section class="card rb-sec" id="sec-extra"><h2>Other sections <button class="btn" data-add="extra">+ Add a section</button></h2>
+    <div class="hint">Awards, publications, languages, volunteering: anything else, one line each.</div>
+    ${D.extra.map((x, i) => `<div class="rb-item"><div class="rb-item-head"><b>${esc(x.heading || 'New section')}</b>${tools('extra', i)}</div>
+      <div class="rb-fields">${field(`extra.${i}.heading`, 'Heading', {ph: 'Awards'})}
+      ${field(`extra.${i}.lines`, 'Lines (one per line)', {type: 'lines', wide: true, rows: 3})}</div></div>`).join('')}</section>`);
+
+  $('form').innerHTML = html.join('');
+  document.querySelectorAll('#form textarea').forEach(grow);
+  wire();
+  showState();
+}
+
+const NEW = {
+  experience: () => ({id: uid(), title: '', company: '', location: '', start: '', end: '', current: false, notes: '', bullets: []}),
+  skills: () => ({id: uid(), label: '', items: ''}),
+  education: () => ({id: uid(), degree: '', field: '', school: '', location: '', start: '', end: '', details: []}),
+  projects: () => ({id: uid(), name: '', link: '', start: '', end: '', notes: '', bullets: []}),
+  certifications: () => ({id: uid(), name: '', issuer: '', date: ''}),
+  extra: () => ({id: uid(), heading: '', lines: []}),
+};
+
+// A text box as tall as what is in it: a long bullet is read whole, not behind a scrollbar.
+function grow(el) { el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px'; }
+
+function wire() {
+  document.querySelectorAll('#form textarea').forEach(el => el.addEventListener('input', () => grow(el)));
+  document.querySelectorAll('[data-k]').forEach(el => {
+    el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', () => {
+      setPath(el.dataset.k, el.type === 'checkbox' ? el.checked : el.value);
+      if (el.dataset.k.endsWith('.current')) { if (el.checked) setPath(el.dataset.k.replace('current', 'end'), ''); renderForm(); }
+      changed();
+    });
+  });
+  document.querySelectorAll('[data-lines]').forEach(el => el.addEventListener('input', () => {
+    setPath(el.dataset.lines, el.value.split('\n').map(s => s.trim()).filter(Boolean)); changed();
+  }));
+  document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+    const path = b.dataset.add, list = getPath(path);
+    if (path.endsWith('.bullets')) list.push(''); else list.push(NEW[path]());
+    renderForm(); changed();
+    if (!path.endsWith('.bullets') && path === 'experience') document.getElementById('job-' + list.at(-1).id)?.scrollIntoView({block: 'center'});
+  });
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    const keys = b.dataset.del.split('.'); const i = +keys.pop(); const list = getPath(keys.join('.'));
+    const item = list[i];
+    const named = typeof item === 'string' ? item : (item.title || item.name || item.degree || item.heading || item.label || '');
+    if (named && !confirm(`Remove “${named.slice(0, 60)}”?`)) return;
+    list.splice(i, 1); renderForm(); changed();
+  });
+  document.querySelectorAll('[data-move]').forEach(b => b.onclick = () => {
+    const keys = b.dataset.move.split('.'); const step = +keys.pop(); const i = +keys.pop();
+    const list = getPath(keys.join('.')); const j = i + step;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]]; renderForm(); changed();
+  });
+  document.querySelectorAll('[data-write]').forEach(b => b.onclick = () => writeBullets(b));
+  document.querySelectorAll('[data-improve]').forEach(b => b.onclick = () => improve(b));
+  $('write-summary').onclick = writeSummary;
+}
+
+// -- saving --------------------------------------------------------------------------------
+function changed() {
+  dirty = true; $('saved').textContent = 'Saving…';
+  clearTimeout(timer); timer = setTimeout(save, 700);
+}
+async function save() {
+  if (!dirty) return;
+  dirty = false;
+  const r = await post('/resume/build/save', {data: D});
+  if (!r.ok) { $('saved').textContent = 'Not saved: ' + (r.error || ''); return; }
+  STATE = r; $('saved').textContent = 'Saved ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  // The ids the server gave new items, so later edits find them.
+  for (const k of ['experience', 'skills', 'education', 'projects', 'certifications', 'extra'])
+    r.data[k].forEach((x, i) => { if (D[k][i] && !D[k][i].id) D[k][i].id = x.id; });
+  showState();
+}
+
+function showState() {
+  const g = STATE.gaps || [];
+  $('to-do').innerHTML = g.length
+    ? `<b>Still to fill in (${g.length})</b><ul>${g.slice(0, 10).map(x => `<li><a href="#" data-go="${esc(x.where)}">${esc(x.message)}</a></li>`).join('')}</ul>`
+    : '<b style="color:var(--good)">Everything a resume needs is filled in.</b>';
+  document.querySelectorAll('[data-go]').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const w = a.dataset.go, el = w.startsWith('job:') ? $('job-' + w.slice(4)) : $('sec-' + w);
+    el?.scrollIntoView({behavior: 'smooth', block: 'center'});
+  });
+  const checks = STATE.job_checks || {};
+  for (const j of D.experience) {
+    const box = $('checks-' + j.id); if (!box) continue;
+    box.innerHTML = (checks[j.id] || []).map(f => `<div class="${f.severity}">${esc(f.title)}${f.fix ? ' — ' + esc(f.fix) : ''}</div>`).join('');
+  }
+  const s = STATE.suggest || [];
+  const box = $('suggest');
+  if (box) {
+    box.innerHTML = s.length ? `<div class="hint" style="margin-top:8px">Named in your jobs but not listed here. Press one to add it:</div>
+      <div class="rb-chips">${s.map(t => `<button data-skill="${esc(t)}">+ ${esc(t)}</button>`).join('')}</div>` : '';
+    box.querySelectorAll('[data-skill]').forEach(b => b.onclick = () => {
+      let g = D.skills.at(-1);
+      if (!g) { g = NEW.skills(); g.label = 'Tools'; D.skills.push(g); }
+      g.items = g.items ? g.items.replace(/[.\s]+$/, '') + ', ' + b.dataset.skill : b.dataset.skill;
+      STATE.suggest = s.filter(x => x !== b.dataset.skill);
+      renderForm(); changed();
+    });
+  }
+}
+
+// -- Claude, on request --------------------------------------------------------------------
+function flags(b) {
+  return (b.unsupported_numbers?.length ? `<div class="rb-flag">Not in what you wrote: ${esc(b.unsupported_numbers.join(', '))}. Keep it only if it is true.</div>` : '')
+       + (b.unsupported_tools?.length ? `<div class="rb-flag">A tool you did not mention: ${esc(b.unsupported_tools.join(', '))}.</div>` : '');
+}
+
+async function writeBullets(btn) {
+  const [kind, i] = btn.dataset.write.split('.'); const item = D[kind][+i];
+  clearTimeout(timer); dirty = false;
+  btn.disabled = true; btn.textContent = 'Writing… (under a minute)';
+  const r = await post('/resume/build/bullets', {data: D, kind, id: item.id});
+  btn.disabled = false; btn.textContent = 'Write bullets from my notes';
+  const box = $('ai-' + item.id);
+  if (!r.ok) { box.innerHTML = `<div class="rb-ai t-error">${esc(r.error)}</div>`; return; }
+  box.innerHTML = `<div class="rb-ai"><b>Claude's bullets</b> <span class="hint">Tick the ones to keep.</span>
+    ${r.bullets.map((b, k) => `<label><input type="checkbox" data-pick="${k}" ${b.unsupported_numbers.length || b.unsupported_tools.length ? '' : 'checked'}>
+      <span>${esc(b.text)}${flags(b)}</span></label>`).join('')}
+    ${r.ask.length ? `<div class="hint" style="margin-top:6px"><b>Answer these in your notes for stronger bullets:</b><br>${r.ask.map(esc).join('<br>')}</div>` : ''}
+    <div class="row" style="margin-top:6px"><button class="btn primary" data-use="replace">Use these instead of mine</button>
+      <button class="btn" data-use="add">Add to mine</button><button class="btn" data-use="close">Close</button></div></div>`;
+  box.querySelectorAll('[data-use]').forEach(u => u.onclick = () => {
+    if (u.dataset.use !== 'close') {
+      const picked = [...box.querySelectorAll('[data-pick]')].filter(x => x.checked).map(x => r.bullets[+x.dataset.pick].text);
+      item.bullets = u.dataset.use === 'replace' ? picked : item.bullets.concat(picked);
+      changed();
+    }
+    box.innerHTML = ''; renderForm();
+  });
+}
+
+async function improve(btn) {
+  const [kind, i, j] = btn.dataset.improve.split('.'); const item = D[kind][+i];
+  const bullet = item.bullets[+j]; if (!bullet.trim()) return;
+  await save();
+  btn.disabled = true; btn.textContent = '…';
+  const r = await post('/resume/build/improve', {kind, id: item.id, bullet});
+  btn.disabled = false; btn.textContent = '✨';
+  const box = $('ai-' + item.id);
+  if (!r.ok) { box.innerHTML = `<div class="rb-ai t-error">${esc(r.error)}</div>`; return; }
+  box.innerHTML = `<div class="rb-ai"><div class="hint">${esc(bullet)}</div><div><b>${esc(r.text)}</b></div>${flags(r)}
+    ${r.ask ? `<div class="hint">To make it stronger: ${esc(r.ask)}</div>` : ''}
+    <div class="row" style="margin-top:6px"><button class="btn primary" data-ok>Use it</button><button class="btn" data-no>Keep mine</button></div></div>`;
+  box.querySelector('[data-ok]').onclick = () => { item.bullets[+j] = r.text; box.innerHTML = ''; renderForm(); changed(); };
+  box.querySelector('[data-no]').onclick = () => { box.innerHTML = ''; };
+}
+
+async function writeSummary() {
+  const btn = $('write-summary'); clearTimeout(timer); dirty = false;
+  btn.disabled = true; btn.textContent = 'Writing…';
+  const r = await post('/resume/build/summary', {data: D});
+  btn.disabled = false; btn.textContent = 'Write it from my resume';
+  const box = $('ai-summary');
+  if (!r.ok) { box.innerHTML = `<div class="rb-ai t-error">${esc(r.error)}</div>`; return; }
+  box.innerHTML = `<div class="rb-ai"><div>${esc(r.text)}</div>${flags(r)}${r.ask ? `<div class="hint">${esc(r.ask)}</div>` : ''}
+    <div class="row" style="margin-top:6px"><button class="btn primary" data-ok>Use it</button><button class="btn" data-no>Keep mine</button></div></div>`;
+  box.querySelector('[data-ok]').onclick = () => { D.summary = r.text; box.innerHTML = ''; renderForm(); changed(); };
+  box.querySelector('[data-no]').onclick = () => { box.innerHTML = ''; };
+}
+
+// -- preview, downloads, master -------------------------------------------------------------
+async function preview() {
+  clearTimeout(timer); dirty = false;
+  D.template = $('template').value;
+  const btn = $('preview'); btn.disabled = true; btn.textContent = 'Drawing…';
+  const r = await post('/resume/build/preview', {data: D});
+  btn.disabled = false; btn.textContent = 'Preview';
+  if (!r.ok) { $('pages-card').hidden = false; $('pages-note').innerHTML = `<span class="t-error">${esc(r.error)}</span>`; return; }
+  STATE = r; showState();
+  $('saved').textContent = 'Saved';
+  $('pages-card').hidden = false; $('downloads').hidden = false; $('master-box').hidden = false;
+  const bad = r.checks.filter(c => c.severity === 'problem');
+  $('pages-note').textContent = `${r.count} page${r.count > 1 ? 's' : ''}` + (r.years != null ? ` for ${r.years} years of experience` : '')
+    + (r.checks.length ? ` · ${r.checks.map(c => c.message).join(' ')}` : ' · page checks passed');
+  $('pages').innerHTML = r.pages.map(p => `<img src="/resume/build/page/${p}?t=${encodeURIComponent(r.stamp)}" alt="Page preview">`).join('');
+  const h = r.health;
+  const top = h.findings.filter(f => f.severity !== 'tip').slice(0, 4);
+  $('health').hidden = false;
+  $('health').innerHTML = `<div class="row"><span class="score">${h.score}</span><span class="hint">/ 100 resume health</span>
+    <a class="hint" href="/resume/check?source=builder" style="margin-left:auto">Full check →</a></div>
+    ${top.length ? `<ul>${top.map(f => `<li>${esc(f.title)}</li>`).join('')}</ul>` : '<div class="hint">No problems found.</div>'}`;
+}
+
+async function makeMaster() {
+  if (!confirm('Make this your master resume? Every tailoring will start from it, and the job search is worked out '
+             + 'again from it (a minute). Your current master is moved to data/builder/replaced/, not deleted.')) return;
+  await preview();
+  $('master').disabled = true; $('master-note').textContent = 'Switching… (about a minute)';
+  const r = await post('/resume/build/master', {});
+  $('master').disabled = false;
+  $('master-note').textContent = r.ok ? `Done: it is now ${r.stored}.` + (r.kept ? ` The old one is kept as ${r.kept}.` : '')
+    + (r.profile_ok ? '' : ' The job search could not be worked out again; see Settings.') : r.error;
+}
+
+// -- starting points ------------------------------------------------------------------------
+function hasContent() { return D && (D.contact.name || D.experience.length || D.summary); }
+async function load(out, label) {
+  if (!out.ok) { $('start-note').textContent = out.error; return; }
+  D = out.data; D.template = $('template').value || 'classic';
+  $('import-warn').hidden = !out.warnings?.length;
+  $('import-warn').innerHTML = out.warnings?.length ? '<b>Check these, the reader was unsure:</b><br>' + out.warnings.map(esc).join('<br>') : '';
+  $('start-note').textContent = label;
+  renderForm(); dirty = true; await save();
+}
+$('from-master').onclick = async () => {
+  if (hasContent() && !confirm('Replace what is in the form with your master resume?')) return;
+  $('start-note').textContent = 'Reading your resume…';
+  load(await post('/resume/build/import', {}), 'Filled from your master resume. Check each part, then Preview.');
+};
+$('pick-file').onclick = () => $('from-file').click();
+$('from-file').onchange = async () => {
+  const f = $('from-file').files[0]; if (!f) return;
+  if (hasContent() && !confirm(`Replace what is in the form with ${f.name}?`)) return;
+  const fd = new FormData(); fd.append('resume', f);
+  $('start-note').textContent = `Reading ${f.name}…`;
+  load(await (await fetch('/resume/build/import', {method: 'POST', body: fd})).json(), `Filled from ${f.name} (the file is not kept).`);
+};
+$('blank').onclick = async () => {
+  if (hasContent() && !confirm('Clear the form and start again?')) return;
+  load({ok: true, data: {contact: {name: '', title: '', email: '', phone: '', city: '', region: '', linkedin: '', website: '', relocate: false},
+        summary: '', experience: [NEW.experience()], skills: [NEW.skills()], education: [NEW.education()],
+        projects: [], certifications: [], extra: []}}, 'A blank page.');
+};
+$('preview').onclick = preview;
+$('master').onclick = makeMaster;
+$('template').onchange = () => { D.template = $('template').value; changed(); if (!$('pages-card').hidden) preview(); };
+window.addEventListener('beforeunload', e => { if (dirty) { save(); e.preventDefault(); } });
+
+(async () => {
+  const r = await (await fetch('/resume/build/data')).json();
+  D = r.data; STATE = r; $('template').value = D.template || 'classic';
+  if (!D.contact.name && !D.experience.length) {
+    D.experience.push(NEW.experience()); D.skills.push(NEW.skills()); D.education.push(NEW.education());
+    $('start-note').textContent = 'Start blank below, or fill the form from a resume you have.';
+  } else if (r.updated || D.updated) {
+    $('saved').textContent = 'Saved ' + (D.updated || '').replace('T', ' ').slice(0, 16);
+  }
+  renderForm();
+  if (r.made && hasContent()) preview();
+})();
+</script>
+{% endblock %}

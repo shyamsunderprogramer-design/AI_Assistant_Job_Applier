@@ -1,0 +1,14 @@
+{# The Resume pages' own tabs: build, check, and every tailored version. #}
+{% set here = request.endpoint %}
+<nav class="rs-tabs" aria-label="Resume">
+  <a href="{{ url_for('builder_page') }}"{% if here == 'builder_page' %} aria-current="page"{% endif %}>Build</a>
+  <a href="{{ url_for('resume_check_page') }}"{% if here == 'resume_check_page' %} aria-current="page"{% endif %}>Check</a>
+  <a href="{{ url_for('history_page') }}"{% if here == 'history_page' %} aria-current="page"{% endif %}>Tailored versions</a>
+  <a href="{{ url_for('tailor_page') }}">Tailor to a job →</a>
+</nav>
+<style>
+.rs-tabs{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 14px;border-bottom:1px solid var(--line)}
+.rs-tabs a{padding:8px 12px;text-decoration:none;color:var(--ink-2);border-bottom:2px solid transparent;margin-bottom:-1px}
+.rs-tabs a[aria-current]{color:var(--ink);border-bottom-color:var(--signal);font-weight:600}
+.rs-tabs a:last-child{margin-left:auto;color:var(--signal-ink)}
+</style>

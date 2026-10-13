@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Tailored Versions{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Tailored Versions</h1>
+    <div class="sub">Every tailored resume made, newest first. Open one to edit it, download it, check it, compare two
+      side by side, or clear out the ones you no longer need. The one a job's application attaches is marked and
+      cannot be deleted here.</div>
+  </div>
+</header>
+{% include "_resume_tabs.html" %}
+
+<section class="card">
+  <div class="row">
+    <input type="search" id="q" class="chip" placeholder="Search company or job title" aria-label="Search">
+    <select id="status" class="chip" aria-label="Show">
+      <option value="done">Finished</option><option value="all">All, with failed and unfinished</option>
+    </select>
+    <select id="sort" class="chip" aria-label="Sort">
+      <option value="new">Newest first</option><option value="ats">Highest ATS score</option><option value="company">Company</option>
+    </select>
+    <span class="hint" id="count" role="status">Loading…</span>
+    <span style="margin-left:auto" class="row">
+      <button class="btn" id="compare" disabled>Compare the two ticked</button>
+      <button class="btn" id="delete" disabled>Delete ticked</button>
+    </span>
+  </div>
+  <div class="t-table-wrap"><table class="t-table hv-table"><thead><tr>
+    <th></th><th>Made</th><th>Job</th><th class="num">ATS before → after</th><th class="num">Pages</th>
+    <th>Template</th><th>State</th><th></th>
+  </tr></thead><tbody id="rows"></tbody></table></div>
+</section>
+
+<section class="card" id="diff-card" hidden>
+  <div class="row" style="justify-content:space-between">
+    <h2 class="sk-h">Side by side</h2>
+    <label class="rb-check"><input type="checkbox" id="only-diff" checked> Only the lines that differ</label>
+  </div>
+  <p class="hint" id="diff-note"></p>
+  <div class="hv-diff" id="diff"></div>
+</section>
+
+<style>
+.sk-h{font-size:1.1em;margin:6px 0}
+.hv-table td{vertical-align:top}
+.hv-table thead th{position:static}
+.hv-job b{display:block}
+.hv-job .hint{font-size:.88em}
+.hv-acts{display:flex;gap:6px;flex-wrap:wrap}
+.hv-acts a{font-size:.88em}
+.hv-up{color:var(--good);font-weight:600}
+.hv-down{color:var(--crit);font-weight:600}
+.hv-diff{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:.9em}
+.hv-diff>div{padding:5px 8px;border-bottom:1px solid var(--hair);white-space:pre-wrap;font-family:var(--sans)}
+.hv-diff>.hd{background:var(--sunk);font-weight:600}
+.hv-diff>.only_a.sa{background:color-mix(in srgb,var(--crit) 12%,transparent)}
+.hv-diff>.only_b.sb{background:color-mix(in srgb,var(--good) 14%,transparent)}
+.hv-diff>.same{color:var(--muted)}
+.hv-diff mark{border-radius:3px;padding:0 1px;color:inherit}
+.hv-diff .sa mark{background:color-mix(in srgb,var(--crit) 22%,transparent);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--crit) 60%,transparent)}
+.hv-diff .sb mark{background:color-mix(in srgb,var(--good) 26%,transparent)}
+.rb-check{display:flex;gap:6px;align-items:center;font-size:.9em;color:var(--ink-2)}
+</style>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let RUNS = [], DIFF = null;
+const ticked = () => [...document.querySelectorAll('[data-tick]:checked')].map(x => x.dataset.tick);
+
+function render() {
+  const q = $('q').value.trim().toLowerCase();
+  let list = RUNS.filter(r => ($('status').value === 'all' || r.status === 'done')
+    && (!q || `${r.company} ${r.title}`.toLowerCase().includes(q)));
+  const sort = $('sort').value;
+  if (sort === 'ats') list = [...list].sort((a, b) => (b.ats[1] ?? -1) - (a.ats[1] ?? -1));
+  if (sort === 'company') list = [...list].sort((a, b) => (a.company || '~').localeCompare(b.company || '~'));
+  $('count').textContent = `${list.length} of ${RUNS.length}`;
+  $('rows').innerHTML = list.map(r => {
+    const [a, b] = r.ats;
+    const ats = r.ats.length ? `${a} → <span class="${b > a ? 'hv-up' : b < a ? 'hv-down' : ''}">${b}</span>` : '';
+    const state = r.status !== 'done' ? `<span class="pill muted">${esc(r.status)}</span>${r.error ? `<div class="hint">${esc(r.error.slice(0, 120))}</div>` : ''}`
+      : [r.attached_to ? `<span class="pill">Attached to job ${r.attached_to}</span>` : '',
+         r.checks_ok === false ? '<span class="pill muted">checks found problems</span>' : '',
+         r.edited ? '<span class="pill muted">edited by you</span>' : '',
+         r.length ? `<span class="hint">length ${esc(r.length)}</span>` : ''].join(' ');
+    return `<tr>
+      <td><input type="checkbox" data-tick="${r.id}" aria-label="Tick ${esc(r.title)}"></td>
+      <td class="hint">${esc(r.when)}</td>
+      <td class="hv-job"><b>${esc(r.title || 'Untitled')}</b><span class="hint">${esc(r.company)}${r.job_id ? ` · <a href="/job/${r.job_id}">job ${r.job_id}</a>` : ''}</span></td>
+      <td class="num">${ats}</td><td class="num">${r.pages || ''}</td><td>${esc(r.template)}</td><td>${state}</td>
+      <td><div class="hv-acts">${r.status === 'done' ? `<a href="/tailor?run=${r.id}">Open</a>
+        ${r.has_docx ? `<a href="/tailor/${r.id}/download/pdf">PDF</a><a href="/tailor/${r.id}/download/docx">DOCX</a>
+        <a href="/resume/check?source=run:${r.id}">Check</a>` : ''}` : (r.status === 'running' ? `<a href="/tailor?run=${r.id}">Follow</a>` : '')}</div></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" class="hint">No tailored resumes yet. Make one on the Tailor page.</td></tr>';
+  document.querySelectorAll('[data-tick]').forEach(x => x.onchange = buttons);
+  buttons();
+}
+
+function buttons() {
+  const t = ticked();
+  $('compare').disabled = t.length !== 2;
+  $('delete').disabled = !t.length || t.some(id => RUNS.find(r => r.id === id)?.attached_to);
+  $('delete').title = $('delete').disabled && t.length ? 'A ticked resume is attached to a job.' : '';
+}
+
+function showDiff() {
+  const only = $('only-diff').checked;
+  const rows = DIFF.rows.filter(r => !only || r.op !== 'same');
+  const [a, b] = DIFF.ids.map(id => RUNS.find(r => r.id === id));
+  const parts = (list, text) => list ? list.map(([t, ch]) => ch ? `<mark>${esc(t)}</mark>` : esc(t)).join(' ') : esc(text);
+  $('diff').innerHTML = `<div class="hd">${esc(a.when)} · ${esc(a.title)} (ATS ${a.ats[1] ?? '–'})</div>
+    <div class="hd">${esc(b.when)} · ${esc(b.title)} (ATS ${b.ats[1] ?? '–'})</div>`
+    + rows.map(r => `<div class="${r.op} sa">${parts(r.a_parts, r.a)}</div><div class="${r.op} sb">${parts(r.b_parts, r.b)}</div>`).join('');
+}
+
+$('compare').onclick = async () => {
+  const [a, b] = ticked();
+  $('diff-card').hidden = false; $('diff-note').textContent = 'Comparing…'; $('diff').innerHTML = '';
+  const r = await (await fetch(`/resume/history/compare?a=${a}&b=${b}`)).json();
+  if (!r.ok) { $('diff-note').textContent = r.error; return; }
+  DIFF = {...r, ids: [a, b]};
+  $('diff-note').textContent = `${r.same} lines the same, ${r.changed} reworded, ${r.only_a} only on the left, ${r.only_b} only on the right.`
+    + (r.rough ? ' One of them was made before its inputs were kept, so it is compared by its PDF lines, which wrap.' : '');
+  showDiff(); $('diff-card').scrollIntoView({behavior: 'smooth'});
+};
+$('only-diff').onchange = () => DIFF && showDiff();
+$('delete').onclick = async () => {
+  const t = ticked();
+  if (!confirm(`Delete ${t.length} tailored resume${t.length > 1 ? 's' : ''}? Their files go too. This cannot be undone.`)) return;
+  const r = await (await fetch('/resume/history/delete', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                         body: JSON.stringify({ids: t})})).json();
+  RUNS = RUNS.filter(x => !r.deleted.includes(x.id));
+  render();
+  $('count').textContent += ` · deleted ${r.deleted.length}` + (r.kept.length ? `, kept ${r.kept.length}: ${r.kept[0].why}` : '');
+};
+['q', 'status', 'sort'].forEach(id => $(id).addEventListener('input', render));
+(async () => {
+  const r = await (await fetch('/resume/history/list')).json();
+  RUNS = r.runs || []; render();
+})();
+</script>
+{% endblock %}

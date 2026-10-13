@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Resume Check{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <h1>Resume Check</h1>
+    <div class="sub">How well the resume is written and built, with no job posting: contact details, sections an
+      applicant system can find, bullets that show results, dates, length and a layout a parser can read.
+      Nothing here changes your resume.</div>
+  </div>
+</header>
+{% include "_resume_tabs.html" %}
+
+<section class="card">
+  <div class="row">
+    <label class="hint" for="source">Check</label>
+    <select id="source" class="chip">
+      {% for s in sources %}<option value="{{ s.key }}" {% if s.key == source %}selected{% endif %}>{{ s.label }}</option>{% endfor %}
+    </select>
+    <span class="hint">or</span>
+    <input type="file" id="file" accept=".docx,.pdf" hidden>
+    <button class="btn" id="pick">Check another file…</button>
+    <span class="hint">A file picked here is read, checked and deleted; nothing is kept.</span>
+  </div>
+  <p class="hint" id="note" role="status">Checking…</p>
+</section>
+
+<section class="card" id="result" hidden>
+  <div class="hc-top">
+    <div class="hc-ring" id="ring"><span id="score"></span><small>out of 100</small></div>
+    <div class="hc-cats" id="cats"></div>
+  </div>
+  <div class="hc-stats hint" id="stats"></div>
+</section>
+
+<section class="card" id="findings-card" hidden>
+  <div class="row" style="justify-content:space-between">
+    <h2 class="sk-h">What to fix</h2>
+    <div class="row hc-filter" role="group" aria-label="Show">
+      <button class="chip" data-f="all" aria-pressed="true">All</button>
+      <button class="chip" data-f="problem" aria-pressed="false">Problems</button>
+      <button class="chip" data-f="warning" aria-pressed="false">Warnings</button>
+      <button class="chip" data-f="tip" aria-pressed="false">Tips</button>
+    </div>
+  </div>
+  <div id="findings"></div>
+</section>
+
+<style>
+.sk-h{font-size:1.1em;margin:6px 0}
+.hc-top{display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+.hc-ring{width:120px;height:120px;border-radius:50%;display:grid;place-content:center;text-align:center;
+  background:conic-gradient(var(--ring-c,var(--signal)) calc(var(--p,0)*1%),var(--sunk) 0);position:relative}
+.hc-ring::before{content:"";position:absolute;inset:10px;border-radius:50%;background:var(--surface)}
+.hc-ring span,.hc-ring small{position:relative}
+.hc-ring span{font:600 2.1em var(--cond)}
+.hc-ring small{color:var(--muted);font-size:.8em}
+.hc-cats{flex:1;min-width:260px;display:grid;gap:6px}
+.hc-cat{display:grid;grid-template-columns:minmax(150px,200px) 1fr 52px;gap:10px;align-items:center;font-size:.93em}
+.hc-bar{height:8px;border-radius:4px;background:var(--sunk);overflow:hidden}
+.hc-bar i{display:block;height:100%;background:var(--signal)}
+.hc-cat b{font-family:var(--mono);font-weight:500;text-align:right}
+.hc-stats{margin-top:12px}
+.hc-f{border:1px solid var(--line);border-left:4px solid var(--faint);border-radius:6px;padding:10px 12px;margin:8px 0;background:var(--raised)}
+.hc-f.problem{border-left-color:var(--crit)} .hc-f.warning{border-left-color:var(--warn)} .hc-f.tip{border-left-color:var(--signal)}
+.hc-f h3{font-size:1em;margin:0 0 4px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.hc-sev{font:500 .72em var(--mono);text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.hc-f ul{margin:6px 0 0;padding-left:18px} .hc-f li{margin:3px 0;color:var(--ink-2);font-size:.92em}
+.hc-fix{margin-top:4px} .hc-fix b{font-weight:600}
+.hc-rw{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+.hc-rw-item{margin:8px 0;font-size:.93em}
+.hc-rw-item .after{background:var(--signal-soft);padding:6px 8px;border-radius:4px;margin-top:3px}
+.hc-flag{color:var(--crit);font-size:.88em}
+.hc-filter .chip[aria-pressed=true]{background:var(--signal-soft);border-color:var(--signal)}
+</style>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let R = null, FILTER = 'all', SOURCE = $('source').value;
+
+function colour(p) { return p >= 85 ? 'var(--good)' : p >= 65 ? 'var(--warn)' : 'var(--crit)'; }
+
+function render() {
+  $('result').hidden = $('findings-card').hidden = false;
+  const ring = $('ring');
+  ring.style.setProperty('--p', R.score); ring.style.setProperty('--ring-c', colour(R.score));
+  $('score').textContent = R.score;
+  $('cats').innerHTML = R.categories.map(c => `<div class="hc-cat"><span>${esc(c.label)}</span>
+    <span class="hc-bar"><i style="width:${Math.round(100 * c.score / c.out_of)}%;background:${colour(100 * c.score / c.out_of)}"></i></span>
+    <b>${c.score}/${c.out_of}</b></div>`).join('');
+  const s = R.stats;
+  $('stats').textContent = [s.pages ? `${s.pages} page${s.pages > 1 ? 's' : ''}` : '', `${s.words} words`,
+    s.years != null ? `${s.years} years of experience` : '', `${s.jobs} jobs`,
+    s.bullets ? `${s.with_numbers} of ${s.bullets} bullets show a number` : '',
+    s.bullets ? `${s.action_verbs} start with an action verb` : ''].filter(Boolean).join(' · ');
+  showFindings();
+}
+
+function showFindings() {
+  const list = R.findings.filter(f => FILTER === 'all' || f.severity === FILTER);
+  const sev = {problem: 'Problem', warning: 'Warning', tip: 'Tip'};
+  $('findings').innerHTML = list.length ? list.map((f, i) => {
+    const k = R.findings.indexOf(f);
+    const canRewrite = f.category === 'impact' && f.lines.length && !/^Phrases|“/.test(f.title);
+    return `<div class="hc-f ${f.severity}">
+      <h3><span class="hc-sev">${sev[f.severity]}</span>${esc(f.title)}</h3>
+      ${f.detail ? `<div>${esc(f.detail)}</div>` : ''}
+      ${f.fix ? `<div class="hc-fix"><b>Fix:</b> ${esc(f.fix)}</div>` : ''}
+      ${f.lines.length ? `<ul>${f.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
+      ${canRewrite ? `<div class="row" style="margin-top:6px"><button class="btn" data-rw="${k}">Suggest better versions</button>
+        <span class="hint">From each line's own facts; a number or tool not in your resume is flagged.</span></div>
+        <div class="hc-rw" id="rw-${k}" hidden></div>` : ''}
+    </div>`;
+  }).join('') : '<p class="hint">Nothing here.</p>';
+  document.querySelectorAll('[data-rw]').forEach(b => b.onclick = () => rewrite(+b.dataset.rw, b));
+}
+
+async function rewrite(k, btn) {
+  const f = R.findings[k], box = $('rw-' + k);
+  btn.disabled = true; btn.textContent = 'Writing… (under a minute)';
+  const r = await (await fetch('/resume/check/rewrite', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({bullets: f.lines, source: SOURCE})})).json();
+  btn.disabled = false; btn.textContent = 'Suggest again';
+  box.hidden = false;
+  if (!r.ok) { box.innerHTML = `<p class="t-error">${esc(r.error)}</p>`; return; }
+  box.innerHTML = r.bullets.map(b => `<div class="hc-rw-item"><div class="hint">${esc(b.original)}</div>
+    <div class="after">${esc(b.rewrite)}</div>
+    ${b.unsupported_numbers.length ? `<div class="hc-flag">Not on your resume: ${esc(b.unsupported_numbers.join(', '))}. Use it only if it is true.</div>` : ''}
+    ${b.unsupported_tools.length ? `<div class="hc-flag">Tool not on your resume: ${esc(b.unsupported_tools.join(', '))}.</div>` : ''}
+    ${b.ask ? `<div class="hint">To make it stronger: ${esc(b.ask)}</div>` : ''}
+    <button class="btn" data-copy="${esc(b.rewrite)}">Copy</button></div>`).join('')
+    + '<p class="hint">Paste the ones you like into your resume, or use the Build tab, which keeps them for you.</p>';
+  box.querySelectorAll('[data-copy]').forEach(c => c.onclick = () => { navigator.clipboard.writeText(c.dataset.copy); c.textContent = 'Copied'; });
+}
+
+async function run(source) {
+  SOURCE = source; $('note').textContent = 'Checking…';
+  const r = await (await fetch('/resume/check/run?source=' + encodeURIComponent(source))).json();
+  if (!r.ok) { $('note').textContent = r.error; return; }
+  R = r; $('note').textContent = `Checked ${r.file}.`; render();
+}
+
+$('source').onchange = () => run($('source').value);
+$('pick').onclick = () => $('file').click();
+$('file').onchange = async () => {
+  const f = $('file').files[0]; if (!f) return;
+  $('note').textContent = `Checking ${f.name}…`;
+  const fd = new FormData(); fd.append('resume', f);
+  const r = await (await fetch('/resume/check/upload', {method: 'POST', body: fd})).json();
+  if (!r.ok) { $('note').textContent = r.error; return; }
+  R = r; SOURCE = 'upload'; $('note').textContent = `Checked ${r.file} (not kept).`; render();
+};
+document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
+  FILTER = b.dataset.f;
+  document.querySelectorAll('[data-f]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  if (R) showFindings();
+});
+run(SOURCE);
+</script>
+{% endblock %}

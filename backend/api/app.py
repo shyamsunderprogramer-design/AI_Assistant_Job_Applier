@@ -2590,3 +2590,7 @@ def health_report():
     except (OSError, ValueError):
         return render_template("health.html", r=None), 500
     return render_template("health.html", r=r)
+
+
+# The Resume pages (build, check, tailored versions) register on this app.
+from backend.api import resume_pages  # noqa: E402,F401
