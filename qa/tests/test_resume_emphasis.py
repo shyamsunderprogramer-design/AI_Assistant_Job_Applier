@@ -42,3 +42,30 @@ def test_a_product_name_is_bolded_whole():
 def test_two_keywords_in_one_name_make_one_phrase():
     pieces = emphasis.spans("Pipelines in Azure DevOps for teams.", ["devops", "azure"])
     assert [p for p, b in pieces if b] == ["Azure DevOps"]
+
+
+def test_a_groups_label_and_a_word_of_a_longer_name_are_not_names():
+    text = ("Version Control & Artifact Management: GitHub, GitLab\nDatabases: MySQL, MS SQL Server\n"
+            "Enforced access control. Used vCenter Server and Jenkins daily.")
+    assert not emphasis._named("control", text)           # "access **control**" was bold
+    assert not emphasis._named("server", text)            # "vCenter **Server**" was bold
+    assert emphasis._named("jenkins", text) and emphasis._named("github", text)
+    assert emphasis._named("kubernetes", "Ran Kubernetes clusters daily.")   # a sentence's first word is no name's
+
+
+def test_a_name_is_bold_whole_and_once_per_job():
+    used: set[str] = set()
+    first = emphasis.spans("Built CI/CD in Jenkins 2.x and Azure DevOps.", ["ci/cd", "jenkins", "devops"], used=used)
+    assert [p for p, b in first if b] == ["CI/CD", "Jenkins", "Azure DevOps"]   # not "Azure **DevOps**"
+    again = emphasis.spans("Added Snyk to Jenkins and Azure DevOps.", ["ci/cd", "jenkins", "devops"], used=used)
+    assert not any(b for _, b in again)                                    # bold once per job, not every bullet
+
+
+def test_skill_items_are_not_bold():
+    from docx import Document
+    from ml.resume.writer import _add_skill
+    doc = Document()
+    _add_skill(doc, "CI/CD & GitOps: Jenkins, Azure DevOps, ArgoCD", ["jenkins", "devops"])
+    runs = doc.paragraphs[-1].runs
+    assert runs[0].bold and runs[0].text == "CI/CD & GitOps: "
+    assert not any(r.bold for r in runs[1:])

@@ -292,7 +292,11 @@ def _hyperlink(para, shown: str, url: str) -> None:
 
 
 def _add_skill(document: Document, text: str, keywords: list[str] | None = None) -> None:
-    """"Label: items" with the label in bold and the posting's tools bold among the items."""
+    """"Label: items" with the label in bold and the items in the regular weight.
+
+    The posting's tools set bold among the items made every line of the section a patchwork of
+    half-bold names; the labels already lead the eye (Oct 2026). `keywords` is accepted and unused.
+    """
     label, _, items = text.partition(": ")
     para = document.add_paragraph()
     para.alignment = WD_ALIGN_PARAGRAPH.LEFT
@@ -302,7 +306,7 @@ def _add_skill(document: Document, text: str, keywords: list[str] | None = None)
     run.bold = True
     run.font.name = FONT
     run.font.size = BODY_SIZE
-    _emphasised(para, "", items, keywords)
+    _emphasised(para, "", items, None)
 
 
 def _add_subheading(document: Document, text: str) -> None:
@@ -325,7 +329,8 @@ def _bullet_width_pt() -> float:
         return 0.85 * BODY_SIZE.pt           # Arial: bullet 0.35em + en space 0.5em
 
 
-def _add_bullet(document: Document, text: str, keywords: list[str] | None = None) -> None:
+def _add_bullet(document: Document, text: str, keywords: list[str] | None = None,
+                used: set[str] | None = None) -> None:
     """A bullet at 0.15", its text at 0.30", wrapped lines under the first word.
 
     A literal "•" and a tab rather than a Word list style: list numbering
@@ -340,13 +345,13 @@ def _add_bullet(document: Document, text: str, keywords: list[str] | None = None
     fmt.tab_stops.add_tab_stop(BULLET_TEXT_AT + INDENT)
     fmt.space_after = Pt(GAP)
     fmt.keep_together = True             # a bullet is not split across pages
-    _emphasised(para, "\u2022\t", strip_bullet(text), keywords)
+    _emphasised(para, "\u2022\t", strip_bullet(text), keywords, used)
 
 
-def _emphasised(para, lead: str, text: str, keywords: list[str] | None) -> None:
-    """The text as runs, the posting's keywords in bold (ml/resume/emphasis.py)."""
+def _emphasised(para, lead: str, text: str, keywords: list[str] | None, used: set[str] | None = None) -> None:
+    """The text as runs, the posting's keywords in bold (ml/resume/emphasis.py), each once per job."""
     from ml.resume.emphasis import spans
-    for i, (piece, bold) in enumerate(spans(text, keywords or [])):
+    for i, (piece, bold) in enumerate(spans(text, keywords or [], used=used)):
         run = para.add_run((lead if i == 0 else "") + piece)
         run.bold = bold
         run.font.name = FONT
@@ -588,13 +593,26 @@ def _arrange(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
             sections.append([])
         sections[-1].append((kind, text))
 
+    # A master with two Skills sections (an import once split one in two) prints one: the second's
+    # lines join the first, and the section is cleaned as a whole.
+    first_skills, kept = None, []
+    for section in sections:
+        heading = section[0][1] if section[0][0] == "heading" else ""
+        if heading and any(w in heading.lower() for w in _SKILLS):
+            if first_skills is not None:
+                first_skills.extend(section[1:])
+                continue
+            first_skills = section
+        kept.append(section)
+    sections = kept
+
     out_sections = []
     for number, section in enumerate(sections):
         heading = section[0][1] if section[0][0] == "heading" else ""
         body = section[1:] if heading else section
         low = heading.lower()
         if any(w in low for w in _SKILLS):
-            body = _compact_skills(body)
+            body = _skills_section(body)
         if any(w in low for w in ("education", "certif", "license", "project", "award")):
             # A school, certificate or project the parser took for a label
             # printed bold under one entry and plain under the next. Plain.
@@ -620,7 +638,27 @@ def _arrange(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
                              [section[0]] + body if heading else body))
     out_sections.sort(key=lambda s: s[0])          # stable: master order within a rank
     out_sections = _merge_repeats(out_sections)
-    return head + [b for _, section in out_sections for b in section]
+    return _roles_alike(head + [b for _, section in out_sections for b in section])
+
+
+def _roles_alike(blocks: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Every job's title line in the same case: in capitals when the titles are written mostly in them.
+
+    "Programmer Analyst / SENIOR DEVOPS ENGINEER" and "CLOUD Architect/ ENGINEER" sat among titles in
+    capitals and read as mistakes. Only the case changes, and the spacing around a title's slash --
+    never the words, and never the dates.
+    """
+    roles = [(i, _split_dates(t)) for i, (k, t) in enumerate(blocks) if k == "role"]
+    letters = [c for _, (left, _) in roles for c in left if c.isalpha()]
+    if len(roles) < 2 or not letters or sum(c.isupper() for c in letters) < 0.6 * len(letters):
+        return blocks
+    out = list(blocks)
+    for i, (left, _) in roles:
+        even = re.sub(r"(\w)\s*/\s+(\w)|(\w)\s+/\s*(\w)", lambda m: f"{m.group(1) or m.group(3)} / "
+                      f"{m.group(2) or m.group(4)}", left).upper()
+        if even != left:
+            out[i] = ("role", blocks[i][1].replace(left, even, 1))
+    return out
 
 
 _RANK_SUMMARY, _RANK_HIGHLIGHT, _RANK_EXPERTISE, _RANK_SKILLS = 0, 1, 2, 3
@@ -663,7 +701,7 @@ def _merge_repeats(sections: list[tuple[int, list]]) -> list[tuple[int, list]]:
                          and _same_label(label, t.partition(": ")[0])), None)
             if twin is not None:
                 theirs = rows.pop(twin)[1].partition(": ")[2]
-                text = f"{label}: {rest.rstrip('.')}. {theirs}"
+                text = f"{label}: {rest.rstrip('.')}. {theirs.rstrip('.')}."   # a sentence, then its tools
                 kind = "skill"
             merged.append((kind, text))
         sections[skills] = (_RANK_EXPERTISE, [sections[skills][1][0]] + merged + rows)
@@ -682,57 +720,37 @@ def _merge_repeats(sections: list[tuple[int, list]]) -> list[tuple[int, list]]:
     return sections
 
 
-def _skill_row(text: str) -> bool:
-    """"Label: a, b, c" -- a short label and a list after it."""
-    label, sep, rest = text.partition(": ")
-    return bool(sep) and 1 <= len(label.split()) <= 5 and ("," in rest or len(rest.split()) <= 12)
-
-
 def _labelled(text: str) -> bool:
     label, sep, rest = text.partition(": ")
     return bool(sep) and 1 <= len(label.split()) <= 6 and len(rest.split()) >= 4
 
 
-def _compact_skills(body: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Each skills group as one line, "Label: item; item", instead of a label over bullets.
+def _skills_section(body: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Each skills group as one line, "Label: tool, tool, tool" (ml/resume/skills.py).
 
-    Trimmed to a posting, a group often keeps one line, and a bold label over
-    a single bullet looks like something fell off the page.
+    Trimmed to a posting, a group often keeps one line, and a bold label over a single bullet
+    looks like something fell off the page. A group's label over its own bullets is one group;
+    each tool is shown once, without the description written after it.
     """
-    out: list[tuple[str, str]] = []
-    label, items = None, []
-
-    def flush():
-        if label is None:
-            out.extend(("text", i) for i in items)        # a plain list under no label: text
-        elif items:
-            out.append(("skill", f"{label.rstrip(':')}: "
-                        + "; ".join(i.rstrip(".") for i in items) + "."))
-        # a label with nothing kept under it is dropped
-
+    from ml.resume import skills
+    lines, other, label = [], [], ""
     for kind, text in body:
-        if _skill_row(text) and (kind == "subheading" or label is None):
-            # Already "Languages: Python, SQL, R" -- a whole row by itself. Read
-            # as a label it swallowed the next row and lost its own items.
-            flush()
-            label, items = None, []
-            out.append(("skill", text))
-        elif kind == "subheading":
-            flush()
-            label, items = text, []
-        elif kind in ("bullet", "text"):
-            # "Operating Systems: Windows, Linux" under "IDEs / Servers /
-            # Operating Systems" would print the label twice; drop the item's own.
+        text = strip_bullet(text).strip()
+        if kind == "subheading":
+            label = text.rstrip(":")
+            lines.append(label + ":")
+        elif kind in ("bullet", "text", "skill"):
+            # "Operating Systems: Windows, Linux" under "IDEs / Servers / Operating Systems" would
+            # print the label twice; drop the item's own.
             own, sep, rest = text.partition(": ")
-            if sep and label and own.lower() in label.lower() and len(own.split()) <= 5:
+            if kind != "skill" and sep and label and own.lower() in label.lower() and len(own.split()) <= 5:
                 text = rest
-            items.append(text)
+            lines.append(text)
         else:
-            flush()
-            label, items = None, []
-            out.append((kind, text))
-    flush()
-    return out
+            other.append((kind, text))
+    out = [("skill", line) if ": " in line and len(line.partition(": ")[0].split()) <= 7 else ("text", line)
+           for line in skills.compact(lines)]
+    return out + other
 
 
 _TITLE_METRIC = re.compile(r"\d+\s?%|\d+\+")
@@ -813,8 +831,11 @@ def _write_tailored(base, result, output_path, header_lines):
     document = Document()
     _style_document(document)
     keywords = list(getattr(result, "emphasis", None) or [])
+    used: set[str] = set()               # bold once per job (and once in the summary), not every bullet
 
     for kind, text in plan_document(base, result, header_lines):
+        if kind in ("heading", "role"):
+            used = set()
         if kind == "name":
             name = _add(document, text, bold=True, size=NAME_SIZE,
                         align=HEADER_ALIGN)
@@ -834,7 +855,7 @@ def _write_tailored(base, result, output_path, header_lines):
         elif kind == "subheading":
             _add_subheading(document, text)
         elif kind == "bullet":
-            _add_bullet(document, text, keywords)
+            _add_bullet(document, text, keywords, used)
         elif kind == "skill":
             _add_skill(document, text, keywords)
         else:
@@ -842,7 +863,7 @@ def _write_tailored(base, result, output_path, header_lines):
             para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
             para.paragraph_format.space_after = Pt(GAP)
             para.paragraph_format.left_indent = INDENT
-            _emphasised(para, "", text, keywords)
+            _emphasised(para, "", text, keywords, used)
 
     document.save(output_path)
     log.info("Wrote ATS-safe resume: %s", output_path)

@@ -569,23 +569,18 @@ def from_file(path: Path | str) -> dict:
                         c["region"] = ", ".join(bits)
                 break
     data["summary"] = "\n".join(model.fact(i).text for i in model.sections.get("summary", []) if model.fact(i))
-    # Skills rows that are lists ("Cloud: AWS, Azure, GCP") are skills; rows that are sentences
-    # ("CI/CD: Architected pipelines via ...") are kept as written under their own heading.
+    # Each skills group as one row, "Cloud Platforms: AWS, Azure, GCP" (ml/resume/skills.py): a group's
+    # label over its own bullets is one group, two groups run together on one line are two, and each
+    # tool comes without the description written after it. A group written as sentences ("CI/CD:
+    # Architected pipelines via ...") stays as written, still under Skills: kept apart under a second
+    # "Skills" heading, it printed twice on every tailored resume (Oct 2026).
+    from ml.resume import skills as skill_rows
     under = _headed_lines(extracted)
     for heading, kind, lines in under:
         if kind == "skills":
-            prose = []
-            for row in lines:
-                label, sep, items = row.partition(":")
-                if not sep or len(label.split()) > 6:
-                    label, items = "", row
-                if _is_list(items):
-                    data["skills"].append({"id": _id(), "label": label.strip(), "items": items.strip()})
-                else:
-                    prose.append(strip_bullet(row))
-            if prose:
-                data["extra"].append({"id": _id(), "heading": heading.title() if heading.isupper() else heading,
-                                      "lines": prose})
+            for g in skill_rows.clean(skill_rows.groups(lines)):
+                data["skills"].append({"id": _id(), "label": g.label,
+                                       "items": g.items[0] if g.prose else ", ".join(g.items)})
         elif kind == "other" and lines:
             data["extra"].append({"id": _id(), "heading": heading.title() if heading.isupper() else heading,
                                   "lines": [strip_bullet(l) for l in lines]})

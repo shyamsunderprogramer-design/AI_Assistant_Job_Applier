@@ -366,12 +366,17 @@ def _write_pdf(base, result, output_path, header_lines):
 
     keywords = list(getattr(result, "emphasis", None) or [])
 
+    used: set[str] = set()               # bold once per job (and once in the summary), not every bullet
+
     def emphasised(text: str) -> str:
         from ml.resume.emphasis import spans
-        return "".join(f"<b>{_escape(p)}</b>" if bold else _escape(p) for p, bold in spans(text, keywords))
+        return "".join(f"<b>{_escape(p)}</b>" if bold else _escape(p)
+                       for p, bold in spans(text, keywords, used=used))
 
     story: list[Flowable] = []
     for kind, text in plan_document(base, result, header_lines):
+        if kind in ("heading", "role"):
+            used.clear()
         if kind == "name":
             story.append(Paragraph(_escape(text), styles["name"]))
         elif kind == "contact":
@@ -413,7 +418,8 @@ def _write_pdf(base, result, output_path, header_lines):
             label, _, items = text.partition(": ")
             # The bold face by name: <b> needs a registered font family, and
             # without one the label silently came out in the regular weight.
-            story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {emphasised(items)}',
+            # The items in the regular weight: tools bold among them made a patchwork (Oct 2026).
+            story.append(Paragraph(f'<font name="{FONT_BOLD}">{_escape(label)}:</font> {_escape(items)}',
                                    styles["skill"]))
         else:
             story.append(Paragraph(emphasised(text), styles["text"]))
