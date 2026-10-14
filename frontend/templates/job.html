@@ -165,6 +165,16 @@
             chat, then bring the reply back below.</span>
         </div>
         {% if api_ready %}
+        <div class="row tpl-row" style="margin-top:8px">
+          <label class="hint" for="tpl">Template</label>
+          <select id="tpl" class="chip" title="How the tailored resume looks. Chosen for this job; change it if you like.">
+            {% for t in templates %}<option value="{{ t.key }}" title="{{ t.description }}"
+              {% if t.key == template_pick[0] %}selected{% endif %}>{{ t.label }}{% if not t.ats_safe %} (not for applying){% endif %}</option>{% endfor %}
+          </select>
+          <span class="hint" id="tpl-why">Chosen for this job: {{ template_pick[1] }}.</span>
+        </div>
+        {% endif %}
+        {% if api_ready %}
         <div class="hint" style="margin-top:6px">
           Copying is free and works with any chat — use it when you want the
           best writing and do not mind four steps.
@@ -493,13 +503,20 @@ document.querySelector('[data-tailor]')?.addEventListener('click', async e => {
   tailorConfirmed = false;
   button.disabled = true;
   $('out-resume').hidden = true; $('req-result').hidden = true;
-  const r = await ask(`/job/${JOB}/tailor-full`, {method: 'POST'});
+  const r = await ask(`/job/${JOB}/tailor-full`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                 body: JSON.stringify({template: $('tpl')?.value || ''})});
   if (!r.ok) {
     button.disabled = false; button.textContent = tailorLabel();
     show('out-resume', r.error, 'bad');
     return;
   }
   followRun(r.run, button);
+});
+
+// The template: chosen for this job, changed here before tailoring.
+const TPL_PICK = {{ template_pick[0]|tojson }}, TPL_WHY = {{ ('Chosen for this job: ' ~ template_pick[1] ~ '.')|tojson }};
+$('tpl')?.addEventListener('change', e => {
+  $('tpl-why').textContent = e.target.value === TPL_PICK ? TPL_WHY : (e.target.selectedOptions[0].title || '');
 });
 
 // Follow a tailoring run with the bar, then show what it found.

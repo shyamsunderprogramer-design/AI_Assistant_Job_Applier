@@ -262,6 +262,84 @@ def _role_markup(text: str, width: float, bold: bool = True) -> str:
 
 
 
+# -- justified lines a parser reads whole ---------------------------------------------------------
+# reportlab justifies a line by widening its spaces (the PDF's word spacing). A reader that groups
+# letters into lines by distance -- pdfminer, the engine under many resume parsers -- sees a widened
+# space as a gap, and where the gap is more than twice a space ("and   load   balancers") it reads
+# the words on either side as separate blocks, out of order (Modern and Minimal, Oct 2026). Here a
+# space is widened only up to 1.8 spaces; whatever slack is left goes between all the line's
+# letters, a fraction of a point each, which looks the same and which no reader splits on. A line
+# that would need more than that (one long word wrapped, say) is set flush left instead.
+
+_WIDEST = 1.8           # how far a space is widened, in widths of a space
+_LOOSEST = 0.12         # the most letter spacing a justified line takes, as a share of the font size
+
+
+def _spread(extra: float, spaces: int, glyphs: int, space: float, size: float):
+    """(word spacing, letter spacing) filling `extra` points across a line, or None for flush left."""
+    if extra <= 0 or extra / spaces <= _WIDEST * space:
+        return extra / spaces, 0.0                         # reportlab's own way: the spaces alone
+    room = _WIDEST * space
+    letters = glyphs - 1 - spaces
+    if letters <= 0:
+        return None
+    cs = (extra - spaces * room) / letters
+    if cs > _LOOSEST * size:
+        return None
+    return room - cs, cs
+
+
+def _readable_justification() -> None:
+    import reportlab.platypus.paragraph as rlp
+
+    def justify(tx, offset, extraspace, words, last=0):
+        rlp.setXPos(tx, offset)
+        text = " ".join(words)
+        simple = (getattr(tx, "preformatted", False) or (-1e-8 < extraspace <= 1e-8)
+                  or (last and extraspace > -1e-8))
+        spaces = len(words) + rlp._nbspCount(text) - 1
+        how = None if simple or spaces <= 0 else _spread(
+            extraspace, spaces, len(text), stringWidth(" ", tx._fontname, tx._fontsize), tx._fontsize)
+        if how is None:
+            tx._textOut(text, 1)
+        else:
+            tx.setWordSpace(how[0])
+            tx.setCharSpace(how[1])
+            tx._textOut(text, 1)
+            tx.setWordSpace(0)
+            tx.setCharSpace(0)
+        rlp.setXPos(tx, -offset)
+        return offset
+
+    def justify_x(tx, offset, line, last=0):
+        tx._x_offset = offset
+        rlp.setXPos(tx, offset)
+        extra = line.extraSpace
+        simple = line.lineBreak or (-1e-8 < extra <= 1e-8) or (last and extra > -1e-8)
+        frags = [w for w in line.words if not hasattr(w, "cbDefn")]
+        spaces = line.wordCount + sum(rlp._nbspCount(w.text) for w in frags) - 1
+        how = None
+        if not simple and spaces > 0 and frags:
+            first = frags[0]
+            how = _spread(extra, spaces, sum(len(w.text) for w in frags),
+                          stringWidth(" ", first.fontName, first.fontSize), first.fontSize)
+        if how is None:
+            rlp._putFragLine(offset, tx, line, last, "justify")
+        else:
+            tx.setWordSpace(how[0])
+            tx.setCharSpace(how[1])
+            rlp._putFragLine(offset, tx, line, last, "justify")
+            tx.setWordSpace(0)
+            tx.setCharSpace(0)
+        rlp.setXPos(tx, -offset)
+
+    rlp._justifyDrawParaLine = justify
+    rlp._justifyDrawParaLineX = justify_x
+
+
+_readable_justification()
+
+
 class _DatedLine(Flowable):
     """A title on the left and its dates against the right margin, on one line.
 
@@ -290,10 +368,22 @@ class _DatedLine(Flowable):
     def draw(self):
         c = self.canv
         c.setFillColor(INK)
-        c.setFont(self.font, self.size)
         baseline = self.size * (LEADING - 1) / 2 + self.size * 0.22
-        c.drawString(self.indent, baseline, self.title + "  ")
-        c.drawRightString(self.width, baseline, self.dates)
+        # One space stretched across the gap, so the dates still end at the right margin. Drawn as
+        # two strings far apart, a reader that groups letters by distance (pdfminer, under many resume
+        # parsers) took them for two blocks and read every date in a section after the last degree.
+        title = self.title + " "
+        gap = (self.width - self.indent - stringWidth(title, self.font, self.size)
+               - stringWidth(self.dates, self.font, self.size))
+        space = stringWidth(" ", self.font, self.size)
+        text = c.beginText(self.indent, baseline)
+        text.setFont(self.font, self.size)
+        text.textOut(title)
+        text.setHorizScale(100 * max(gap, space) / space)
+        text.textOut(" ")
+        text.setHorizScale(100)
+        text.textOut(self.dates)
+        c.drawText(text)
 
 
 def _dated(text: str, width: float, font: str, style: ParagraphStyle):

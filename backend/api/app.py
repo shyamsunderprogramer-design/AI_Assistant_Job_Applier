@@ -520,6 +520,7 @@ def job_detail(job_id: int):
                 row["tags"].append({"t": f"✅ Has sponsored {program} before", "k": "good"})
         description = job.description or ""
         requirements = job.requirements or ""
+        template_pick = _template_for(job)
     # Many boards give no separate requirements, and the field holds the
     # whole posting again: shown twice, the page opened on a wall of text.
     if " ".join(requirements.split()) == " ".join((description or "").split()):
@@ -549,7 +550,21 @@ def job_detail(job_id: int):
         job=row, description=description, requirements=requirements,
         statuses=STATUS_VALUES, packet=packet, docs=docs,
         api_ready=api_ready, api_model=writer["model"], writer=writer,
+        templates=_template_choices(), template_pick=template_pick,
     )
+
+
+def _template_for(job) -> tuple[str, str]:
+    """(template, why) a tailoring for this job starts in (ml/resume/style.for_job)."""
+    from ml.resume.style import DEFAULT, for_job
+    default = (cfg().get("resume.template", DEFAULT) if cfg() is not None else DEFAULT) or DEFAULT
+    return for_job(job.source or "", job.company or "", job.title or "", job.description or "",
+                   default=default, clearance=job.clearance or "")
+
+
+def _template_choices() -> list[dict]:
+    from ml.resume.style import choices
+    return choices()
 
 
 def packet_folder(row: dict) -> Path | None:
@@ -1325,6 +1340,7 @@ def job_tailor_full(job_id: int):
             return jsonify(ok=False, error="No such job."), 404
         jd = f"{job.title}\n\n{job.description or ''}"
         company = job.company
+        template = _template_for(job)[0]
         target = packet_root(cfg()) / output_filename(job.company, job.title, job.external_id or "")
         from ml.resume.packet import packet_dir
         packet = packet_dir(cfg(), job.company, job.title, job.external_id or "", job_id=job_id)
@@ -1332,10 +1348,13 @@ def job_tailor_full(job_id: int):
         saved = base_resume_path(cfg())
     except FileNotFoundError as exc:
         return jsonify(ok=False, error=str(exc)), 400
+    from ml.resume.style import TEMPLATES
+    picked = str((request.get_json(silent=True) or {}).get("template") or "")
+    template = picked if picked in TEMPLATES else template
     folder = new_run()
     resume = save_saved_resume(folder, saved)
     remember_job_run(job_id, folder, target, packet)
-    start(folder, resume, jd, None, cfg(), company=company,
+    start(folder, resume, jd, None, cfg(), company=company, template=template,
           after=lambda result: finish_job_run(
               job_id, folder, target, (result.get("before_after") or {}).get("ats", [0, result["score"]])[1], packet))
     return jsonify(ok=True, run=folder.name)
@@ -2051,6 +2070,66 @@ def probe_status():
     )
 
 
+@app.get("/run/careers/status")
+def careers_status():
+    """How the careers-site finder is doing, for its bar on the Jobs page.
+
+    Read from the finder's own progress file (data/careers/progress.json), which it rewrites as
+    it goes: it runs apart from this app, so the file is the one thing both can see.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    folder = PROJECT_ROOT / "data" / "careers"
+    try:
+        state = json.loads((folder / "progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return jsonify(ok=True, ever_run=False)
+
+    pid = state.get("background_pid")
+    alive = False
+    if pid:
+        try:
+            os.kill(int(pid), 0)
+            alive = not _is_zombie(int(pid))
+        except (OSError, TypeError, ValueError):
+            alive = False
+    phase = str(state.get("phase") or "")
+    updated = state.get("updated_at")
+    age = None
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(str(updated).replace("Z", "+00:00"))).total_seconds()
+    except (TypeError, ValueError):
+        pass
+    finished = phase.lower() in ("done", "finished", "complete", "completed")
+    # The finder writes as it goes; a file that moved in the last hour and a half is a live run.
+    running = alive or (not finished and age is not None and age < 90 * 60)
+
+    # The last lines of its log, when the log is one of ours.
+    tail: list[str] = []
+    log = state.get("log")
+    if log:
+        path = Path(log) if Path(log).is_absolute() else PROJECT_ROOT / log
+        try:
+            if path.resolve().is_relative_to((PROJECT_ROOT / "data").resolve()):
+                with path.open(encoding="utf-8", errors="replace") as handle:
+                    tail = [l.rstrip() for l in handle.readlines()[-200:] if l.strip()][-5:]
+        except OSError:
+            tail = []
+
+    done, total = state.get("processed") or 0, state.get("total") or 0
+    ats = state.get("ats_found") or {}
+    return jsonify(
+        ok=True, ever_run=True, running=running, finished=finished, phase=phase,
+        done=done, total=total, percent=round(done / total * 100, 1) if total else None,
+        found=state.get("careers_found") or 0,
+        ats=sorted(((k, v) for k, v in ats.items() if isinstance(v, int)), key=lambda kv: -kv[1])[:6]
+        if isinstance(ats, dict) else [],
+        rate=state.get("rate_per_hour"), eta=state.get("eta"),
+        updated=updated, note=state.get("note") or "", list=state.get("list"), tail=tail,
+    )
+
+
 _LIST_SIZES: dict[str, int] = {}
 
 
@@ -2404,10 +2483,12 @@ TAILOR_TYPES = (".docx", ".pdf")
 def tailor_page():
     # From a job page: the posting is filled in for the person.
     jd = ""
+    picked = None
     if request.args.get("job", "").isdigit():
         with get_session() as session:
             job = session.get(Job, int(request.args["job"]))
             jd = (f"{job.title}\n\n{job.description or ''}") if job else ""
+            picked = _template_for(job) if job else None
     # From a job page the person's saved resume is used, so one press starts it.
     saved = ""
     if jd:
@@ -2420,7 +2501,8 @@ def tailor_page():
     return render_template("tailor.html", accepted=",".join(TAILOR_TYPES), jd=jd, saved=saved,
                            autostart=bool(jd and saved and request.args.get("start")),
                            templates=choices(), looks=look_choices(),
-                           template=(cfg().get("resume.template", DEFAULT) if cfg() is not None else DEFAULT) or DEFAULT)
+                           template=picked[0] if picked else
+                           (cfg().get("resume.template", DEFAULT) if cfg() is not None else DEFAULT) or DEFAULT)
 
 
 @app.post("/tailor/start")

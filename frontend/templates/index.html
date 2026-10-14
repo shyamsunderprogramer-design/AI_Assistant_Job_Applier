@@ -88,6 +88,20 @@
   <div class="probe-lists" id="probe-lists"></div>
 </section>
 
+<!-- The careers-site finder: each company's own careers page, found in the background.
+     Hidden until it has written its progress file. -->
+<section class="probe" id="careers" hidden>
+  <div class="probe-head">
+    <span class="probe-dot" id="careers-dot"></span>
+    <strong id="careers-title">Finding company careers sites</strong>
+    <span class="probe-sub" id="careers-sub"></span>
+  </div>
+  <div class="probe-track"><i id="careers-fill"></i></div>
+  <div class="probe-foot" id="careers-foot"></div>
+  <div class="probe-foot" id="careers-note"></div>
+  <div class="probe-lists" id="careers-tail" hidden></div>
+</section>
+
 <section class="stats">
   <div class="stat">
     <span class="k">Boards watched</span><span class="v">{{ "{:,}".format(boards) }}</span>
@@ -734,6 +748,46 @@ $('probe-btn').addEventListener('click', async e => {
 });
 
 pollProbe();
+
+// The careers-site finder's bar: read from its own progress file, every 10 seconds while it runs.
+async function pollCareers() {
+  const d = await ask('/run/careers/status');
+  const box = $('careers');
+  if (!d.ok || !d.ever_run) { box.hidden = true; setTimeout(pollCareers, 60000); return; }
+  box.hidden = false;
+  const pct = d.percent ?? 0;
+  $('careers-fill').style.width = Math.max(pct, d.total ? 0.3 : 0) + '%';
+  $('careers-dot').className = 'probe-dot' + (d.running ? ' live' : '');
+  let moved = '';
+  if (d.updated) {
+    const secs = Math.max(0, (Date.now() - Date.parse(d.updated)) / 1000);
+    moved = secs < 120 ? 'updated just now'
+          : secs < 3600 ? `updated ${Math.round(secs / 60)} min ago`
+          : `updated ${Math.round(secs / 3600)} h ago`;
+  }
+  const phase = d.phase ? d.phase.charAt(0).toUpperCase() + d.phase.slice(1) : '';
+  $('careers-title').textContent = d.finished ? 'Careers sites found' : 'Finding company careers sites';
+  $('careers-sub').textContent = [
+    d.total ? `${d.done.toLocaleString()} of ${d.total.toLocaleString()} companies · ${pct}%` : phase,
+    moved].filter(Boolean).join(' · ');
+  const ats = (d.ats || []).map(([k, v]) => `${k} ${v.toLocaleString()}`).join(' · ');
+  const rate = d.rate ? ` · ${Math.round(d.rate).toLocaleString()}/hr` : '';
+  const eta = d.eta ? ` · done about ${String(d.eta).replace('T', ' ').slice(0, 16)}` : '';
+  $('careers-foot').textContent = `${(d.found ?? 0).toLocaleString()} careers sites found`
+    + (ats ? ` (${ats})` : '') + (d.running ? rate + eta : '');
+  $('careers-note').textContent = d.note || '';
+  const tail = $('careers-tail');
+  tail.hidden = !(d.tail && d.tail.length);
+  tail.innerHTML = '';
+  (d.tail || []).forEach(line => {
+    const row = document.createElement('div');
+    row.className = 'probe-list';
+    row.textContent = line;
+    tail.appendChild(row);
+  });
+  setTimeout(pollCareers, d.running ? 10000 : 60000);
+}
+pollCareers();
 
 // If a run is already going when the page opens, pick it up rather than
 // pretending nothing is happening.

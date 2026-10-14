@@ -311,7 +311,24 @@ def produce(draft, folder: Path, name: str = "tailored-resume", model=None, jd_t
         pages = max(1, min(pages, current) - (1 if any("last page" in c.detail for c in fixable) else 0))
         fit_to_pages(draft.base, draft.result, jd_text, max_pages=pages,
                      pages=lambda b, r: _pages(b, r, draft.header))
+    rendered.checks += ats_checks(rendered, blocks)
     rendered.pages["pdf"] = page_images(rendered.pdf, folder / "pages", "pdf")
     if rendered.docx_pdf:
         rendered.pages["docx"] = page_images(rendered.docx_pdf, folder / "pages", "docx")
     return rendered
+
+
+def ats_checks(rendered: Rendered, blocks: list[tuple[str, str]]) -> list[Check]:
+    """Both files read back as applicant tracking systems read them (ml/resume/ats_readback.py):
+    what any reader got wrong, else one note that every reader read every line."""
+    from ml.resume import ats_readback
+    try:
+        found = ats_readback.checks(rendered.pdf, rendered.docx, blocks)
+    except Exception as exc:                          # a reader that breaks is not the resume's fault
+        return [Check("pdf", None, "ATS read", f"The ATS read-back could not run ({type(exc).__name__}).",
+                      severity="note")]
+    if found:
+        return found
+    return [Check("pdf", None, "ATS read", "Read back as an ATS reads it: the PDF by pypdf, PDFium and pdfminer, "
+                                          "the .docx by python-docx and its raw XML. Every heading, job, date and "
+                                          "bullet came out whole and in order.", severity="note")]

@@ -1,18 +1,25 @@
 """Resume templates: one set of type and spacing, read by both the .docx and the PDF writer.
 
-Every template is ATS-safe by construction -- the writers never draw tables,
-columns, text boxes or images whatever the template says -- so a template
-changes only how the page looks: the font, the sizes, the spacing, the
-colour of the headings, and where the section names sit.
+The writers never draw tables, columns, text boxes or images whatever the
+template says, so a template changes only how the page looks: the font, the
+sizes, the spacing, the colour of the headings, where the section names sit,
+and how dates are written.
 
   classic  the person's own format (Oct 2026): Cambria, black, 0.65" margins.
   modern   Calibri, dark blue headings: a cleaner sans-serif page.
   compact  Cambria a size smaller, tighter spacing: built for one or two pages.
   minimal  whitespace and no lines: the name and the work, nothing else.
-  sidebar  the section names in a left rail and the content beside them. It
-           looks like two columns but is one: every line is an ordinary
-           paragraph, the content indented, so an ATS reads it top to bottom.
-           (A real two-column page is read across both columns at once.)
+  federal  Times New Roman, black, every date as MM/YYYY: the plain page federal
+           hiring (USAJOBS) and government contractors read months and years from.
+  sidebar  the section names in a left rail and the content beside them. Every
+           line is an ordinary paragraph, but a reader that groups text by
+           position (pdfminer, under many resume parsers) takes the rail for a
+           second column and reads the headings after their sections. Not
+           offered for applying (ats_safe=False); fine to print or email.
+
+Each template is proven, not assumed: ml/resume/ats_readback.verify_template
+draws a resume in it and reads both files back with three PDF readers and two
+.docx readers, and every tailored resume is read back the same way.
 
 On top of any template, a look: another font (one the PDF can embed and Word
 has) and an accent colour for the headings and rules.
@@ -25,6 +32,7 @@ measurement, an edit, a line put back -- draws the same template.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 
 
@@ -53,6 +61,8 @@ class Style:
     rule: bool = True          # a hairline under each section heading
     indent_in: float = 0.0     # everything but the header and the headings, moved right (the sidebar)
     header_align: str = "center"   # the name, contact and title lines: center or left
+    dates: str = "words"       # "words": Feb 2025 – Present; "numeric": 02/2025 – Present
+    ats_safe: bool = True      # every reader reads it in order (ml/resume/ats_readback.py)
 
 
 TEMPLATES: dict[str, Style] = {
@@ -68,11 +78,16 @@ TEMPLATES: dict[str, Style] = {
                      "Calibri", body=10.5, heading=11, name=22, contact=10, heading_color="595959",
                      rule=False, margin_in=0.8, gap=4, heading_before=14, heading_after=4, role_before=8,
                      title_after=10, header_align="left", leading=1.2),
-    "sidebar": Style("sidebar", "Sidebar", "Section names in a left rail, the work beside them: a two-column look "
-                                           "that is one column underneath, so every ATS reads it in order.",
+    "federal": Style("federal", "Federal", "Times New Roman, black, dates as MM/YYYY: the plain page federal "
+                                           "jobs (USAJOBS) and government contractors expect.",
+                     "Times New Roman", body=11, heading=12, name=17, contact=11, rule_color="000000",
+                     margin_in=0.75, heading_before=10, heading_after=3, role_before=7, dates="numeric"),
+    "sidebar": Style("sidebar", "Sidebar", "Section names in a left rail, the work beside them. Some ATS readers "
+                                           "take the rail for a second column: for printing, not for applying.",
                      "Calibri", body=10.5, heading=11, name=22, contact=10, heading_color="1F3864",
                      rule_color="1F3864", rule=False, indent_in=1.3, margin_in=0.6, heading_before=12,
-                     heading_after=2, role_before=4, title_after=10, header_align="left", leading=1.18),
+                     heading_after=2, role_before=4, title_after=10, header_align="left", leading=1.18,
+                     ats_safe=False),
 }
 DEFAULT = "classic"
 
@@ -109,7 +124,60 @@ def style_for(result=None, name: str | None = None, look: dict | None = None) ->
 
 
 def choices() -> list[dict]:
-    return [{"key": s.key, "label": s.label, "description": s.description} for s in TEMPLATES.values()]
+    return [{"key": s.key, "label": s.label, "description": s.description, "ats_safe": s.ats_safe}
+            for s in TEMPLATES.values()]
+
+
+# -- the template for a job ---------------------------------------------------------------------------
+
+# An employer's name that says government; "U.S. Bank" and a marketing agency do not.
+_GOVERNMENT = re.compile(
+    r"\b(department of|dept\.? of|county of|city of|state of|commonwealth of|town of|veterans affairs|"
+    r"national guard|social security administration|government|"
+    r"federal (?:bureau|reserve|aviation|emergency|trade|communications|highway|transit|deposit)|"
+    r"(?:u\.s\.|united states) (?:department|dept|army|navy|air force|marine corps|coast guard|space force|"
+    r"agency|bureau|office|postal|patent|census|courts?|secret service|mint|geological|forest|senate|house))\b",
+    re.I)
+# Work for the government itself: a clearance, public trust, a GS grade, a government contract. A
+# commercial company that only sells to "federal customers" or holds FedRAMP is not this.
+_CLEARANCE = re.compile(
+    r"\b((?:active |current )?(?:security|secret|top secret|ts/sci) clearance|public trust|ts/sci|top secret|"
+    r"clearance (?:is )?required|usajobs|gs-\d{1,2}\b|department of defense|dod\b|"
+    r"(?:federal|government) contract(?:or|ing)?s?|government contracts?)", re.I)
+# A company that says it is a startup -- not one that only says it moves like one.
+_STARTUP = re.compile(
+    r"\b(series [a-e]\b(?= (?:funding|round|company|startup|stage|backed|-))|seed[- ](?:stage|funded|round)|"
+    r"venture[- ]backed|early[- ]stage (?:startup|company)|founding (?:engineer|team member)|"
+    r"(?:we(?:'re| are)|is) an? (?:[\w-]+ ){0,3}start-?up\b)", re.I)
+
+
+def for_job(source: str = "", company: str = "", title: str = "", description: str = "",
+            default: str | None = None, clearance: str = "") -> tuple[str, str]:
+    """(template, why) for a posting: the template a tailoring for it starts in.
+
+      federal  a federal posting (USAJOBS), a government employer, or work that needs a clearance
+               or public trust: federal HR and contractors' recruiters read months and years from
+               every job, so the dates are MM/YYYY;
+      modern   a startup: a cleaner sans-serif page;
+      else     the person's default (Settings), for everyone else.
+    Only ATS-safe templates are chosen. The person can change it on the job page.
+    """
+    default = default if default in TEMPLATES and TEMPLATES[default].ats_safe else DEFAULT
+    text = f"{title}\n{description or ''}"
+    if (source or "").lower() == "usajobs":
+        return "federal", "a federal posting (USAJOBS)"
+    if _GOVERNMENT.search(company or ""):
+        return "federal", "a government employer"
+    if clearance:
+        named = clearance if "clearance" not in clearance.lower() else ""
+        return "federal", f"the posting needs a {named + ' ' if named else 'security '}clearance".replace("  ", " ")
+    m = _CLEARANCE.search(text)
+    if m:
+        return "federal", f"the posting asks for “{m.group(0)}”"
+    m = _STARTUP.search(text)
+    if m and default == DEFAULT:
+        return "modern", f"a startup (“{m.group(0)}”)"
+    return default, "your default template (Settings)"
 
 
 def look_choices() -> dict:
