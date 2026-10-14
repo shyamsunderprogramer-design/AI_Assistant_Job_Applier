@@ -2692,3 +2692,4 @@ def health_report():
 # The Resume pages (build, check, tailored versions) register on this app.
 from backend.api import resume_pages  # noqa: E402,F401
 from backend.api import tracker_pages  # noqa: E402,F401
+from backend.api import auto_apply  # noqa: E402,F401

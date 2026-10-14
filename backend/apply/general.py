@@ -57,7 +57,11 @@ KINDS = (
          YES_NO,
          r"\b(have you|were you|did you)\b.*\b(employed|worked|contracted|interviewed)\b"
          r"|\bemployment history\b|\bformer\b.*\bemployee\b|\bpreviously (been )?employed\b",
-         exclude=r"\bexplain\b|\bif yes\b|\bwhen\b.*\bcapacity\b", about_employer=True),
+         # "Have you ever worked for a U.S. Federal Government agency?" is about the person's
+         # experience, not this employer: answered "No" from here, it was a claim nobody made.
+         exclude=r"\bexplain\b|\bif yes\b|\bwhen\b.*\bcapacity\b"
+                 r"|\bfederal\b|\bgovernment\b|\bagenc(y|ies)\b|\bpublic sector\b|\bmilitary\b",
+         about_employer=True),
     Kind("age18", "Are you at least 18 years old?", YES_NO, r"\b18\b.*\b(age|old|older)\b|\bat least 18\b|\bover 18\b"),
     Kind("high_school", "Do you have a high school diploma or an equivalent such as the GED?", YES_NO,
          r"\bhigh school\b|\bged\b"),

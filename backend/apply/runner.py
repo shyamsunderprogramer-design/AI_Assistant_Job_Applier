@@ -230,7 +230,9 @@ def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None,
         elif job_id is not None:
             job = session.get(Job, job_id)
             jobs = [job] if job is not None and _eligible(job, applicant) else []
-            queue = build_queue(jobs, limit=1)
+            # Asked for by name, from its own page: any board will do. A form the app has no
+            # filler of its own for is followed and filled by backend/apply/anyform.py.
+            queue = build_queue(jobs, limit=1, sources=(jobs[0].source,) if jobs else ())
         else:
             min_score = cfg.get("apply.min_score", cfg.get("resume.min_score", 0.45))
             queue = build_queue(
@@ -241,6 +243,22 @@ def candidates(cfg, applicant: Applicant, limit: int, job_id: int | None = None,
                 last_applied=_last_applied_by_company(session),
             )
     return queue, left
+
+
+def why_not(job_id: int) -> str:
+    """Why one job asked for by name is not going out."""
+    from backend.apply.queue import APPLIABLE_STATUSES
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return "there is no job with that number."
+        if not job.is_open:
+            return "the posting has closed."
+        if job.status not in APPLIABLE_STATUSES:
+            return f"it is marked {job.status} already."
+        if not (job.application_url or "").strip():
+            return "the posting has no link to apply through."
+    return "your profile rules it out (the line above says why)."
 
 
 def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
@@ -269,6 +287,9 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
         say("Today's application limit is reached — nothing more until tomorrow.")
         return []
     if not queue:
+        if job_id is not None:
+            say(f"Can't auto-apply to this one: {why_not(job_id)}")
+            return []
         say("Nothing to apply to right now: no open Greenhouse or Workday posting above your "
             "score threshold that you haven't applied to or marked yourself.")
         return []
@@ -361,8 +382,16 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
                               resume_note, evidence, wait_s)
     if job.source == "jazzhr":
         return _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s)
+    if job.source != "greenhouse":
+        return _apply_anywhere(cfg, page, job, applicant, head, outcome, kept, letter, resume_note,
+                               evidence, wait_s, auto=auto)
+    return _apply_greenhouse(page, job, applicant, head, outcome, kept, letter, resume_note, evidence,
+                             wait_s, greenhouse.form_url(job.company_slug, job.external_id), auto=auto)
 
-    url = greenhouse.form_url(job.company_slug, job.external_id)
+
+def _apply_greenhouse(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s,
+                      url, *, auto: bool) -> Outcome:
+    """Greenhouse: filled, and sent by itself only when nothing on it needs the person."""
     result = greenhouse.fill(page, job.id, url, applicant, kept, letter,
                              submit=auto, evidence=evidence)
     if not result.ok:
@@ -397,29 +426,105 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
 
 
 def _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter, resume_note,
-                   evidence, wait_s) -> Outcome:
+                   evidence, wait_s, url: str | None = None) -> Outcome:
     """Workday: sign-in and Submit are the person's; every step between is filled."""
     from backend.apply import workday
 
+    url = url or job.application_url
     say(f"{head}: opening Workday · {resume_note}")
     # The sign-in wait comes out of the same budget, so allow for it.
-    verdict, result = workday.apply(page, job.id, job.application_url, applicant, kept,
+    verdict, result = workday.apply(page, job.id, url, applicant, kept,
                                     evidence=evidence, wait_s=wait_s + 300, say=say)
     if verdict == "not-filled":
         say(f"{head}: {result.summary()}")
         outcome.detail = result.error or ""
         return outcome
-    _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter,
+    _settle(outcome, job, verdict, "you", url, kept, resume_note, letter,
             result, evidence, result.given)
     return outcome
 
 
-def _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s) -> Outcome:
+def _letter_text(cfg, job) -> str | None:
+    """The cover letter as plain text, for a form that takes it in a box rather than a file."""
+    from ml.resume.packet import LETTER_FILE, packet_dir
+    folder = packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id)
+    try:
+        return (folder / LETTER_FILE).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _apply_anywhere(cfg, page, job, applicant, head, outcome, kept, letter, resume_note, evidence,
+                    wait_s, *, auto: bool) -> Outcome:
+    """Any other board: follow the posting to the employer's own form, fill it, wait for the person."""
+    from backend.apply import anyform
+
+    say(f"{head}: opening the posting on {job.source} · {resume_note}")
+    reached = anyform.reach(page, job.application_url, say=say, check_s=min(wait_s, 300))
+    if reached.error:
+        say(f"{head}: not filled: {reached.error}")
+        outcome.detail = reached.error
+        return outcome
+    page = reached.page
+    if reached.kind == "greenhouse" and anyform.greenhouse_form(reached.url):
+        say("   It leads to a Greenhouse form.")
+        return _apply_greenhouse(page, job, applicant, head, outcome, kept, letter, resume_note, evidence,
+                                 wait_s, anyform.greenhouse_form(reached.url), auto=auto)
+    if reached.kind == "jazzhr":
+        say("   It leads to a JazzHR form.")
+        return _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note, evidence,
+                             wait_s, url=reached.url)
+    if reached.kind == "workday":
+        say("   It leads to Workday.")
+        return _apply_workday(cfg, page, job, applicant, head, outcome, kept, letter, resume_note,
+                              evidence, wait_s, url=reached.url)
+
+    letter_text = _letter_text(cfg, job)
+    seen: set[str] = set()
+    result = anyform.fill(page, job.id, reached.url, applicant, kept, letter,
+                          letter_text=letter_text, evidence=evidence, seen=seen)
+    waiting: list[str] = []
+    if reached.kind == "signin":
+        say("   This site wants you to sign in or make an account first. Do that in the window, "
+            "and the app fills the form when it shows.")
+    elif reached.kind == "unknown":
+        say("   The application form isn't on this page. Open it in the window (its Apply button), "
+            "and the app fills it when it shows.")
+    else:
+        say(f"{head}: {result.summary()} · on {reached.url.split('?')[0][:90]}")
+        if result.captcha:
+            waiting.append("the CAPTCHA")
+        if result.declarations:
+            waiting.append("the box(es) to tick yourself: " + "; ".join(d[:50] for d in result.declarations[:3]))
+        if result.required_blank:
+            waiting.append("required: " + ", ".join(result.required_blank[:4]))
+        anyform.show_submit(page, scroll=not (result.required_blank or result.declarations))
+    say(f"   Waiting for you — check it{', finish ' + '; '.join(waiting) if waiting else ''}, then press "
+        f"Submit (outlined in orange). Leave the tab open until this says Applied; close it to skip.")
+    verdict, answers, page = anyform.watch(page, applicant, result, wait_s, resume_path=kept,
+                                           letter_path=letter, letter_text=letter_text, seen=seen,
+                                           evidence=evidence, say=say)
+    if verdict == "submitted":
+        anyform.forget_unconfirmed(job.id)
+    elif result.filled or result.attachments:
+        # The site may have said "sent" in words the app does not know: the job page asks.
+        anyform.keep_unconfirmed(job.id, {
+            "company": job.company, "title": job.title, "url": reached.url, "how": "you",
+            "resume": str(kept), "resume_source": resume_note,
+            "cover_letter": str(letter) if letter else None, "filled": result.filled,
+            "evidence": str(evidence)})
+    _settle(outcome, job, verdict, "you", reached.url, kept, resume_note, letter, result, evidence, answers)
+    return outcome
+
+
+def _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s,
+                  url: str | None = None) -> Outcome:
     """JazzHR: every field the profile and the person's answers cover is filled; the
     Human Check and Submit are the person's."""
     from backend.apply import jazzhr
+    url = url or job.application_url
     say(f"{head}: opening the JazzHR form · {resume_note}")
-    result = jazzhr.fill(page, job.id, job.application_url, applicant, kept, evidence=evidence)
+    result = jazzhr.fill(page, job.id, url, applicant, kept, evidence=evidence)
     if not result.ok:
         say(f"{head}: {result.summary()}")
         outcome.detail = result.error or ""
@@ -431,7 +536,7 @@ def _apply_jazzhr(page, job, applicant, head, outcome, kept, letter, resume_note
     say(f"   Waiting for you — check the answers, {'; '.join(waiting) or 'look it over'}, then press "
         f"Submit Application at the bottom. Close the tab to skip this one.")
     verdict, answers = jazzhr.watch_submission(page, wait_s, evidence=evidence)
-    _settle(outcome, job, verdict, "you", job.application_url, kept, resume_note, letter, result,
+    _settle(outcome, job, verdict, "you", url, kept, resume_note, letter, result,
             evidence, answers)
     return outcome
 

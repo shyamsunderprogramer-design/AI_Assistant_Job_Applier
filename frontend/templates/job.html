@@ -7,9 +7,32 @@
     <div class="sub"><a href="{{ url_for('index') }}">← All jobs</a> · {{ job.company }}</div>
   </div>
   <div class="row">
-    <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open the application form</a>
+    {% if job.status in ['Applied', 'Interviewing', 'Offer', 'Rejected'] %}
+      <a class="btn primary" href="{{ url_for('application_page', job_id=job.id) }}">✓ {{ job.status }}: see the application</a>
+      <a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">Open the posting</a>
+    {% elif job.status == 'Closed' %}
+      <span class="pill">This posting has closed</span>
+      <a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">Open the posting</a>
+    {% else %}
+      <button class="btn primary" type="button" data-auto-apply>Auto-apply</button>
+      <a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">Open the application form</a>
+    {% endif %}
   </div>
 </header>
+
+<section class="card aa" id="aa" hidden aria-live="polite">
+  <div class="aa-head"><h2>Auto-apply</h2><span class="aa-state" id="aa-state"></span></div>
+  <p class="hint">The app's own browser opens this posting{% if job.board not in ['greenhouse', 'workday', 'jazzhr'] %} on {{ job.board }},
+    follows it to {{ job.company }}&rsquo;s application form,{% endif %} and fills it from your profile with your resume for this job.
+    Then it stops for you: check it, tick any consent box or CAPTCHA, and press Submit yourself{% if job.board == 'greenhouse' %}
+    (a Greenhouse form with nothing left for you goes by itself when “submit by itself” is on, on the Auto-apply page){% endif %}.</p>
+  <pre class="aa-log" id="aa-log"></pre>
+  <div class="row aa-ask" id="aa-ask" hidden>
+    <b>Did it go?</b>
+    <button class="btn primary" type="button" id="aa-yes">Yes, I submitted it</button>
+    <button class="btn" type="button" id="aa-no">No, it wasn't sent</button>
+  </div>
+</section>
 
 <div class="meta">
   <span>{% if job.score is none %}<b>Not scored yet</b>
@@ -287,7 +310,10 @@
         <div class="hint">Upload both files on {{ job.company }}&rsquo;s form.
           Recording it here is what stops this role coming back around.</div>
         <div class="row" style="margin-top:9px">
-          <a class="btn primary" href="{{ job.url }}" target="_blank" rel="noopener">Open the {{ job.board|replace('-', ' ')|title }} form</a>
+          {% if job.status in ['Not Applied', 'Manual Review', 'Skipped'] %}
+          <button class="btn primary" type="button" data-auto-apply>Auto-apply</button>
+          {% endif %}
+          <a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">Open the {{ job.board|replace('-', ' ')|title }} form</a>
           <select id="status" aria-label="Status">
             {% for s in statuses %}
             <option value="{{ s }}" {% if s == job.status %}selected{% endif %}>{{ s }}</option>
@@ -1079,5 +1105,82 @@ $('prep-make')?.addEventListener('click', async e => {
 .le-flag{color:var(--crit);font-size:.86em;margin-top:4px}
 .le-ver{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:6px 0;font-size:.88em}
 .le-versions summary{cursor:pointer;font-size:.9em}
+.aa{border-color:color-mix(in srgb,var(--signal) 40%,var(--line))}
+.aa-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.aa-head h2{margin:0}
+.aa-state{font-size:.9em;color:var(--signal-ink);font-weight:600}
+.aa-log{white-space:pre-wrap;font-family:var(--mono);font-size:12px;line-height:1.5;background:var(--sunk);
+  border-radius:var(--r-md);padding:10px 12px;max-height:320px;overflow:auto;margin:8px 0 0}
+.aa-log:empty{display:none}
+.aa-ask{margin-top:10px;gap:8px;align-items:center}
 </style>
+<script>
+// Auto-apply: start the app's browser on this posting, show what it says, and ask "did it go?" when it can't tell.
+(() => {
+  const JOB = {{ job.id }};
+  const box = document.getElementById('aa'), log = document.getElementById('aa-log'),
+        state = document.getElementById('aa-state'), ask = document.getElementById('aa-ask');
+  const buttons = [...document.querySelectorAll('[data-auto-apply]')];
+  const busy = on => buttons.forEach(b => { b.disabled = on; b.textContent = on ? 'Auto-applying…' : 'Auto-apply'; });
+  const show = (lines, text) => {
+    box.hidden = false;
+    if (lines) log.textContent = lines.join('\n');
+    if (text !== undefined) state.textContent = text;
+    log.scrollTop = log.scrollHeight;
+  };
+  async function poll() {
+    let s;
+    try { s = await (await fetch(`/job/${JOB}/auto-apply`)).json(); }
+    catch (e) { setTimeout(poll, 3000); return; }          // the app restarting: ask again
+    if (s.running) {
+      busy(true);
+      show(s.lines, 'Going: the browser window is the app’s');
+      setTimeout(poll, 2000);
+      return;
+    }
+    busy(false);
+    if (s.lines && s.lines.length) show(s.lines);
+    if (s.applied) {
+      show(null, 'Applied ✓');
+      setTimeout(() => location.reload(), 2500);           // the page's own buttons and steps follow
+    } else if (s.ask) {
+      show(null, 'Waiting for your word');
+      ask.hidden = false;
+    } else if (s.lines && s.lines.length) {
+      show(null, 'Stopped: not sent. The lines above say why. Press Auto-apply to try again.');
+    }
+  }
+  async function start() {
+    busy(true);
+    ask.hidden = true;
+    show([], 'Starting…');
+    box.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    let r;
+    try { r = await (await fetch(`/job/${JOB}/auto-apply`, {method: 'POST'})).json(); }
+    catch (e) { r = {ok: false, error: 'The app did not answer, so nothing started. Try again.'}; }
+    if (!r.ok || r.started === false) {
+      busy(false);
+      show([r.error || r.note || 'It could not start.'], 'Not started');
+      return;
+    }
+    show(['Starting: your resume for this job first, then the browser opens.'], 'Going');
+    setTimeout(poll, 1500);
+  }
+  async function went(yes) {
+    let r;
+    try {
+      r = await (await fetch(`/job/${JOB}/auto-apply/went`, {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({went: yes})})).json();
+    } catch (e) { state.textContent = 'Not saved. Press it again.'; return; }
+    ask.hidden = true;
+    if (r.ok && yes) { state.textContent = 'Applied ✓'; setTimeout(() => location.reload(), 1200); }
+    else state.textContent = 'Noted: not sent. Press Auto-apply to try again.';
+  }
+  buttons.forEach(b => b.addEventListener('click', start));
+  document.getElementById('aa-yes').addEventListener('click', () => went(true));
+  document.getElementById('aa-no').addEventListener('click', () => went(false));
+  // Reloaded mid-run, or a question left from the last run: pick it up.
+  fetch(`/job/${JOB}/auto-apply`).then(r => r.json()).then(s => { if (s.running || s.ask) poll(); }).catch(() => {});
+})();
+</script>
 {% endblock %}

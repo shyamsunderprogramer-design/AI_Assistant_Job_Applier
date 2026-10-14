@@ -162,6 +162,11 @@ class Applicant:
         # City *", "Zip Code", "State/Province"). Whole words only: "city" must
         # not match "citizenship", nor "state" "statement".
         words = set(re.findall(r"[a-z]+", text))
+        # Not a yes/no question that happens to say "State" ("Have you supported a Federal or
+        # State agency?"): an address part is asked for, not asked about.
+        yes_no = text.rstrip().endswith("?") and not words & {"what", "which", "where", "provide", "enter", "list"}
+        if yes_no:
+            words -= {"zip", "postal", "postcode", "city", "state", "province"}
         if "zip" in words or "postal" in words or "postcode" in words:
             return str(self.location.get("postal_code") or "").strip() or None
         if "city" in words and "citizenship" not in words:
@@ -182,7 +187,14 @@ class Applicant:
             return None
         if "sponsor" in text:
             needs = self.authorisation.get("requires_sponsorship")
-            return None if needs is None else ("Yes" if needs else "No")
+            if needs is None:
+                return None
+            # "Are you authorized to work in the U.S. ... WITHOUT sponsorship?" asks it the other way
+            # round from "Will you require sponsorship?": needing none is a Yes there. Answered No,
+            # Bixal's form ruled the person out and hid the rest of its questions (Oct 2026).
+            if re.search(r"\bwithout\b[^?]*\bsponsor", text):
+                return "No" if needs else "Yes"
+            return "Yes" if needs else "No"
         # "Are you a US Citizen?" -- a yes/no about the person, asked outright (the status
         # question above is a choice of statuses). Only what the profile states.
         if re.search(r"\b(u\.?s\.?|united states) citizen\b", text) and "?" in text \
@@ -190,7 +202,8 @@ class Applicant:
             citizen = self.authorisation.get("us_citizen")
             return None if citizen is None else ("Yes" if citizen else "No")
         if "authorized to work" in text or "authorised to work" in text \
-                or "legally authorized" in text or "legally authorised" in text:
+                or "legally authorized" in text or "legally authorised" in text \
+                or "eligible to work" in text:
             allowed = self.authorisation.get("authorised_to_work")
             return None if allowed is None else ("Yes" if allowed else "No")
         if "clearance" in text:
