@@ -51,7 +51,7 @@ def requirements_only(jd_text: str) -> str:
 
     A paragraph that mentions pay or benefits is dropped -- but a posting written
     with no blank lines at all (JazzHR's are) is ONE paragraph, and dropping it
-    dropped the whole posting: a tailoring for UberEther (13 Oct 2026) read only the
+    dropped the whole posting: a tailoring for a JazzHR posting (13 Oct 2026) read only the
     job title and found no requirements. A long paragraph is filtered line by line.
     """
     paragraphs = re.split(r"\n\s*\n|\n(?=\s)", jd_text or "")

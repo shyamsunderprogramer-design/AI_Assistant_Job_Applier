@@ -605,7 +605,7 @@ def from_file(path: Path | str) -> dict:
             details = [strip_bullet(f.text) for f in facts][:4]
             location = ""
             if not school and details:
-                # "Fitchburg State University, Fitchburg, MA, USA": the school, then where.
+                # "Example State University, Springfield, MA, USA": the school, then where.
                 school, _, location = details.pop(0).partition(",")
                 school, location = school.strip(), location.strip()
             data["education"].append({"id": _id(), "degree": degree, "field": "", "school": school,

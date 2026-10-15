@@ -311,7 +311,7 @@ def test_education_keeps_only_education(tmp_path):
         "Jane Roe\n"
         "EDUCATION\n"
         "Master of Science\tJan 2023 - Dec 2024\n"
-        "Fitchburg State University\n"
+        "Example State University\n"
         "Core Competencies / Technical Skills Summary\n"
         "Hands-on experience across AWS EC2, S3, RDS, EKS and Lambda daily.\n"
         "Extensive use of Terraform for modularised infrastructure as code.\n"

@@ -381,7 +381,7 @@ def work_history(applicant: Applicant, resume: Path | None) -> list[dict]:
     """The jobs for Workday's Work Experience, newest first.
 
     The profile's own `work` list when it has one -- a resume heading says
-    "PR DEPT., GO., AP, IND", and a form wants the employer's real name --
+    "CITY WTR. DEPT., NORTH, IND", and a form wants the employer's real name --
     else the jobs as the resume states them.
     """
     if applicant.work:

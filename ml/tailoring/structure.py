@@ -143,8 +143,8 @@ def split_header(header: str) -> tuple[str, str]:
     head = DATE_RANGE.sub("", header).strip(" ,|–—-\t")
     parts = [p.strip() for p in re.split(r"\s*(?:,|\||–|—|\s-\s|\bat\b|@)\s*", head) if p.strip()]
     if len(parts) >= 2:
-        # Everything after the title is the employer as written -- "PR DEPT.,
-        # GO., AP, IND" is one employer, not "PR DEPT." and a location.
+        # Everything after the title is the employer as written -- "CITY WTR.
+        # DEPT., NORTH, IND" is one employer, not "CITY WTR." and a location.
         return parts[0], ", ".join(parts[1:])
     return head, ""
 

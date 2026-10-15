@@ -20,14 +20,14 @@ LINES = [
     "Automation: Terraform, Ansible, Helm, Python, Bash",
     "Experience",
     "SENIOR PLATFORM ENGINEER, ACME CORP, USA\tFeb 2021 – Present",
-    "• Conducted capacity planning, performance analysis, and optimization for Kubernetes clusters and load "
-    "balancers, improving compute utilization by 25% and reducing resource bottlenecks for mission-critical "
-    "applications.",
-    "• Implemented policy-as-code using tfsec, Checkov, and Conftest, blocking misconfigurations before "
-    "deployment across forty repositories.",
+    "• Orchestrated quarterly infrastructure modernization, consolidating Kubernetes environments and "
+    "networking components, improving deployment throughput by 25% and eliminating bottlenecks for "
+    "customer-facing applications.",
+    "• Standardized infrastructure verification using Checkov, tfsec, and Conftest, intercepting misconfigurations "
+    "before deployment across forty repositories.",
     "PLATFORM ENGINEER, INITECH, USA\tJun 2016 – Jan 2021",
-    "• Authored automated incident response runbooks, health checks, and self-healing workflows, cutting mean "
-    "time to recovery by 35%.",
+    "• Documented troubleshooting procedures, synthetic monitoring, and automatic remediation, shortening "
+    "recovery time by 35%.",
     "Education",
     "Master of Science\tJan 2014 – Dec 2015",
     "Example State University, Denver, CO, USA",
