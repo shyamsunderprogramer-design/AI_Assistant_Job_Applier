@@ -952,6 +952,12 @@ def cmd_failures(cfg, args) -> int:
     return 0
 
 
+def cmd_careers(cfg, args) -> int:
+    from data_engineering.companies.careers_finder import run_command
+
+    return run_command(cfg, args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI_Assistant_Job_Applier")
     parser.add_argument("--config", default=None, help="Path to config.yaml")
@@ -1146,6 +1152,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_failures = sub.add_parser("failures", help="Show logged scrape failures")
     p_failures.add_argument("--limit", type=int, default=30)
 
+    p_careers = sub.add_parser(
+        "careers", help="Find each company's careers page and the hiring system behind it"
+    )
+    p_careers.add_argument("--list", default="postings",
+                           help="postings | watched | registry | worthwhile | small "
+                                "(comma-separate to run several in turn)")
+    p_careers.add_argument("--limit", type=int, default=0, help="Only this many new companies")
+    p_careers.add_argument("--workers", type=int, default=16,
+                           help="Companies checked side by side; each host is still paced on its own")
+    p_careers.add_argument("--retry", action="store_true",
+                           help="Ask again where the last answer was an error")
+    p_careers.add_argument("--status", action="store_true", help="What the finder is doing")
+    p_careers.add_argument("--stop", action="store_true", help="Stop it; it resumes where it stopped")
+    p_careers.add_argument("--export", action="store_true",
+                           help="Rewrite data/careers/careers_sites.csv")
+    p_careers.add_argument("--report", action="store_true",
+                           help="Counts by status and hiring system")
+
     return parser
 
 
@@ -1177,6 +1201,7 @@ COMMANDS = {
     "setup-helper": cmd_setup_helper,
     "stats": cmd_stats,
     "failures": cmd_failures,
+    "careers": cmd_careers,
 }
 
 
