@@ -29,6 +29,7 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from data_engineering.db.models import CLOSED_STATUS, DEFAULT_STATUS, SYSTEM_STATUSES
 
@@ -37,10 +38,39 @@ from data_engineering.db.models import CLOSED_STATUS, DEFAULT_STATUS, SYSTEM_STA
 USER_TOUCHED = ("Applied", "Interviewing", "Offer", "Rejected", "Closed",
                 "Not Interested", "Withdrawn")
 
+# A posting's own words, as its board shows them. Employers edit postings, and
+# boards say what kind of job it is (Lever's commitment, Ashby's employment
+# type...): a fetch here writes both onto a posting it already holds
+# (data_engineering/scraper/runner.py), so on a morning the cloud did the fetch
+# the merge has to, or the copy here keeps the first words it ever read.
+POSTING = ("title", "location", "description", "requirements", "application_url", "content_hash")
+
+
+def _carried(row: sqlite3.Row, digest: str | None, stated_here: str | None, manual) -> tuple[dict, str]:
+    """What the cloud's copy of a posting held here changes, as the fetch here would change it:
+    ("edited") the employer's new words, with everything read from them read again; or ("typed")
+    the board's word for the kind of job, when only that is new. A person's own corrections --
+    the kind of job, the clearance and visa fields -- stay theirs (jobfields.derived_for)."""
+    from backend.core.jobfields import derive, derived_for, job_type
+    stated_there = row["stated_job_type"] if "stated_job_type" in row.keys() else None
+    if row["content_hash"] != digest:
+        stated = stated_there or stated_here
+        fields = derived_for(manual, derive(row["title"], row["location"], row["description"],
+                                            row["requirements"], stated))
+        return {**{c: row[c] for c in POSTING}, "stated_job_type": stated, **fields,
+                "exported_to_excel": 0}, "edited"
+    if stated_there and stated_there != stated_here:
+        changes = {"stated_job_type": stated_there}
+        if not manual.job_type_manual:
+            changes["job_type"] = job_type(row["title"], row["description"], row["requirements"], stated_there)
+        return changes, "typed"
+    return {}, ""
+
 
 def merge(cloud_path: Path, local_path: Path = Path("data/jobs.db"),
           *, dry_run: bool = False) -> dict:
-    """Add the cloud's new postings. Returns what happened."""
+    """Add the cloud's new postings, and bring what their boards now say to the postings held
+    here: up or taken down, edited, the kind of job. Returns what happened."""
     if not cloud_path.exists():
         raise FileNotFoundError(cloud_path)
 
@@ -61,47 +91,62 @@ def merge(cloud_path: Path, local_path: Path = Path("data/jobs.db"),
               if c in {r[1] for r in cloud.execute("PRAGMA table_info(jobs)")}
               and c != "id"]
 
+    # A posting is its board, its company and its id, as the table's unique key
+    # says: BambooHR and Workday number each company's postings from 1, so one
+    # company's posting 12 is not another's. Matched on board and id alone, a
+    # new posting 12 was taken for one already here and never added.
     held = {}
-    for source, external, status, is_open, seen, closed_at in local.execute(
-            "SELECT source, external_id, status, is_open, last_seen_at, closed_at FROM jobs").fetchall():
-        held[(source, external)] = (status, is_open, seen, closed_at)
+    for (source, slug, external, status, is_open, seen, closed_at, digest, stated,
+         type_manual, eligibility_manual) in local.execute(
+            "SELECT source, company_slug, external_id, status, is_open, last_seen_at, closed_at, "
+            "content_hash, stated_job_type, job_type_manual, eligibility_manual FROM jobs").fetchall():
+        held[(source, slug, external)] = (status, is_open, seen, closed_at, digest, stated,
+                                          SimpleNamespace(job_type_manual=type_manual,
+                                                          eligibility_manual=eligibility_manual))
+    where = "WHERE source = ? AND company_slug = ? AND external_id = ?"
 
-    added = refreshed = skipped = closed = reopened = 0
+    added = refreshed = skipped = closed = reopened = edited = typed = 0
     for row in cloud.execute("SELECT * FROM jobs").fetchall():
-        key = (row["source"], row["external_id"])
+        key = (row["source"], row["company_slug"], row["external_id"])
         if key in held:
             # Already here. The local row is the one with the history on it --
             # its score, its status, whether a packet was built. Touch only
-            # last_seen_at, so lifecycle does not decide it has vanished --
-            # and whether it is still on the board, which on a morning the
-            # cloud did the fetch nothing else here would learn. That follows
-            # lifecycle's rules: only what the cloud saw after this Mac last
-            # did, and a person's status is never touched ("Applied" outlives
-            # the posting; only the app's own statuses become "Closed").
-            status, is_open, seen_here, closed_here = held[key]
+            # what the board says: whether the posting is still up, which on a
+            # morning the cloud did the fetch nothing else here would learn,
+            # last_seen_at, so lifecycle does not decide it has vanished, and
+            # the posting's own words. That follows lifecycle's rules: only
+            # what the cloud saw after this Mac last did, and a person's status
+            # is never touched ("Applied" outlives the posting; only the app's
+            # own statuses become "Closed").
+            status, is_open, seen_here, closed_here, digest, stated_here, manual = held[key]
+            seen_there = row["last_seen_at"] or ""
             if row["is_open"] == 0 and is_open and row["closed_at"] and (seen_here or "") < row["closed_at"]:
                 if not dry_run:
                     local.execute(
-                        "UPDATE jobs SET is_open = 0, closed_at = ?, status = ?, exported_to_excel = 0 "
-                        "WHERE source = ? AND external_id = ?",
-                        (row["closed_at"], CLOSED_STATUS if (status or "") in SYSTEM_STATUSES else status,
-                         row["source"], row["external_id"]))
+                        f"UPDATE jobs SET is_open = 0, closed_at = ?, status = ?, exported_to_excel = 0 {where}",
+                        (row["closed_at"], CLOSED_STATUS if (status or "") in SYSTEM_STATUSES else status, *key))
                 closed += 1
                 continue
-            if row["is_open"] and not is_open and closed_here and (row["last_seen_at"] or "") > closed_here:
-                if not dry_run:
-                    local.execute(
-                        "UPDATE jobs SET is_open = 1, closed_at = NULL, last_seen_at = ?, status = ?, "
-                        "exported_to_excel = 0 WHERE source = ? AND external_id = ?",
-                        (row["last_seen_at"], DEFAULT_STATUS if status == CLOSED_STATUS else status,
-                         row["source"], row["external_id"]))
+            changes = {}
+            if row["is_open"] and not is_open and closed_here and seen_there > closed_here:
+                changes.update(is_open=1, closed_at=None, exported_to_excel=0,
+                               status=DEFAULT_STATUS if status == CLOSED_STATUS else status)
                 reopened += 1
-                continue
-            if not dry_run:
-                local.execute(
-                    "UPDATE jobs SET last_seen_at = ? WHERE source = ? AND external_id = ?",
-                    (row["last_seen_at"], row["source"], row["external_id"]))
-            refreshed += 1
+            else:
+                refreshed += 1
+            if seen_there > (seen_here or ""):
+                changes["last_seen_at"] = row["last_seen_at"]     # never back to an older sighting
+            if seen_there >= (seen_here or ""):
+                # The cloud's copy is the latest read of the posting (the same
+                # moment: a run already merged, merged again). Read here later,
+                # the copy here is newer, and stays.
+                carried, why = _carried(row, digest, stated_here, manual)
+                changes.update(carried)
+                edited += why == "edited"
+                typed += why == "typed"
+            if changes and not dry_run:
+                local.execute(f"UPDATE jobs SET {', '.join(f'{c} = ?' for c in changes)} {where}",
+                              [*changes.values(), *key])
             continue
 
         if not dry_run:
@@ -136,7 +181,8 @@ def merge(cloud_path: Path, local_path: Path = Path("data/jobs.db"),
     local.close()
 
     return {"added": added, "refreshed": refreshed, "skipped": skipped,
-            "closed": closed, "reopened": reopened, "boards_added": boards_added}
+            "closed": closed, "reopened": reopened, "edited": edited, "typed": typed,
+            "boards_added": boards_added}
 
 
 def run(argv: list[str]) -> int:
@@ -152,6 +198,8 @@ def run(argv: list[str]) -> int:
     print(f"  refreshed {result['refreshed']} already held")
     if result["closed"] or result["reopened"]:
         print(f"  {result['closed']} taken down from their boards, {result['reopened']} back up")
+    if result["edited"] or result["typed"]:
+        print(f"  {result['edited']} edited by the employer, {result['typed']} given a job type by their board")
     if result["boards_added"]:
         print(f"  {verb} {result['boards_added']} boards")
     print("  nothing local was replaced — statuses, probe memory and job-alert "

@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -412,6 +413,10 @@ class ExcelTracker:
             if col is None:      # a sheet we do not fully control; skip, never raise
                 continue
             cell = ws.cell(row=row_idx, column=col)
+            if isinstance(value, str):
+                # A worksheet refuses control characters, and one stray \x02 in
+                # one posting stopped the whole morning's export (Oct 20, 2026).
+                value = ILLEGAL_CHARACTERS_RE.sub("", value)
             cell.value = value
             if name == "Application Link" and value:
                 cell.hyperlink = str(value)

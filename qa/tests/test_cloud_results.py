@@ -55,6 +55,62 @@ def test_postings_the_cloud_saw_taken_down_come_down_here_and_statuses_stay(tmp_
     assert "new" in rows
 
 
+def test_what_the_board_says_now_reaches_a_posting_held_here(tmp_path):
+    """On a morning the cloud read the boards, an employer's edit and the board's word for the kind
+    of job reached only the cloud's copy: the merge kept the first words ever read here."""
+    local = make_db(tmp_path / "local.db", [
+        ("edited", "Applied", 1, "2026-10-19 07:00:00", None),
+        ("typed", "Not Applied", 1, "2026-10-19 07:00:00", None),
+        ("mine", "Not Applied", 1, "2026-10-19 07:00:00", None),
+        ("later", "Not Applied", 1, "2026-10-20 10:00:00", None),       # read here after the cloud did
+    ])
+    cloud = make_db(tmp_path / "cloud.db", [
+        (ext, "Not Applied", 1, "2026-10-20 06:40:00", None) for ext in ("edited", "typed", "mine", "later")])
+    with sqlite3.connect(local) as db:
+        db.execute("UPDATE jobs SET description = 'Build our CI/CD platform.', ats_match_score = 0.71")
+        db.execute("UPDATE jobs SET job_type = 'part-time', job_type_manual = 1 WHERE external_id = 'mine'")
+    with sqlite3.connect(cloud) as db:
+        db.execute("UPDATE jobs SET description = 'Build our CI/CD platform.'")
+        db.execute("UPDATE jobs SET title = 'SRE (Contract)', content_hash = external_id || '-2', "
+                   "description = 'A 6-month contract. Build our CI/CD platform.' "
+                   "WHERE external_id IN ('edited', 'later')")
+        db.execute("UPDATE jobs SET stated_job_type = 'Contract' WHERE external_id IN ('typed', 'mine')")
+
+    got = merge_cloud.merge(cloud, local)
+    assert (got["edited"], got["typed"], got["added"]) == (1, 2, 0)
+    with sqlite3.connect(local) as db:
+        rows = {r[0]: r[1:] for r in db.execute(
+            "SELECT external_id, title, description, job_type, stated_job_type, status, ats_match_score, "
+            "exported_to_excel, last_seen_at FROM jobs")}
+    assert rows["edited"][:4] == ("SRE (Contract)", "A 6-month contract. Build our CI/CD platform.", "contract", None)
+    assert rows["edited"][4:7] == ("Applied", 0.71, 0)                   # the history here stays
+    assert rows["typed"][2:4] == ("contract", "Contract")
+    assert rows["mine"][2:4] == ("part-time", "Contract")                 # the person's own word stays
+    assert rows["later"][0] == "SRE" and rows["later"][7] == "2026-10-20 10:00:00"   # newer here: kept
+
+    again = merge_cloud.merge(cloud, local)                               # a run merged twice
+    assert (again["edited"], again["typed"]) == (0, 0)
+
+
+def test_two_companies_numbering_their_postings_alike_stay_apart(tmp_path):
+    """BambooHR numbers each company's postings from 1: one company's posting 12 is not another's.
+    Matched on board and id alone, a new posting 12 was never added, and an edit to one would have
+    overwritten the other."""
+    local = make_db(tmp_path / "local.db", [(e, "Not Applied", 1, "2026-10-19 07:00:00", None) for e in "ab"])
+    cloud = make_db(tmp_path / "cloud.db", [(e, "Not Applied", 1, "2026-10-20 06:40:00", None) for e in "ac"])
+    for path in (local, cloud):
+        with sqlite3.connect(path) as db:
+            db.execute("UPDATE jobs SET source = 'bamboohr', company_slug = external_id, external_id = '12'")
+    with sqlite3.connect(cloud) as db:
+        db.execute("UPDATE jobs SET title = 'Platform Engineer', content_hash = 'new' WHERE company_slug = 'a'")
+
+    got = merge_cloud.merge(cloud, local)
+    assert (got["added"], got["edited"]) == (1, 1)
+    with sqlite3.connect(local) as db:
+        assert dict(db.execute("SELECT company_slug, title FROM jobs")) == {
+            "a": "Platform Engineer", "b": "SRE", "c": "SRE"}
+
+
 # -- taking today's run: ready, under way, or none ---------------------------------------------
 
 RUN = {"databaseId": 42, "status": "completed", "conclusion": "success",

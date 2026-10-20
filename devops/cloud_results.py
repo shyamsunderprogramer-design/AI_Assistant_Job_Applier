@@ -174,7 +174,10 @@ def bring_in(say=print, wait_s: int = WAIT_S, poll_s: int = POLL_S, sleep=time.s
             if now == "ready":
                 say(f"cloud: bringing in today's GitHub fetch (run {run['databaseId']})…")
                 got = collect(run["databaseId"], run["createdAt"])
-                say(f"cloud: {got['added']:,} new postings, {got['refreshed']:,} seen again, "
+                news = "".join(f", {got[k]:,} {what}" for k, what in (("edited", "edited by the employer"),
+                                                                     ("typed", "given a job type by their board"))
+                               if got.get(k))
+                say(f"cloud: {got['added']:,} new postings, {got['refreshed']:,} seen again{news}, "
                     f"{got.get('closed', 0):,} taken down, from {got['boards']:,} boards")
                 return got
             if now == "none":

@@ -119,6 +119,17 @@ def test_long_jd_is_truncated_below_excel_cell_limit(tracker):
     assert value.endswith("[truncated]")
 
 
+def test_a_control_character_in_a_posting_does_not_stop_the_export(tracker):
+    """One posting's stray \\x02 refused the cell, and with it every row of the morning's export."""
+    appended, _ = tracker.export([make_job(external_id="1", title="Cloud\x0b Engineer",
+                                           description="Acme builds\x02 platforms."),
+                                  make_job(external_id="2")])
+    ws = read(tracker)
+    assert appended == 2
+    assert ws.cell(row=2, column=COL["Job Title"]).value == "Cloud Engineer"
+    assert ws.cell(row=2, column=COL["JD"]).value == "Acme builds platforms."
+
+
 def test_formatting_applied(tracker):
     tracker.export([make_job()])
     ws = read(tracker)
