@@ -138,7 +138,10 @@ def state(run: dict | None = None) -> str:
 def collect(run_id: int, started: str = "") -> dict:
     """Download, unlock and merge one run's postings. Returns what the merge did.
     `started`: the run's createdAt, so the boards it read are counted from then (UTC, as stored)."""
+    from backend.config.loader import load_config
+    from data_engineering.scraper.filters import resolve_filter
     from devops.merge_cloud import merge
+    search = resolve_filter(load_config())        # what a fetch here would keep
     with tempfile.TemporaryDirectory() as tmp:
         _gh("run", "download", str(run_id), "--name", ARTIFACT, "--dir", tmp, timeout=900)
         locked, db = Path(tmp) / "jobs.db.enc", Path(tmp) / "jobs.db"
@@ -154,7 +157,7 @@ def collect(run_id: int, started: str = "") -> dict:
         except sqlite3.DatabaseError as exc:
             raise CloudError(f"the unlocked file is not a database ({exc}); yours is untouched") from exc
         # Into the live file, in one transaction: a failure leaves nothing half-merged.
-        result = merge(db, PROJECT_ROOT / "data" / "jobs.db")
+        result = merge(db, PROJECT_ROOT / "data" / "jobs.db", search=search)
     result.update(run=run_id, boards=boards, at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     COLLECTED.parent.mkdir(parents=True, exist_ok=True)
     COLLECTED.write_text(json.dumps(result))
@@ -177,7 +180,8 @@ def bring_in(say=print, wait_s: int = WAIT_S, poll_s: int = POLL_S, sleep=time.s
                 news = "".join(f", {got[k]:,} {what}" for k, what in (("edited", "edited by the employer"),
                                                                      ("typed", "given a job type by their board"))
                                if got.get(k))
-                say(f"cloud: {got['added']:,} new postings, {got['refreshed']:,} seen again{news}, "
+                left = f" ({got['skipped']:,} more your search leaves out)" if got.get("skipped") else ""
+                say(f"cloud: {got['added']:,} new postings{left}, {got['refreshed']:,} seen again{news}, "
                     f"{got.get('closed', 0):,} taken down, from {got['boards']:,} boards")
                 return got
             if now == "none":

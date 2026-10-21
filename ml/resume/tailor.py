@@ -85,9 +85,10 @@ candidate fits. Four rules, and they matter more than the rewrite being clever:
   BAD      : Built observability with Prometheus and Grafana, achieving
              proactive issue detection and faster MTTR.
              (shorter, and it deleted the 38% -- the best part of the bullet)
-  GOOD     : Built observability with Prometheus, Grafana and Datadog,
-             achieving 38% faster MTTR and proactive anomaly detection.
-             (same length, metric intact, JD's own tool named)
+  GOOD     : Built monitoring with Prometheus and Grafana, achieving 38%
+             faster MTTR and proactive anomaly detection.
+             (same length, metric intact, the JD's word "monitoring" in place of
+             the resume's synonym, and no tool the line did not already name)
 
   Original : Analyze purchase requirements, inventory levels, and demand
              forecasts to support procurement and planning decisions.

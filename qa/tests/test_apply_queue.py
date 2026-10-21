@@ -299,3 +299,52 @@ def test_an_unknowable_location_is_kept_not_guessed():
 
     for place in ("Remote", "Hybrid", "In-Office", "", None):
         assert is_us(place) is None, place
+
+
+def test_a_us_place_is_not_taken_for_the_foreign_one_it_shares_a_name_with():
+    """The third bug. A foreign name was checked before anything American, so "Albuquerque, New
+    Mexico, United States" was Mexico, "Dublin, OH" Ireland and "Vancouver, WA" Canada -- and
+    every fetch dropped them."""
+    from backend.core.locations import is_us
+    from ml.resume.profile import NON_US_PLACES
+
+    for place in ("Albuquerque, New Mexico, United States", "New Mexico", "Dublin, OH, Remote",
+                  "Hybrid - Vancouver, WA", "Paris, TX"):
+        assert is_us(place, NON_US_PLACES) is True, place
+    for place in ("Mexicali, Baja California, Mexico", "Bengaluru, IN", "Cambridge, United Kingdom",
+                  "Bogotá, D.C., Colombia", "Vancouver, BC"):
+        assert is_us(place, NON_US_PLACES) is False, place
+
+
+def test_a_posting_open_in_a_us_place_among_others_is_a_us_posting():
+    from backend.core.locations import is_us
+    from ml.resume.profile import NON_US_PLACES
+
+    for place in ("Remote (United States | Canada)", "Chicago; London; New York", "New York, London",
+                  "Remote Canada | Remote United States", "Canada/US | Remote"):
+        assert is_us(place, NON_US_PLACES) is True, place
+    assert is_us("Rome Metropolitain Area | Remote", NON_US_PLACES) is False
+
+
+def test_the_ways_boards_write_a_state_code():
+    from backend.core.locations import is_us
+    from ml.resume.profile import NON_US_PLACES
+
+    for place in ("PA, Remote", "TX-GRAND PRAIRIE, 2505 N HWY 360", "AZ_Mesa_HQ", "Whippany NJ 07981",
+                  "Remote - MA", "Remote-CA", "DC | Remote", "Hybrid - Local to D.C. metro area"):
+        assert is_us(place, NON_US_PLACES) is True, place
+    for words in ("In-Office", "Remote OR Hybrid", "Remote OK", "Remote - No clearance required"):
+        assert is_us(words, NON_US_PLACES) is None, words
+
+
+def test_remote_in_front_of_a_place_abroad_is_still_abroad():
+    """"Remote" or "Hybrid" first kept whatever followed: "Hybrid (Santiago, Las Condes)"."""
+    from backend.core.locations import is_us
+    from ml.resume.profile import NON_US_PLACES
+
+    for place in ("Hybrid (Santiago, Las Condes)", "Remote (Time zone: CET (+/- 3 hours))",
+                  "Hybrid Remote , Bandung Wetan, Kota Bandung, Jawa Barat", "Remote, Ontario"):
+        assert is_us(place, NON_US_PLACES) is False, place
+    for vague in ("Global | Remote", "AMER", "North America | Remote", "Remote (Multiple Locations)",
+                  "Hybrid - 3 days a week", "Remote - Worldwide"):
+        assert is_us(vague, NON_US_PLACES) is None, vague

@@ -199,6 +199,19 @@ def test_eligibility_follows_the_profile():
     assert eligible(ts, {})[0] and not eligible(ts, {"security_clearance": "None"})[0]
 
 
+def test_an_active_clearance_is_not_for_someone_who_is_not_a_us_citizen():
+    """Clearance left unanswered, but "not a US citizen" answers it: a US clearance is granted to
+    US citizens only. A Secret-cleared role on Fort Meade got through to an application."""
+    secret = Posting(clearance="Secret", clearance_active=True)
+    ok, why = eligible(secret, {"us_citizen": False, "security_clearance": None})
+    assert not ok and why == ["needs an active Secret clearance, which only US citizens hold"]
+    assert eligible(secret, {"us_citizen": True})[0]                     # a citizen may hold one
+    assert eligible(secret, {})[0]                                       # nothing said: never hidden
+    assert eligible(Posting(clearance="Secret", clearance_active=False), {"us_citizen": False})[0]  # obtainable or preferred: not read as a bar
+    assert eligible(Posting(clearance="Clearance", clearance_active=True), {"us_citizen": False})[1] == [
+        "needs an active security clearance, which only US citizens hold"]
+
+
 @pytest.mark.parametrize("text", ["Active and current TS.SCI w FSP through MD", "TS SCI with CI Poly required",
                                   "Clearance: TS//SCI Full Scope Polygraph"])
 def test_ts_sci_is_read_however_it_is_written(text):

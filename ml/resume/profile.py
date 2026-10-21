@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from backend.core.locations import NON_US_CITIES, NON_US_COUNTRIES, NON_US_REGIONS
 from ml.resume.parser import Resume
 
 log = logging.getLogger(__name__)
@@ -600,36 +601,9 @@ def build_exclusions(seniority: str, held_titles: list[str]) -> list[str]:
 # A blocklist of guesses can never be complete. This one is instead broad
 # enough to cover where these boards actually hire, and it is consulted only
 # when the person's own contact details are US-based.
-NON_US_PLACES = [
-    # regions and shorthands
-    "emea", "apac", "latam", "anz", "europe", "european union", "eu remote",
-    "asia", "africa", "middle east", "nordics", "benelux", "dach", "iberia",
-    # countries
-    "argentina", "armenia", "australia", "austria", "bangladesh", "belarus",
-    "belgium", "bolivia", "brazil", "bulgaria", "cambodia", "canada", "chile",
-    "china", "colombia", "costa rica", "croatia", "cyprus", "czech republic",
-    "czechia", "denmark", "ecuador", "egypt", "estonia", "finland", "france",
-    "germany", "ghana", "greece", "guatemala", "hong kong", "hungary",
-    "iceland", "india", "indonesia", "ireland", "israel", "italy", "japan",
-    "jordan", "kenya", "latvia", "lebanon", "lithuania", "luxembourg",
-    "malaysia", "malta", "mexico", "morocco", "netherlands", "new zealand",
-    "nigeria", "norway", "pakistan", "panama", "paraguay", "peru",
-    "philippines", "poland", "portugal", "romania", "russia", "saudi arabia",
-    "serbia", "singapore", "slovakia", "slovenia", "south africa",
-    "south korea", "korea", "spain", "sri lanka", "sweden", "switzerland",
-    "taiwan", "thailand", "tunisia", "turkey", "ukraine",
-    "united arab emirates", "uae", "united kingdom", "uk", "uruguay",
-    "venezuela", "vietnam",
-    # cities that appear on job boards without their country
-    "bangalore", "bengaluru", "hyderabad", "pune", "mumbai", "chennai",
-    "gurgaon", "noida", "london", "dublin", "berlin", "munich", "paris",
-    "amsterdam", "barcelona", "madrid", "lisbon", "warsaw", "krakow", "prague",
-    "bucharest", "sofia", "vilnius", "tallinn", "stockholm", "oslo",
-    "copenhagen", "helsinki", "zurich", "tel aviv", "toronto", "vancouver",
-    "montreal", "ottawa", "sydney", "melbourne", "auckland", "tokyo", "seoul",
-    "shanghai", "beijing", "sao paulo", "mexico city", "buenos aires",
-    "bogota", "lagos", "nairobi", "cairo", "dubai",
-]
+# The lists live in backend/core/locations.py, which reads a city as weaker evidence than a
+# country ("Dublin, OH" is Ohio).
+NON_US_PLACES = [*NON_US_REGIONS, *NON_US_COUNTRIES, *NON_US_CITIES]
 
 _US_STATES = ("AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|"
               "NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY")

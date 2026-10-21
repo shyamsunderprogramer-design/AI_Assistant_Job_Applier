@@ -111,6 +111,23 @@ def test_two_companies_numbering_their_postings_alike_stay_apart(tmp_path):
             "a": "Platform Engineer", "b": "SRE", "c": "SRE"}
 
 
+def test_a_new_posting_comes_in_only_if_the_search_here_would_keep_it(tmp_path):
+    """The cloud's database keeps postings read under every search it has run: the first cloud
+    morning brought in Kfar Saba, Gurugram and Rome, read in September, which a fetch here drops."""
+    from data_engineering.scraper.filters import JobFilter
+    local = make_db(tmp_path / "local.db", [])
+    cloud = make_db(tmp_path / "cloud.db", [(e, "Not Applied", 1, "2026-10-20 06:40:00", None)
+                                            for e in ("abroad", "here", "unsaid")])
+    with sqlite3.connect(cloud) as db:
+        for ext, place in (("abroad", "Kfar Saba"), ("here", "Austin, TX"), ("unsaid", "Remote")):
+            db.execute("UPDATE jobs SET location = ? WHERE external_id = ?", (place, ext))
+    search = JobFilter(exclude_location_keywords=["europe"])
+
+    got = merge_cloud.merge(cloud, local, search=search, dry_run=True)
+    assert (got["added"], got["skipped"]) == (2, 1)
+    assert merge_cloud.merge(cloud, local)["added"] == 3                 # no search given: all of them
+
+
 # -- taking today's run: ready, under way, or none ---------------------------------------------
 
 RUN = {"databaseId": 42, "status": "completed", "conclusion": "success",

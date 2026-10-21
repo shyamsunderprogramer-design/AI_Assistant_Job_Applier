@@ -190,11 +190,18 @@ def eligible(job, authorisation: dict) -> tuple[bool, list[str]]:
     """Can this person take this job, from what the posting states? (yes/no, reasons not)."""
     reasons = []
     level = getattr(job, "clearance", None)
-    # An unanswered question never hides a job: only a stated answer can rule one out.
-    if level and getattr(job, "clearance_active", None) and authorisation.get("security_clearance") is not None:
-        need = LEVELS.index(level) + 1 if level in LEVELS else 1
-        if held_level(authorisation.get("security_clearance")) < need:
-            reasons.append(f"needs an active {level} clearance")
+    if level and getattr(job, "clearance_active", None):
+        named = "security" if level == "Clearance" else level
+        held = authorisation.get("security_clearance")
+        # An unanswered question never hides a job: only a stated answer can rule one out...
+        if held is not None:
+            need = LEVELS.index(level) + 1 if level in LEVELS else 1
+            if held_level(held) < need:
+                reasons.append(f"needs an active {named} clearance")
+        # ...and "not a US citizen" is one: a US clearance is granted to US citizens only. Left
+        # unanswered, it let a Secret-cleared role on Fort Meade through to an application.
+        elif authorisation.get("us_citizen") is False:
+            reasons.append(f"needs an active {named} clearance, which only US citizens hold")
     citizen = authorisation.get("us_citizen")
     need_citizen = getattr(job, "citizenship", None)
     if need_citizen == "US citizen" and citizen is False:

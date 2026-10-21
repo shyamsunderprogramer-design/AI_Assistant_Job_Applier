@@ -67,10 +67,24 @@ def _carried(row: sqlite3.Row, digest: str | None, stated_here: str | None, manu
     return {}, ""
 
 
+def _posting(row: sqlite3.Row):
+    """A cloud row as the fetch here reads a posting, for the search filter."""
+    from data_engineering.scraper.base import RawJob
+    return RawJob(source=row["source"], company=row["company"], company_slug=row["company_slug"],
+                  external_id=row["external_id"], title=row["title"], location=row["location"],
+                  description=row["description"], application_url=row["application_url"],
+                  requirements=row["requirements"] if "requirements" in row.keys() else None)
+
+
 def merge(cloud_path: Path, local_path: Path = Path("data/jobs.db"),
-          *, dry_run: bool = False) -> dict:
+          *, dry_run: bool = False, search=None) -> dict:
     """Add the cloud's new postings, and bring what their boards now say to the postings held
-    here: up or taken down, edited, the kind of job. Returns what happened."""
+    here: up or taken down, edited, the kind of job. Returns what happened.
+
+    `search`: this Mac's search (scraper.filters.resolve_filter). A new posting it rejects is
+    left out, as a fetch here leaves it out: the cloud's database keeps postings read under
+    every search it has ever run, and the first cloud morning (Oct 20, 2026) brought in
+    Kfar Saba, Gurugram and Rome, read there in September."""
     if not cloud_path.exists():
         raise FileNotFoundError(cloud_path)
 
@@ -149,6 +163,9 @@ def merge(cloud_path: Path, local_path: Path = Path("data/jobs.db"),
                               [*changes.values(), *key])
             continue
 
+        if search is not None and search.reject_reason(_posting(row)):
+            skipped += 1
+            continue
         if not dry_run:
             names = ", ".join(shared)
             marks = ", ".join("?" for _ in shared)
@@ -190,11 +207,19 @@ def run(argv: list[str]) -> int:
     ap.add_argument("cloud_db", type=Path)
     ap.add_argument("--local", type=Path, default=Path("data/jobs.db"))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--all", action="store_true", help="take postings this Mac's search would leave out too")
     args = ap.parse_args(argv[1:])
 
-    result = merge(args.cloud_db, args.local, dry_run=args.dry_run)
+    search = None
+    if not args.all:
+        from backend.config.loader import load_config
+        from data_engineering.scraper.filters import resolve_filter
+        search = resolve_filter(load_config())
+    result = merge(args.cloud_db, args.local, dry_run=args.dry_run, search=search)
     verb = "would add" if args.dry_run else "added"
     print(f"  {verb} {result['added']} new postings")
+    if result["skipped"]:
+        print(f"  left out {result['skipped']} your search would not keep")
     print(f"  refreshed {result['refreshed']} already held")
     if result["closed"] or result["reopened"]:
         print(f"  {result['closed']} taken down from their boards, {result['reopened']} back up")
