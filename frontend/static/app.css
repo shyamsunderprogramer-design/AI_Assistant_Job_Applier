@@ -120,7 +120,7 @@ thead th[aria-sort]{color:var(--signal-ink)}
 thead th .ar{font-size:9px;opacity:.75}
 
 /* status box — says what is happening, or plainly that nothing is */
-/* Beside the buttons: the place you are already looking once you press one. */
+/* Under the buttons: the place you are already looking once you press one. */
 .statusbox{display:flex;gap:9px;align-items:flex-start;min-width:250px;
   background:var(--surface);border:1px solid var(--line);border-radius:7px;
   padding:8px 12px}
@@ -128,6 +128,15 @@ thead th .ar{font-size:9px;opacity:.75}
 .sb-body{flex:1;min-width:0}
 .sb-line{display:flex;align-items:baseline;gap:10px}
 @media(max-width:720px){.statusbox{width:100%}}
+/* A line of its own, one size whatever it says or whether a bar shows: sized by its words, it
+   pushed the buttons onto a new line seconds after every load while a run was going. */
+.top > .statusbox{flex:1 0 100%;min-width:0}
+.top > .statusbox .sb-track[hidden]{display:block!important;visibility:hidden}  /* over [hidden] below */
+/* As wide as the longer of its two names (index.html: showScheduled), whichever it shows, so
+   the buttons beside it stay put when one replaces the other. */
+#run-scrape::before,#run-scrape::after{display:block;height:0;overflow:hidden;visibility:hidden}
+#run-scrape::before{content:"Get latest postings"}
+#run-scrape::after{content:"Morning run going…"}
 .sb-dot{margin-top:5px}
 .sb-dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
 .sb-dot.on{background:var(--signal)}

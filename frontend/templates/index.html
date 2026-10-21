@@ -59,16 +59,18 @@
     <button class="btn" id="run-score">Re-score</button>
     <button class="btn" id="run-apply"
       title="Opens a browser, fills each Greenhouse form, and waits for you to press Submit">Apply to next 10</button>
-    <div class="statusbox idle" id="statusbox" aria-live="polite">
-      <span class="sb-dot" id="sb-dot"></span>
-      <div class="sb-body">
-        <div class="sb-line">
-          <span class="sb-title" id="sb-title">All jobs idle</span>
-          <span class="sb-eta" id="sb-eta"></span>
-        </div>
-        <div class="sb-track" id="sb-track" hidden><i id="sb-fill"></i></div>
-        <div class="sb-detail" id="sb-detail">Nothing running</div>
+  </div>
+  {# A line of its own, one size whatever it says: beside the buttons it grew with a run's
+     longer words and pushed them onto a new line, seconds after every page load. #}
+  <div class="statusbox idle" id="statusbox" aria-live="polite">
+    <span class="sb-dot" id="sb-dot"></span>
+    <div class="sb-body">
+      <div class="sb-line">
+        <span class="sb-title" id="sb-title">All jobs idle</span>
+        <span class="sb-eta" id="sb-eta"></span>
       </div>
+      <div class="sb-track" id="sb-track" hidden><i id="sb-fill"></i></div>
+      <div class="sb-detail" id="sb-detail">Nothing running</div>
     </div>
   </div>
 </header>
@@ -750,9 +752,11 @@ function showScheduled(d) {
   }
   ['scrape', 'score'].forEach(t => {
     $('run-'+t).disabled = true;
-    $('run-'+t).textContent = 'Morning run going…';
     $('run-'+t).title = 'The morning run does this; the button comes back when it finishes.';
   });
+  // Re-score keeps its name: "Morning run going…" on it too made the row wider, and the
+  // box below already says what is running.
+  $('run-scrape').textContent = 'Morning run going…';
 }
 function watchScheduled(first) {
   showScheduled(first);

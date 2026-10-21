@@ -302,7 +302,6 @@ tr.ineligible td{opacity:.72}
 }
 @media (max-width:600px){
   .top > .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .top > .row .statusbox{grid-column:1 / -1}
 }
 /* Health */
 .health-stats{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
