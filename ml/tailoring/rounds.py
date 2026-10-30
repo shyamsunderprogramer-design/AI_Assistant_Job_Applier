@@ -25,13 +25,23 @@ from pathlib import Path
 TARGET = 100
 ROUNDS = 3
 
+# The resume is the only evidence (30 Oct 2026). On 22 Oct the last rule here was rewritten into
+# "Add a skill if not already present, tool or claim the resume does not contain", the opposite
+# of the rule it replaced, and every round after the first was sent it (audit RT-01). A skill the
+# uploaded resume lacks counts only when the person added it from a job page and ticked that it is
+# true (ml/resume/additions.py): it is then part of the resume, so `fixable` already holds it.
 ALIGN = """# Round {round}: match the posting more closely
 The last draft matched the posting's keywords {after}% (target {target}%).
 - These terms are in the resume but missing from the draft. Bring each back where it
   truthfully fits: {fixable}
-- Where the resume shows this kind of work in other words, describe it in the posting's
-  terms: {concepts}
-- Add a skill if not already present, tool or claim the resume does not contain."""
+- The posting's words for kinds of work the resume never names. For each, find a line whose
+  own work is that work and describe it with the term; if none is, leave it out: {concepts}
+- The resume, with the lines the person added and confirmed, is the only evidence. Never add a
+  skill, tool, certification, experience, employer, title, date, duty, achievement or number it
+  does not contain: the posting asking for one is not evidence the person has it.
+- Never present related or similar work as direct experience of what the posting names.
+- What the resume does not show stays a gap. A match below the target is then the honest
+  result; never add words to reach it."""
 
 
 def _pdf_text(draft) -> str:

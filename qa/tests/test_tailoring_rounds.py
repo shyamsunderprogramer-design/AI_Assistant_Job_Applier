@@ -78,3 +78,63 @@ def test_the_company_name_and_its_city_are_not_keywords_to_match():
               "Terraform modules; CI/CD pipelines.")
     result = compare(resume, None, jd, company="Catawiki")
     assert result["before"] == 100, result          # catawikians, lisbon, improve do not count
+
+
+# -- the resume is the only evidence (30 Oct 2026, audit RT-01) ----------------------------------
+# From 22 Oct round two was told to "Add a skill if not already present, tool or claim the resume
+# does not contain". Made-up resume, posting and draft; the keyword match is the real one.
+
+MASTER = """JORDAN EXAMPLE
+jordan@example.com
+
+EXPERIENCE
+PLATFORM ENGINEER, ACME, USA     Jan 2022 – Present
+- Built Terraform modules for 200+ AWS workloads.
+- Ran Kubernetes clusters on EKS.
+SYSTEMS ENGINEER, GLOBEX, USA     Jan 2016 – Dec 2021
+- Maintained VMware clusters.
+"""
+ROLE = "PLATFORM ENGINEER, ACME, USA     Jan 2022 – Present"
+JD = "You will define Protobuf schemas, run Kafka and Kubernetes, and build Terraform modules on AWS."
+DRAFT = "PLATFORM ENGINEER, ACME, USA Jan 2022 – Present. Ran Kubernetes clusters on EKS for AWS workloads."
+
+
+def round_two(monkeypatch, resume_text):
+    """The keyword match of the draft against this resume, and what round two is told."""
+    from ml.resume.ats import compare
+    measured = compare(resume_text, DRAFT, JD)
+    monkeypatch.setattr(rounds, "ats_of", lambda draft, jd, company=None: measured)
+    asked = []
+
+    def make(extra, focus=None):
+        asked.append(extra)
+        return Draft(len(asked) - 1)
+    rounds.best_draft(make, JD, rounds=2)
+    return measured, asked[1]
+
+
+def test_a_skill_only_the_posting_names_is_never_asked_for_and_stays_a_gap(monkeypatch):
+    from ml.resume.parser import parse_text
+    measured, told = round_two(monkeypatch, parse_text(MASTER).text())
+    assert {"kafka", "protobuf"} <= set(measured["tools"]) and not {"kafka", "protobuf"} & set(measured["fixable"])
+    assert "kafka" not in told.lower() and "protobuf" not in told.lower()
+    assert "terraform" in told.split("truthfully fits:")[1].splitlines()[0]   # the resume's own, lost by the draft
+    assert "Never add a" in told and "is not evidence the person has it" in told
+    assert "Never present related or similar work as direct experience" in told
+    assert "stays a gap" in told and "never add words to reach it" in told
+    assert "Add a skill if not already present" not in rounds.ALIGN
+
+
+def test_a_skill_the_person_added_and_confirmed_may_come_back_and_the_posting_alone_still_adds_nothing(
+        monkeypatch, tmp_path):
+    """Not in the uploaded resume, but added from a job page with "I've used this" and ticked true
+    (ml/resume/additions.py): that is evidence. Kafka, still only in the posting, is not."""
+    from ml.resume import additions
+    from ml.resume.parser import parse_text
+    store = tmp_path / "additions.yaml"
+    additions.add(parse_text(MASTER), ROLE, "Defined Protobuf schemas for service contracts", "Protobuf", True,
+                  path=store)
+    measured, told = round_two(monkeypatch, additions.apply(parse_text(MASTER), path=store).text())
+    assert "protobuf" in measured["fixable"] and "kafka" in measured["tools"]
+    assert "protobuf" in told.split("truthfully fits:")[1].splitlines()[0]
+    assert "kafka" not in told.lower()
