@@ -20,7 +20,9 @@ The checks, each naming the words it is about:
 
 Saving writes cover-letter.md (what the application attaches and the job page
 links), a .docx and a .pdf with the person's name and contact line at the
-top, and keeps the version it replaced in letter-versions/.
+top, and keeps the version it replaced in letter-versions/. The documents are
+named like the tailored resume beside them ("Jordan_Example_Cover_Letter_Acme.pdf"),
+in its template, and every letter gets them, written by the model or by the person.
 """
 
 from __future__ import annotations
@@ -34,8 +36,48 @@ from ml.resume.letter import MAX_WORDS, check_letter
 
 VERSIONS = "letter-versions"
 KEEP_VERSIONS = 30
+# The documents' names before 22 Oct 2026: still read where a folder has only them.
 DOCX_FILE = "cover-letter.docx"
 PDF_FILE = "cover-letter.pdf"
+
+
+def document_names(folder: Path) -> dict[str, str]:
+    """The letter's .docx and .pdf, named like the resume beside them -- "Jordan_Example_Cover_Letter_Acme"
+    -- the name it goes out under on an employer's form too."""
+    from ml.resume.packet import company_in, file_name, person_name
+    stem = file_name(person_name(), company_in(Path(folder)), "Cover_Letter", "")
+    return {"docx": f"{stem}.docx", "pdf": f"{stem}.pdf"}
+
+
+def document(folder: Path, kind: str) -> Path | None:
+    """The folder's letter document of this kind ("pdf" or "docx"), under its name or the old one."""
+    for name in (document_names(folder)[kind], {"pdf": PDF_FILE, "docx": DOCX_FILE}[kind]):
+        if (Path(folder) / name).exists():
+            return Path(folder) / name
+    return None
+
+
+def look_for_job(cfg, job_id: int) -> tuple[list[str], str | None, dict | None]:
+    """(header lines, template, look) for a job's letter: its tailored resume's, else the default --
+    so the letter is drawn in the same template as the resume sent with it."""
+    import json
+    from ml.resume.parser import parse_resume
+    from ml.resume.pipeline import base_resume_path
+    from ml.tailoring.draft import header_of
+    try:
+        header = header_of(parse_resume(base_resume_path(cfg)))
+    except Exception:
+        header = []
+    template, look = cfg.get("resume.template") or None, None
+    try:
+        from ml.tailoring.pipeline import JOBS, RUNS
+        record = json.loads((JOBS / f"{job_id}.json").read_text())
+        run = record.get("best") or record.get("run")
+        drawn = json.loads((RUNS / run / "result.json").read_text())["draft"]["result"]
+        template, look = drawn.get("template") or template, drawn.get("look") or None
+    except Exception:
+        pass
+    return header, template, look
 
 GREETING = re.compile(r"^(dear|hello|hi|to whom|greetings)\b", re.I)
 CLOSING = re.compile(r"^(sincerely|best|regards|kind regards|warm regards|best regards|thank you|thanks|"
@@ -201,13 +243,18 @@ def restore(folder: Path, version_id: str, header=None, template=None, look=None
 
 def _documents(folder: Path, text: str, header: list[str] | None, template: str | None,
                look: dict | None) -> dict:
-    """cover-letter.docx and .pdf: the name and contact line on top, the date, the letter."""
+    """The letter's .docx and .pdf, named like the resume: the name and contact line on top, the date,
+    the letter. The copies under the old names go, so the folder holds one letter -- the one sent."""
+    names = document_names(folder)
     try:
-        write_docx(folder / DOCX_FILE, text, header or [], template, look)
-        write_pdf(folder / PDF_FILE, text, header or [], template, look)
-        return {"docx": DOCX_FILE, "pdf": PDF_FILE}
+        write_docx(folder / names["docx"], text, header or [], template, look)
+        write_pdf(folder / names["pdf"], text, header or [], template, look)
     except Exception:                       # the .md is the letter; documents are a convenience
         return {}
+    for old in (DOCX_FILE, PDF_FILE):
+        if old not in names.values():
+            (folder / old).unlink(missing_ok=True)
+    return names
 
 
 def _contact_lines(header: list[str]) -> tuple[str, str]:

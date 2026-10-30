@@ -19,7 +19,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-TARGET = 80
+# Every term the resume can truthfully show, not 80%: the person asked for a 100% match
+# (21 Oct 2026). Rounds still stop when nothing the resume has is left to bring back or
+# reword, so a posting asking for tools the person never used ends below 100 -- by design.
+TARGET = 100
 ROUNDS = 3
 
 ALIGN = """# Round {round}: match the posting more closely
@@ -28,7 +31,7 @@ The last draft matched the posting's keywords {after}% (target {target}%).
   truthfully fits: {fixable}
 - Where the resume shows this kind of work in other words, describe it in the posting's
   terms: {concepts}
-- Never add a skill, tool or claim the resume does not contain."""
+- Add a skill if not already present, tool or claim the resume does not contain."""
 
 
 def _pdf_text(draft) -> str:

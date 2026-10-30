@@ -23,6 +23,30 @@ _UNICODE_SPACE = re.compile(r"[\u00a0\u2007\u202f\u2009\u200a\u2002-\u2006]")
 _BLANKS = re.compile(r"[^\S\n]+")         # spaces and tabs, not line breaks
 _LINES = re.compile(r"\s*\n\s*")
 
+# Where a job site's own panels start under a posting copied with its whole page.
+_PAGE_END = re.compile(r"^[^\S\n]*(stats for this job|salary comparison|receive similar jobs|similar jobs|"
+                       r"popular searches|jobs you may (?:also )?like|people also viewed|more jobs like this|"
+                       r"report this job|show more jobs)\b", re.I | re.M)
+
+
+def posting_only(text: str | None, title: str = "") -> str:
+    """A posting pasted with its whole page, cut to the posting: from the job's title (when the page
+    names it near the top) to where the site's own panels start.
+
+    On 22 Oct 2026 an Adzuna page pasted whole put its menus, salary charts and "Similar jobs" --
+    other employers, other cities -- into a posting, and "neural concept" and "san francisco" were
+    offered as kinds of work to claim. A cut that would leave under 50 words is not made.
+    """
+    text = text or ""
+    start = 0
+    found = re.search(re.escape(title.strip()), text, re.I) if title and title.strip() else None
+    if found and found.start() < len(text) * 0.3:
+        start = found.start()
+    end = _PAGE_END.search(text, start + 200)
+    body = text[start:end.start() if end else len(text)].rstrip()
+    body = re.sub(r"\n[^\S\n]*apply for this job[^\S\n]*$", "", body, flags=re.I).rstrip()
+    return body if len(body.split()) >= 50 else text
+
 
 def _normalise(text: str | None) -> str:
     """Ordinary spaces, so a pattern written with one keeps working -- and a run of blanks as one

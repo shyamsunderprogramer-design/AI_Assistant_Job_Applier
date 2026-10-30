@@ -20,6 +20,7 @@ import re
 import shutil
 import sqlite3
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -31,7 +32,10 @@ from devops.backup_db import destination as backup_folder  # noqa: E402
 FAIL_RATE_WARN = 0.05      # more than 5% of board scrapes failing in a day
 BACKUP_MAX_HOURS = 36
 DISK_MIN_GB = 20
-LONG_RUN_HOURS = 6         # the lock is broken after 6h, so a longer run can overlap the next
+# Awake, a morning run took about six hours once the board list passed 20,000 (Oct 2026);
+# a run held its lock however long it went, so a longer one only means a slow morning.
+LONG_RUN_HOURS = 8
+FAILING_LISTED = 15        # boards named in the table; the count covers every one
 
 
 def _db(root: Path) -> sqlite3.Connection:
@@ -58,7 +62,7 @@ def slept_during(start: datetime, end: datetime, log_text: str) -> dict:
     A run of 12 hours on 8 Oct 2026 was the Mac asleep on battery at 4%, waking for a
     few seconds every quarter hour; the report said only "took 12 hours".
     """
-    seconds, battery, lid, low = 0, False, False, None
+    seconds, battery, lid, low, high = 0, False, False, None, None
     for line in log_text.splitlines():
         m = _SLEEP.match(line)
         if not m:
@@ -71,31 +75,39 @@ def slept_during(start: datetime, end: datetime, log_text: str) -> dict:
         lid |= "Clamshell" in m.group(2)
         if m.group(4):
             low = min(low, int(m.group(4))) if low is not None else int(m.group(4))
-    return {"hours": round(seconds / 3600, 1), "battery": battery, "lid": lid, "charge": low}
+            high = max(high, int(m.group(4))) if high is not None else int(m.group(4))
+    # The highest too: on 15 Oct every sleep was at 100%, and "down to 100%" read wrong.
+    return {"hours": round(seconds / 3600, 1), "battery": battery, "lid": lid, "charge": low, "charge_max": high}
 
 
 def morning_runs(root: Path, since: date) -> dict[str, dict | None]:
     """Each day's daily run from the pipeline log, by the day it STARTED.
 
-    {day: {"exit": int | None, "hours": float, "failed": [stage, ...]}}, or None when no
-    run started that day. A run that is still going has exit None.
+    {day: {"exit": int | None, "hours": float, "failed": [stage, ...]}}. A run that is
+    still going has exit None; one stopped from the Jobs page has "stopped", and one
+    that ended with no line in the log has "unfinished". A morning with no run is None,
+    or {"held_by": day} when an earlier run still held the lock -- one that began before
+    these days too: on 18 Oct the report said only "No morning run started on
+    2026-10-12", because the run that held it had started on the 10th.
     """
     days: dict[str, dict | None] = {(since + timedelta(d)).isoformat(): None
                                     for d in range((date.today() - since).days + 1)}
     log = root / "data" / "daily_run.log"
     if not log.exists():
         return days
-    run = None
+    runs, run = [], None
     for line in log.read_text(errors="replace").splitlines():
-        m = re.match(r"(\d{4}-\d{2}-\d{2} [\d:]+)\s+=== daily (starting|finished, exit (\d+))", line)
+        m = re.match(r"(\d{4}-\d{2}-\d{2} [\d:]+)\s+=== daily (starting|finished, exit (\d+)|stopped)", line)
         if m:
             at = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
             if m.group(2) == "starting":
                 run = {"start": at, "exit": None, "hours": 0.0, "failed": []}
-                if at.date().isoformat() in days:
-                    days[at.date().isoformat()] = run
+                runs.append(run)
             elif run:
-                run["exit"] = int(m.group(3))
+                if m.group(3):
+                    run["exit"] = int(m.group(3))
+                else:                       # "=== daily stopped from the Jobs page ==="
+                    run["stopped"] = True
                 run["hours"] = round((at - run["start"]).total_seconds() / 3600, 1)
                 run["end"] = at
                 run = None
@@ -105,19 +117,25 @@ def morning_runs(root: Path, since: date) -> dict[str, dict | None]:
         if run and stage:
             run["failed"].append(f"{stage.group(1)} ({stage.group(2)})")
     sleeping = None
-    for r in days.values():
-        if r:
-            if r["hours"] > LONG_RUN_HOURS and r.get("end"):
-                sleeping = sleep_log() if sleeping is None else sleeping
-                r["slept"] = slept_during(r["start"], r["end"], sleeping)
-            # The mornings this run was still going on: no new run starts while one holds the lock.
-            # A run with no end that a later run followed simply died; it held nothing.
-            later = [x for x in days.values() if x and x.get("start") and x["start"] > r["start"]]
-            end = r.get("end") or (None if later else datetime.now())
-            r["held"] = ([d for d in days if r["start"].date().isoformat() < d <= end.date().isoformat()]
-                         if end else [])
-            r.pop("start", None)
-            r.pop("end", None)
+    for i, r in enumerate(runs):
+        day = r["start"].date().isoformat()
+        # The mornings this run was still going on: no new run starts while one holds the lock.
+        # A run with no end that a later run followed simply died; it held nothing.
+        end = r.get("end") or (None if i + 1 < len(runs) else datetime.now())
+        r["held"] = [d for d in days if end and day < d <= end.date().isoformat()]
+        for d in r["held"]:
+            if days[d] is None:
+                days[d] = {"held_by": day}
+        if day not in days:
+            continue
+        if end is None:
+            r["unfinished"] = True
+        if r["hours"] > LONG_RUN_HOURS and r.get("end"):
+            sleeping = sleep_log() if sleeping is None else sleeping
+            r["slept"] = slept_during(r["start"], r["end"], sleeping)
+        r.pop("start")
+        r.pop("end", None)
+        days[day] = r
     return days
 
 
@@ -127,11 +145,21 @@ def collect(root: Path = ROOT, days: int = 7, backups: Path | None = None) -> di
     s = since.isoformat()
     with _db(root) as db:
         q = lambda sql, *a: db.execute(sql, a).fetchall()  # noqa: E731
-        scrapes = q("SELECT date(created_at), count(*), sum(ok), sum(jobs_new) FROM scrape_log "
-                    "WHERE date(created_at) >= ? GROUP BY 1 ORDER BY 1", s)
-        failing = q("SELECT source, company_slug, count(*), max(error_type) FROM scrape_log "
-                    "WHERE date(created_at) >= ? AND ok = 0 GROUP BY 1, 2 HAVING count(*) >= 3 "
-                    "ORDER BY 3 DESC LIMIT 15", s)
+        # The Mac's own days, as the morning runs are counted: by UTC, a run that went on
+        # past 7 PM was split across two days.
+        day = "date(created_at, 'localtime')"
+        scrapes = q(f"SELECT {day}, count(*), sum(ok), sum(jobs_new) FROM scrape_log "
+                    f"WHERE {day} >= ? GROUP BY 1 ORDER BY 1", s)
+        failed_by_source = q(f"SELECT {day}, source, count(*) FROM scrape_log WHERE {day} >= ? AND ok = 0 "
+                             "GROUP BY 1, 2 ORDER BY 3 DESC", s)
+        # Every board that keeps failing, not the first 15: the line said "15 board(s)" on every
+        # report, when 18 Oct had 87. A host turning us away is not the board's doing: apart below.
+        failing = q(f"SELECT source, company_slug, count(*), max(error_type) FROM scrape_log "
+                    f"WHERE {day} >= ? AND ok = 0 AND error_type != 'RateLimited' "
+                    "GROUP BY 1, 2 HAVING count(*) >= 3 ORDER BY 3 DESC", s)
+        refused = q(f"SELECT source, sum(error_type = 'RateLimited'), count(*) FROM scrape_log "
+                    f"WHERE {day} >= ? GROUP BY 1 HAVING sum(error_type = 'RateLimited') > 0 ORDER BY 2 DESC", s)
+        (boards,), = q("SELECT count(*) FROM companies WHERE active = 1")
         found = q("SELECT date(found_at), count(*) FROM jobs WHERE date(found_at) >= ? GROUP BY 1 ORDER BY 1", s)
         (open_now,), = q("SELECT count(*) FROM jobs WHERE is_open = 1")
         (closed,), = q("SELECT count(*) FROM jobs WHERE date(closed_at) >= ?", s)
@@ -152,9 +180,17 @@ def collect(root: Path = ROOT, days: int = 7, backups: Path | None = None) -> di
                        "mb": round(st.st_size / 1e6, 1), "count": len(nights)}
     free_gb = round(shutil.disk_usage(root).free / 1e9, 1)
 
-    report = {"from": s, "to": date.today().isoformat(), "runs": morning_runs(root, since),
-              "scrapes": [{"day": d, "boards": n, "failed": n - (ok or 0), "new": new or 0} for d, n, ok, new in scrapes],
-              "failing": [{"source": a, "board": b, "failures": c, "error": e} for a, b, c, e in failing],
+    report = {"from": s, "to": date.today().isoformat(), "made": datetime.now().isoformat(timespec="minutes"),
+              "runs": morning_runs(root, since),
+              "scrapes": [{"day": d, "boards": n, "failed": n - (ok or 0), "new": new or 0,
+                           "sources": {src: f for dd, src, f in failed_by_source if dd == d}}
+                          for d, n, ok, new in scrapes],
+              "boards": boards,
+              "failing": [{"source": a, "board": b, "failures": c, "error": e}
+                          for a, b, c, e in failing[:FAILING_LISTED]],
+              "failing_count": len(failing),
+              "failing_sources": dict(Counter(a for a, *_ in failing).most_common()),
+              "refused": [{"source": a, "refused": n, "reads": m} for a, n, m in refused],
               "found": dict(found), "open": open_now, "closed": closed, "applied": applied,
               "statuses": statuses, "prepared": prepared, "backup": last_backup, "free_gb": free_gb}
     report["problems"] = problems(report)
@@ -165,13 +201,16 @@ def problems(r: dict) -> list[str]:
     out = []
     today = date.today().isoformat()
     for day, run in r["runs"].items():
-        if run is None:
-            holder = next((d for d, x in r["runs"].items() if x and day in (x.get("held") or [])), None)
-            if holder:
-                out.append(f"No morning run started on {day}: the run from {holder} was still going "
+        if run is None or "held_by" in run:
+            if run:
+                out.append(f"No morning run started on {day}: the run from {run['held_by']} was still going "
                            f"(a new one waits for it).")
             elif day != today:
                 out.append(f"No morning run started on {day}.")
+        elif run.get("stopped"):
+            continue                        # stopped from the Jobs page: someone meant it
+        elif run.get("unfinished"):
+            out.append(f"The morning run on {day} stopped partway: the run log has no end for it.")
         elif run["exit"] and run["failed"]:
             out.append(f"On {day} part of the morning run failed: {', '.join(run['failed'])}; the rest ran.")
         elif run["exit"]:
@@ -179,21 +218,31 @@ def problems(r: dict) -> list[str]:
         elif run["hours"] > LONG_RUN_HOURS:
             slept = run.get("slept") or {}
             if slept.get("hours", 0) >= 1:
-                how = ("with the lid closed" if slept["lid"] else "") + (
-                    (" and " if slept["lid"] else "") + "on battery"
-                    + (f" (down to {slept['charge']}%)" if slept.get("charge") is not None else "")
-                    if slept["battery"] else "")
+                low, high = slept.get("charge"), slept.get("charge_max")
+                charge = "" if low is None else f" (at {low}%)" if low == high else f" (down to {low}%)"
+                how = " and ".join((["with the lid closed"] if slept["lid"] else [])
+                                   + ([f"on battery{charge}"] if slept["battery"] else []))
                 out.append(f"The morning run on {day} took {run['hours']:.0f} hours: the Mac was asleep for "
                            f"{slept['hours']:.0f} of them{(' ' + how) if how else ''}. Keep it plugged in "
-                           f"with the lid open and the run takes about an hour and a half.")
+                           f"with the lid open so it stays awake through the run.")
             else:
                 out.append(f"The morning run on {day} took {run['hours']:.0f} hours.")
+    # A day that read under a third of the boards is a run still going or cut short, too few
+    # to judge: made mid-run on 18 Oct, the report called 15 failures in the first 135 a problem.
     for row in r["scrapes"]:
-        if row["boards"] and row["failed"] / row["boards"] > FAIL_RATE_WARN:
-            out.append(f"{row['failed']} of {row['boards']} board scrapes failed on {row['day']}.")
-    if r["failing"]:
-        out.append(f"{len(r['failing'])} board(s) failed 3+ times this week. A board that fails five times in a "
-                   f"row is switched off by itself: the company has usually moved to another job-board system.")
+        if row["boards"] * 3 >= r.get("boards", 0) and row["failed"] > FAIL_RATE_WARN * row["boards"]:
+            worst = ", ".join(f"{s} {n}" for s, n in list((row.get("sources") or {}).items())[:3])
+            out.append(f"{row['failed']} of {row['boards']} board scrapes failed on {row['day']}"
+                       f"{f' ({worst})' if worst else ''}.")
+    if r.get("failing_count", len(r["failing"])):
+        where = ", ".join(f"{s} {n}" for s, n in list((r.get("failing_sources") or {}).items())[:3])
+        out.append(f"{r.get('failing_count', len(r['failing']))} board(s) failed 3+ times this week"
+                   f"{f' ({where})' if where else ''}. A board that fails five times in a row is switched off "
+                   f"by itself: the company has usually moved to another job-board system.")
+    for x in r.get("refused", []):
+        if x["refused"] > FAIL_RATE_WARN * x["reads"]:
+            out.append(f"{x['source'].capitalize()} turned us away for asking too often on {x['refused']} of "
+                       f"{x['reads']} board reads this week, so those boards were not read.")
     if not r["backup"]:
         out.append("No database backup found.")
     elif r["backup"]["hours"] > BACKUP_MAX_HOURS:
@@ -215,12 +264,20 @@ def render(r: dict) -> str:
                "<ul class=bad>" + "".join(f"<li>{e(p)}</li>" for p in r["problems"]) + "</ul>")
     b = r["backup"]
     def result(run):
-        if run is None:
-            return "did not start"
+        if run is None or "held_by" in run:
+            return "did not start" + (f": the run from {run['held_by']} was still going" if run else "")
+        if run.get("stopped"):
+            return "stopped from the Jobs page"
+        if run.get("unfinished"):
+            return "did not finish"
         if run["exit"] is None:
             return "still running"
         return "ok" if run["exit"] == 0 else ("partly failed: " + ", ".join(run["failed"]) if run["failed"] else f"exit {run['exit']}")
-    runs = [(d, result(x), f"{x['hours']:.1f} h" if x and x["exit"] is not None else "") for d, x in r["runs"].items()]
+
+    def took(run):
+        done = run and "held_by" not in run and (run["exit"] is not None or run.get("stopped"))
+        return f"{run['hours']:.1f} h" if done else ""
+    runs = [(d, result(x), took(x)) for d, x in r["runs"].items()]
     scr = [(x["day"], x["boards"], x["failed"], f"{x['failed'] / x['boards']:.1%}" if x["boards"] else "", x["new"])
            for x in r["scrapes"]]
     return f"""<!doctype html><meta charset=utf-8><title>Health {e(r['to'])}</title>
@@ -241,7 +298,7 @@ td,th{{border-bottom:1px solid #e5e5ea;padding:4px 8px;text-align:left}}.ok{{col
 <div><b>{r['free_gb']} GB</b>free on Storage</div></div>
 <h2>Morning runs</h2>{table(('Day', 'Result', 'Took'), runs)}
 <h2>Scraping</h2>{table(('Day', 'Boards', 'Failed', 'Rate', 'New jobs'), scr)}
-<h2>Boards failing 3+ times</h2>{table(('Source', 'Board', 'Failures', 'Last error'), [tuple(x.values()) for x in r['failing']])}
+<h2>Boards failing 3+ times ({r['failing_count']})</h2>{table(('Source', 'Board', 'Failures', 'Last error'), [tuple(x.values()) for x in r['failing']])}
 <h2>Your applications</h2>{table(('Status', 'Jobs'), sorted(r['statuses'].items()))}
 <p class=dim>Made {e(datetime.now().strftime('%Y-%m-%d %H:%M'))} by devops/health_report.py ·
 <a href="/health?fresh=1">make a fresh one</a> · <a href="/">back to jobs</a></p>"""

@@ -212,16 +212,36 @@ def default_model_for(provider: str) -> str:
     return str(PROVIDERS.get(provider, {}).get("default_model", ""))
 
 
-def model_name(cfg=None) -> str:
-    provider = provider_name(cfg)
+def model_name(cfg=None, *, provider: str | None = None) -> str:
+    primary = provider_name(cfg)
+    provider = provider or primary
     chosen = os.getenv("RESUME_MODEL", "").strip()
-    if chosen:
+    # RESUME_MODEL belongs to the selected provider, never to its backups.
+    if chosen and provider == primary:
         return chosen
     return str(_setting(cfg, f"resume.{provider}.model",
                         default_model_for(provider)))
 
 
 # -- the shared entry point -------------------------------------------------
+
+def _failure_summary(exc: Exception) -> str:
+    """Describe failures without CLI output that may echo private input."""
+    message = str(exc).lower()
+    if "timed out" in message or "timeout" in message:
+        return "request timed out"
+    if any(word in message for word in ("not signed in", "login", "log in", "sign in",
+                                        "authenticat", "unauthorized", "invalid api key")):
+        return "sign-in or authentication failed"
+    if "model" in message and any(word in message for word in (
+            "not found", "not supported", "unsupported", "unknown", "does not exist", "does not recognise")):
+        return "model was rejected or unavailable"
+    if any(word in message for word in ("limit", "quota", "overloaded", "429", "529")):
+        return "usage limit or service capacity restriction"
+    if isinstance(exc, ProviderBusy):
+        return "temporarily unavailable or cooling down after an earlier failure"
+    return "provider request failed; no recognized failure category"
+
 
 def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
              want_json: bool = True) -> Completion:
@@ -241,24 +261,25 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
         _BUSY_UNTIL[provider] = time.monotonic() + BUSY_REST_S
         if not _setting(cfg, "resume.fallback_to_local", True):
             raise
+        log.warning("%s could not finish: %s", provider, _failure_summary(exc))
         # Another plan the person is signed in to answers in about a minute; the
         # Ollama cloud models took five (a 15-minute tailoring run, 7 Oct 2026).
         for other in other_plans(provider, cfg):
-            log.warning("%s is busy (%s) — writing with %s instead",
-                        provider, str(exc).split(":")[0][:80], other)
+            log.warning("Trying %s for this request", other)
             try:
                 return _dispatch(other, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
             except (ProviderBusy, ProviderUnavailable) as again:
+                log.warning("%s could not finish: %s", other, _failure_summary(again))
                 if isinstance(again, ProviderBusy):
                     _BUSY_UNTIL[other] = time.monotonic() + BUSY_REST_S
         failed = model_name(cfg) if provider == "ollama" else ""
         last = exc
         for backup in fallback_models(cfg, skip=failed):
-            log.warning("%s is busy (%s) — writing with %s instead",
-                        failed or provider, str(last).split(":")[0][:80], backup)
+            log.warning("Trying %s for this request", backup)
             try:
                 return _ollama(system, user, cfg, want_json=want_json, model=backup)
             except ProviderBusy as again:
+                log.warning("%s could not finish: %s", backup, _failure_summary(again))
                 failed, last = backup, again
         raise last
 
@@ -296,7 +317,7 @@ def _dispatch(provider, system, user, cfg, *, max_tokens, want_json) -> Completi
         return _claude_code(system, user, cfg)
     if provider in ("chatgpt", "gemini"):
         from ml.resume import plans
-        return getattr(plans, provider)(system, user, model_name(cfg))
+        return getattr(plans, provider)(system, user, model_name(cfg, provider=provider))
     if provider == "anthropic":
         return _anthropic(system, user, cfg, max_tokens=max_tokens)
     if provider == "ollama":
@@ -466,7 +487,7 @@ def _claude_code(system: str, user: str, cfg=None) -> Completion:
         raise ProviderUnavailable(
             "Claude Code is not installed (no `claude` command).\n"
             "  Install it, run `claude` once to sign in, then try again.")
-    model = model_name(cfg)
+    model = model_name(cfg, provider="claude-code")
     # Six minutes, not fifteen: a rewrite answers in one to three, and a call
     # that hangs held the page for 25 minutes before the backup model ran.
     timeout = int(_setting(cfg, "resume.claude-code.timeout_seconds", CLAUDE_CODE_TIMEOUT_S))

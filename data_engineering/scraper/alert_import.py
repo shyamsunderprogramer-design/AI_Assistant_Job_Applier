@@ -117,7 +117,6 @@ class _Mailbox:
 
     def __init__(self, address: str, password: str):
         self.address, self.password, self.conn = address, password, None
-        self._connect()
 
     def _connect(self) -> None:
         self.close()
@@ -126,15 +125,19 @@ class _Mailbox:
         self.conn.select("INBOX", readonly=True)     # cannot alter anything
 
     def _retry(self, action):
+        """Connecting is part of each try: on 21 Oct 2026 a fetch timed out, the reconnect
+        timed out too, and since it ran outside the try that lost the whole stage."""
         import time
         for attempt in range(self.RETRIES):
             try:
+                if self.conn is None:
+                    self._connect()
                 return action()
             except (imaplib.IMAP4.abort, OSError):
                 if attempt == self.RETRIES - 1:
                     raise
                 time.sleep(2 * (attempt + 1))
-                self._connect()
+                self.close()
 
     def search(self, criteria: str) -> list[bytes]:
         typ, data = self._retry(lambda: self.conn.uid("SEARCH", None, criteria))

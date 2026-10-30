@@ -17,6 +17,15 @@ def site(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "resume_label", lambda: None)
     monkeypatch.setattr(webapp, "applicant_state",
                         lambda: {"ready": False, "exists": False})
+    # Whether Ollama runs on the Mac running the tests is not what they test: it was off on 24 Oct
+    # 2026 and two of them failed. A local service is up unless a test says otherwise.
+    monkeypatch.setattr(webapp, "service_up", lambda base_url, timeout=0.4: True)
+    # The project's default settings, never the person's config and .env -- with those, cfg() also
+    # opened their data/jobs.db (found 25 Oct 2026).
+    import yaml
+
+    from backend.config.loader import DEFAULT_CONFIG_PATH, Config
+    monkeypatch.setattr(webapp, "_cfg", Config(yaml.safe_load(DEFAULT_CONFIG_PATH.read_text()) or {}))
     webapp.app.config["TESTING"] = True
     return tmp_path
 
@@ -182,6 +191,12 @@ def test_a_provider_with_no_key_is_marked_not_ready(site):
     assert ready["openai"] is True
     assert ready["grok"] is False
     assert ready["ollama"] is True          # needs no key at all
+
+
+def test_a_local_writer_that_is_not_running_is_not_ready(site, monkeypatch):
+    monkeypatch.setattr(webapp, "service_up", lambda base_url, timeout=0.4: False)
+    ready = {o["name"]: o["ready"] for o in webapp.writing_model_state()["options"]}
+    assert ready["ollama"] is False         # no key needed, but nothing answering either
 
 
 def test_choosing_a_provider_writes_it_to_env(site):

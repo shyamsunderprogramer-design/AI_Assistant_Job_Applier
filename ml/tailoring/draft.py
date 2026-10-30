@@ -54,6 +54,8 @@ class Draft:
     model_omitted: list = field(default_factory=list)
     max_pages: int = 4
     min_pages: int = 3
+    # The titles swapped for this posting from the person's own list (ml/resume/titles.py), as notes.
+    titles: list = field(default_factory=list)
 
 
 def guess_title(jd_text: str) -> str:
@@ -130,13 +132,15 @@ def keep_required_wording(result, report) -> list[str]:
 
 def create(resume_path, jd_text: str, report, cfg=None, max_pages: int | None = None, use_model: bool = True,
            extra: str = "", focus: list[str] | None = None, min_pages: int | None = None) -> Draft:
+    from ml.resume import titles
     from ml.resume.fit import fit_to_pages, page_limits
     from ml.resume.parser import parse_resume
     from ml.resume.tailor import TailorResult, tailor_resume
 
     base = parse_resume(resume_path)
-    header = header_of(base)
     title = guess_title(jd_text)
+    chosen = titles.apply(base, title, jd_text)     # before the model, the header or the pages read them
+    header = header_of(base)
     problem = ""
     try:
         if not use_model:
@@ -149,7 +153,7 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int | None = 
         result = TailorResult(summary=None)
         problem = (f"The writing model could not be used ({str(exc)[:80]}), so this draft uses the "
                    f"resume's own wording, selected and ordered for the posting.")
-    draft = Draft(base, result, header, title, problem=problem)
+    draft = Draft(base, result, header, title, problem=problem, titles=chosen)
     if not result.accepted:
         # A rejected rewrite is never used; the draft is the resume's own words,
         # selected and laid out for the posting.

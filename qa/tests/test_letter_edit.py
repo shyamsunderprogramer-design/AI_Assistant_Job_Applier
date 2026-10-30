@@ -41,7 +41,7 @@ def test_claims_placeholders_stock_and_job_back_are_found():
 def test_save_keeps_the_version_it_replaces_and_writes_documents(tmp_path):
     first = le.save(tmp_path, LETTER, ["Jane Doe", "Austin, TX · jane@example.com"])
     assert first["saved"] and (tmp_path / "cover-letter.md").exists()
-    assert (tmp_path / le.DOCX_FILE).exists() and (tmp_path / le.PDF_FILE).exists()
+    assert le.document(tmp_path, "docx") and le.document(tmp_path, "pdf")
     assert not le.versions(tmp_path)
     le.save(tmp_path, LETTER.replace("flakiest", "slowest"), ["Jane Doe"])
     kept = le.versions(tmp_path)
@@ -50,8 +50,21 @@ def test_save_keeps_the_version_it_replaces_and_writes_documents(tmp_path):
     assert "flakiest" in text and "flakiest" in (tmp_path / "cover-letter.md").read_text()
     assert len(le.versions(tmp_path)) >= 1
     from pypdf import PdfReader
-    pdf_text = PdfReader(str(tmp_path / le.PDF_FILE)).pages[0].extract_text()
+    pdf_text = PdfReader(str(le.document(tmp_path, "pdf"))).pages[0].extract_text()
     assert "Jane Doe" in pdf_text and "flakiest" in pdf_text
+
+
+def test_the_documents_are_named_like_the_resume_beside_them(tmp_path, monkeypatch):
+    # 22 Oct 2026: the person asked for the letter as a .pdf and .docx like the tailored resume.
+    from ml.resume import packet
+    monkeypatch.setattr(packet, "person_name", lambda: "Jordan Example")
+    (tmp_path / packet.JOB_SUMMARY).write_text("# DevOps Engineer\n## Acme Inc.\n", encoding="utf-8")
+    (tmp_path / le.PDF_FILE).write_bytes(b"old")                    # a letter document under the old name
+    assert le.document(tmp_path, "pdf") == tmp_path / le.PDF_FILE     # read while it is the only one
+    assert le.save(tmp_path, LETTER, ["Jordan Example"])["files"] == {
+        "docx": "Jordan_Example_Cover_Letter_Acme.docx", "pdf": "Jordan_Example_Cover_Letter_Acme.pdf"}
+    assert le.document(tmp_path, "pdf") == tmp_path / "Jordan_Example_Cover_Letter_Acme.pdf"
+    assert not (tmp_path / le.PDF_FILE).exists()                     # one letter in the folder, the one sent
 
 
 def test_saving_the_same_text_keeps_no_extra_version(tmp_path):

@@ -8,7 +8,7 @@ class Draft:
         self.n, self.accepted = n, accepted
 
 
-def run(monkeypatch, scores, fixable=("kubernetes",)):
+def run(monkeypatch, scores, fixable=("kubernetes",), **kw):
     made, asked = [], []
     monkeypatch.setattr(rounds, "ats_of", lambda draft, jd, company=None: {
         "before": 50, "after": scores[draft.n], "fixable": list(fixable), "concepts": []})
@@ -17,12 +17,18 @@ def run(monkeypatch, scores, fixable=("kubernetes",)):
         asked.append(extra)
         made.append(Draft(len(made)))
         return made[-1]
-    return rounds.best_draft(make, "jd"), asked
+    return rounds.best_draft(make, "jd", **kw), asked
 
 
 def test_it_stops_as_soon_as_the_target_is_reached(monkeypatch):
-    (draft, ats, used), _ = run(monkeypatch, [62, 84, 90])
+    (draft, ats, used), _ = run(monkeypatch, [62, 84, 90], target=80)
     assert used == 2 and draft.n == 1 and ats["after"] == 84
+
+
+def test_it_aims_for_every_term_the_resume_can_show(monkeypatch):
+    # 21 Oct 2026: the person asked for a 100% match; 84% with terms still to bring back is not done.
+    (draft, ats, used), _ = run(monkeypatch, [62, 84, 90])
+    assert rounds.TARGET == 100 and used == 3 and ats["after"] == 90
 
 
 def test_it_never_settles_below_the_original_resume(monkeypatch):
@@ -31,7 +37,7 @@ def test_it_never_settles_below_the_original_resume(monkeypatch):
     made = []
     def make(extra, focus=None):
         made.append((extra, focus)); d = Draft(len(made) - 1); return d
-    draft, ats, used = rounds.best_draft(make, "jd")
+    draft, ats, used = rounds.best_draft(make, "jd", target=80)
     assert used == 2 and ats["after"] == 93 and made[1][1] == ["kubernetes"]
 
 

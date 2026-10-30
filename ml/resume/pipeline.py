@@ -776,6 +776,11 @@ def accept_letter(cfg, job_id: int, reply_text: str) -> JobOutcome:
         (packet.path / "letter-review.txt").write_text(
             _letter_review(result), encoding="utf-8"
         )
+        if result.accepted:
+            # The .pdf and .docx beside the resume, in its template: every letter has them,
+            # not only one saved on the job page.
+            from ml.resume import letter_edit
+            letter_edit._documents(packet.path, result.text(), *letter_edit.look_for_job(cfg, job_id))
 
         if not result.accepted:
             job.status = "Manual Review"

@@ -230,7 +230,9 @@ def agents(app: Path, label: str) -> dict[str, dict]:
             "EnvironmentVariables": env,
             "RunAtLoad": True,
             "KeepAlive": True,
-            "ProcessType": "Background",
+            # The pages someone is waiting for. As "Background" macOS ran it at priority 4 and
+            # slowed its disk reads: the Jobs page took 1.5-2.2 s to build, 0.5 s otherwise (21 Oct 2026).
+            "ProcessType": "Interactive",
             "StandardOutPath": str(logs / "webapp.log"),
             "StandardErrorPath": str(logs / "webapp.log"),
         },

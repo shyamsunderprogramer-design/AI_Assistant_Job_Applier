@@ -122,6 +122,9 @@ NON_US_CITIES = (
     "montreal", "ottawa", "sydney", "melbourne", "auckland", "tokyo", "seoul",
     "shanghai", "beijing", "sao paulo", "mexico city", "buenos aires",
     "bogota", "lagos", "nairobi", "cairo", "dubai",
+    # Metro Manila has a "National Capital Region" too, and alone it reads as Washington's:
+    # "Taguig City, National Capital Region (Manila)" was kept as American (23 Oct 2026).
+    "manila", "makati", "taguig", "cebu",
 )
 
 # Said instead of a place. Not evidence either way, and treating them as

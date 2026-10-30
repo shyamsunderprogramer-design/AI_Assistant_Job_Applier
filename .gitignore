@@ -19,6 +19,8 @@ ml/resume/output/
 ml/resume/.uploaded.json
 # Lines the person added to their resume from the job page (ml/resume/additions.py).
 ml/resume/additions.yaml
+# The titles the person has held for each job, one picked per posting (ml/resume/titles.py).
+ml/resume/titles.yaml
 
 # Derived from the resume, so it carries the person's titles and seniority.
 backend/config/search_profile.yaml

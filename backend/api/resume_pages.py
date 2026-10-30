@@ -352,23 +352,8 @@ def _letter_resume(info: dict) -> str:
 
 def _letter_look(job_id: int) -> tuple[list[str], str | None, dict | None]:
     """(header lines, template, look) for the letter's documents: the job's tailored resume's, else the default."""
-    from ml.resume.parser import parse_resume
-    from ml.resume.pipeline import base_resume_path
-    from ml.tailoring.draft import header_of
-    try:
-        header = header_of(parse_resume(base_resume_path(cfg())))
-    except Exception:
-        header = []
-    template, look = cfg().get("resume.template") or None, None
-    try:
-        from ml.tailoring.pipeline import JOBS, RUNS
-        record = json.loads((JOBS / f"{job_id}.json").read_text())
-        run = record.get("best") or record.get("run")
-        drawn = json.loads((RUNS / run / "result.json").read_text())["draft"]["result"]
-        template, look = drawn.get("template") or template, drawn.get("look") or None
-    except Exception:
-        pass
-    return header, template, look
+    from ml.resume.letter_edit import look_for_job
+    return look_for_job(cfg(), job_id)
 
 
 def _letter_state(job_id: int, info: dict, text: str | None = None) -> dict:
@@ -380,8 +365,7 @@ def _letter_state(job_id: int, info: dict, text: str | None = None) -> dict:
     return {"exists": path.exists(), "text": text, "parts": letter_edit.parse(text),
             "check": letter_edit.check(text, _letter_resume(info), info["jd"], info["company"]) if text.strip() else None,
             "versions": letter_edit.versions(info["folder"]), "company": info["company"], "title": info["title"],
-            "files": {k: (info["folder"] / f).exists() for k, f in (("docx", letter_edit.DOCX_FILE),
-                                                                    ("pdf", letter_edit.PDF_FILE))}}
+            "files": {k: letter_edit.document(info["folder"], k) is not None for k in ("docx", "pdf")}}
 
 
 @app.get("/job/<int:job_id>/letter")
@@ -455,18 +439,18 @@ def letter_rewrite(job_id: int):
 def letter_download(job_id: int, kind: str):
     from ml.resume import letter_edit
     info = _letter_job(job_id)
-    name = {"docx": letter_edit.DOCX_FILE, "pdf": letter_edit.PDF_FILE}.get(kind)
-    if info is None or name is None:
+    if info is None or kind not in ("docx", "pdf"):
         return ("No such file.", 404)
-    path = info["folder"] / name
-    if not path.exists():
+    path = letter_edit.document(info["folder"], kind)
+    if path is None:
         header, template, look = _letter_look(job_id)
         from ml.resume.packet import LETTER_FILE
         letter = info["folder"] / LETTER_FILE
         if not letter.exists():
             return ("No cover letter yet for this job.", 404)
         letter_edit._documents(info["folder"], letter.read_text(encoding="utf-8"), header, template, look)
-    if not path.exists():
+        path = letter_edit.document(info["folder"], kind)
+    if path is None:
         return ("The document could not be made.", 500)
-    company = re.sub(r"[^\w -]+", "", info["company"])[:40] or "job"
-    return send_file(path, as_attachment=True, download_name=f"Cover letter - {company}.{kind}")
+    # The name it is kept under, which is the name the resume beside it has too.
+    return send_file(path, as_attachment=True, download_name=path.name)

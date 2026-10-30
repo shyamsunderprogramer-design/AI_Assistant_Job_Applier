@@ -60,7 +60,8 @@ wasted, and it is the single most common way these letters open.
 
 Three paragraphs, each with a job to do:
 
-  1. WHY THIS ROLE. Say what the CANDIDATE does, and tie it to something
+  1. WHY THIS ROLE. Say what the CANDIDATE does NOW, in the job given under
+     "My current job", in the present tense, and tie it to something
      specific about THIS employer — what they make, who they serve, the
      constraint they work under, a detail in the posting only they would
      write. Start with "I", not with "The role". Never "I was excited to see
@@ -70,7 +71,11 @@ Three paragraphs, each with a job to do:
      situation was, what the candidate did, and what changed because of it.
      One story with an outcome beats three achievements in a row — a list
      with no result is what the attached resume is already for. Numbers if
-     the resume has them; no numbers if it does not.
+     the resume has them; no numbers if it does not. Take the story from the
+     current job whenever it has anything this posting cares about. Only if
+     it has nothing does an earlier job supply it, and then say when it was
+     ("Before that, as ..."). Never write about an earlier job as if it were
+     the one the candidate holds now.
 
   3. THE CLOSE. Short, and about the work rather than about the letter. Name
      something at this employer the candidate would want to get into. Never
@@ -149,12 +154,37 @@ class LetterResult:
         return len(" ".join(self.body).split())
 
 
+def current_job(resume: Resume) -> str:
+    """The job held now, as the resume writes it: the one whose dates run to "Present" (else the
+    first), with its lines. "" when the resume names no job.
+
+    Handed the whole resume, the letters told the story of the longest job, Lead DevOps Engineer,
+    2018-2022, and never named the one the person holds now (21 Oct 2026).
+    """
+    from ml.resume.additions import roles
+    from ml.resume.writer import _is_role_line
+    jobs = roles(resume)
+    now = next((r for r in jobs if re.search(r"\b(present|current|now)\b", r, re.I)), jobs[0] if jobs else "")
+    for section in resume.sections:
+        lines = [line.strip() for line in section.lines]
+        if now and now in lines:
+            start = lines.index(now)
+            end = start + 1
+            while end < len(lines) and not (_is_role_line(lines[end]) and re.search(r"(19|20)\d\d", lines[end])):
+                end += 1
+            return "\n".join(line for line in lines[start:end] if line)
+    return now
+
+
 def build_prompt(resume: Resume, job_title: str, company: str, jd_text: str) -> str:
-    """Same three-section shape as the resume prompt, so both read alike."""
+    """Same three-section shape as the resume prompt, so both read alike, with the job held now
+    set apart: the letter speaks from it."""
+    now = current_job(resume)
     return (
         f"# Target role\n{job_title} at {company}\n\n"
         f"# Job description\n{(jd_text or '').strip()}\n\n"
-        f"# My current resume (the ONLY source of truth about me)\n"
+        + (f"# My current job (the letter speaks from here)\n{now}\n\n" if now else "")
+        + f"# My current resume (the ONLY source of truth about me)\n"
         f"{resume.text().strip()}\n"
     )
 

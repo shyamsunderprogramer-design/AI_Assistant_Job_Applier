@@ -561,6 +561,11 @@ _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun",
 _MONTH_YEAR = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s+((?:19|20)\d{2})\b", re.I)
 
 
+def month_years_as_numbers(text: str) -> str:
+    """Every month and year in `text` as MM/YYYY: "Mar 2024 – Present" -> "03/2024 – Present"."""
+    return _MONTH_YEAR.sub(lambda m: f"{_MONTHS[m.group(1).lower()[:3]]:02d}/{m.group(2)}", text)
+
+
 def numeric_dates(line: str) -> str:
     """A role or degree line's dates as MM/YYYY ("Mar 2024 – Present" -> "03/2024 – Present"), the
     federal form: federal HR counts months of experience from them. The title is left as it is."""
@@ -568,7 +573,7 @@ def numeric_dates(line: str) -> str:
     if not dates:
         return line
     at = line.rfind(dates)
-    return line[:at] + _MONTH_YEAR.sub(lambda m: f"{_MONTHS[m.group(1).lower()[:3]]:02d}/{m.group(2)}", dates)
+    return line[:at] + month_years_as_numbers(dates)
 
 
 # Section order for an experienced engineer: what they do, what they know, where

@@ -47,7 +47,8 @@ def env(tmp_path, monkeypatch):
     init_engine("sqlite:///:memory:")
     resume = tmp_path / "base_resume.txt"
     resume.write_text(BASE_RESUME, encoding="utf-8")
-    yield FakeConfig(resume, **{"excel.path": str(tmp_path / "tracker.xlsx")})
+    yield FakeConfig(resume, **{"excel.path": str(tmp_path / "tracker.xlsx"),
+                                "filters.profile_path": str(tmp_path / "no-personal-profile.json")})
     session_mod._engine = None
     session_mod._SessionFactory = None
 
@@ -157,10 +158,14 @@ def test_digest_says_so_when_nothing_is_new(env):
 
 
 def test_digest_shows_apply_links_for_strong_matches_only(env):
-    add_job("1", title="Site Reliability Engineer")   # will score well
+    # Test the digest's threshold with known scores; a real search profile must
+    # not decide whether this fictional resume happens to score above 25%.
+    add_job("1", title="Site Reliability Engineer", score=0.9)
+    add_job("2", title="Other role", score=0.1)
     report = run_daily(env, skip_scrape=True)
     digest = render_digest(report, env)
     assert "https://example.com/1" in digest
+    assert "https://example.com/2" not in digest
 
 
 def test_digest_lists_closed_jobs(env):

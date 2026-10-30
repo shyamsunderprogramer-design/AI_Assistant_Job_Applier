@@ -197,6 +197,21 @@ def test_the_prompt_carries_the_resume_and_the_posting():
     assert "ONLY source of truth" in prompt
 
 
+def test_the_letter_speaks_from_the_job_held_now():
+    # 21 Oct 2026: handed only the whole resume, letters told the story of the longest past job.
+    from ml.resume.letter import SYSTEM_PROMPT
+    from ml.resume.parser import Section
+    now = "SENIOR DEVOPS ENGINEER, ACME, USA  \tFeb 2025 – Present"
+    then = "LEAD DEVOPS ENGINEER, GLOBEX, IND  \tApr 2018 – Dec 2022"
+    lines = [now, "- Cut release cycles by 42% with GitHub Actions.", then, "- Ran OpenStack on 100+ nodes."]
+    r = Resume(raw_text="\n".join(["EXPERIENCE", *lines]), sections=[Section("EXPERIENCE", lines)])
+    prompt = build_prompt(r, "Senior Platform Engineer", "ClickUp", JD_TEXT)
+    block = prompt.split("# My current job (the letter speaks from here)\n")[1].split("\n\n# ")[0]
+    assert block == f"{now.strip()}\n- Cut release cycles by 42% with GitHub Actions."
+    assert "OpenStack" not in block and "OpenStack" in prompt          # the rest is still there, as the record
+    assert "Take the story from the" in SYSTEM_PROMPT and "current job" in SYSTEM_PROMPT
+
+
 # -- the posting's own words are not claims about the candidate -------------
 
 def test_a_word_the_posting_uses_with_punctuation_is_still_its_word():

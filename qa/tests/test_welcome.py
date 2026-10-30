@@ -26,6 +26,7 @@ def fresh(tmp_path, monkeypatch):
         monkeypatch.setattr(module, "DAILY_LOG", tmp_path / "daily_run.log")
     monkeypatch.setattr(morning_pages, "AUTO_OFF", tmp_path / "daily_auto_off")
     monkeypatch.setattr(morning_pages, "pipeline_pids", lambda: [])
+    monkeypatch.setattr(morning_pages, "task_pid", lambda task: None)   # nor a fetch running on this Mac
     yield tmp_path, webapp.app.test_client()
     session_mod._engine, session_mod._SessionFactory = before
 

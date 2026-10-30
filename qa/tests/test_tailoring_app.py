@@ -120,17 +120,25 @@ def test_a_good_upload_starts_a_run(client):
     assert client.get("/tailor/../../etc/status").status_code == 404     # never outside the runs
 
 
-def test_the_rest_of_the_app_still_works():
+def test_the_rest_of_the_app_still_works(monkeypatch):
+    import yaml
+
     from backend.api import app as webapp
-    from backend.config.loader import load_config
+    from backend.config.loader import DEFAULT_CONFIG_PATH, Config
     from data_engineering.db import session
-    if session._SessionFactory is None:
-        session.init_engine(load_config().database_url)
+    # The project's defaults and a database of its own: until 25 Oct 2026 it opened the person's
+    # data/jobs.db (and .env) whenever no test had set a database up before it.
+    before = (session._engine, session._SessionFactory)
+    session.init_engine("sqlite:///:memory:")
+    monkeypatch.setattr(webapp, "_cfg", Config(yaml.safe_load(DEFAULT_CONFIG_PATH.read_text()) or {}))
     webapp.app.config["TESTING"] = True
-    with webapp.app.test_client() as client:
-        for path in ("/", "/setup", "/assistant", "/applicant"):
-            assert client.get(path).status_code == 200, path
-        assert b'href="/tailor"' in client.get("/").data          # reachable from the jobs page
+    try:
+        with webapp.app.test_client() as client:
+            for path in ("/", "/setup", "/assistant", "/applicant"):
+                assert client.get(path).status_code == 200, path
+            assert b'href="/tailor"' in client.get("/").data          # reachable from the jobs page
+    finally:
+        session._engine, session._SessionFactory = before
 
 
 def test_a_job_score_is_saved_and_reused(tmp_path, monkeypatch):

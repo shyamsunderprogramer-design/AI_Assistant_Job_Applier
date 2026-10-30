@@ -71,6 +71,7 @@ def requirements_only(jd_text: str) -> str:
 FILLER = {"next", "part", "bring", "come", "challenges", "large", "additional", "similar",
           "value", "join", "looking", "including", "within", "across", "ability", "strong",
           "work", "working", "team", "teams", "role", "opportunity", "help", "new",
+          "hands-on", "hands on",     # how the work is done, not a kind of work (22 Oct 2026)
           "contributing", "contribute", "passionate", "enjoy", "dream", "building",
           "available", "highly", "using", "make", "making", "ensure", "deliver",
           "delivering", "provide", "providing", "drive", "driving",

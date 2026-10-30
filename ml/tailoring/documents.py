@@ -266,9 +266,12 @@ def content_checks(pdf: Path, file: str, blocks: list[tuple[str, str]], model=No
         checks.append(Check(file, None, "content", f"{len(missing)} line(s) of the draft are not in the "
                                                    f"document, e.g. “{missing[0][:60]}”.", "problem"))
     if model is not None:
+        from ml.resume.writer import month_years_as_numbers
         for e in model.entries:
             for part in (e.employer, e.dates):
-                if part and _flat(part) not in text:
+                # The Federal template writes "Feb 2025" as "02/2025": the same date, not a lost one.
+                # Read only as words, every date of a federal resume was "missing" (21 Oct 2026).
+                if part and _flat(part) not in text and _flat(month_years_as_numbers(part)) not in text:
                     checks.append(Check(file, None, "facts", f"“{part}” from the original resume is "
                                                              f"missing.", "problem"))
     return checks

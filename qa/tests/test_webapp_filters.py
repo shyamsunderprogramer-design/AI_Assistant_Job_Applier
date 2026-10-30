@@ -8,8 +8,33 @@ to hint at it.
 
 import re
 
+import pytest
+
 import backend.api.app as webapp
 from data_engineering.scraper.runner import SCRAPER_TYPES
+
+
+@pytest.fixture(autouse=True)
+def own_settings_and_jobs(monkeypatch):
+    """The project's default settings, never the person's .env, and a database of the test's own with
+    one made-up job: these read the Jobs page, never the person's jobs (25 Oct 2026; until then they
+    opened data/jobs.db whenever no test had set a database up first)."""
+    from datetime import datetime, timezone
+
+    import yaml
+
+    from backend.config.loader import DEFAULT_CONFIG_PATH, Config
+    from data_engineering.db import session
+    from data_engineering.db.models import Job
+    before = (session._engine, session._SessionFactory)
+    session.init_engine("sqlite:///:memory:")
+    with session.get_session() as s:
+        s.add(Job(id=1, source="greenhouse", company="Globex", company_slug="globex", external_id="1",
+                  content_hash="h1", title="Platform Engineer", description="We build.",
+                  application_url="https://example.com/1", posted_at=datetime.now(timezone.utc)))
+    monkeypatch.setattr(webapp, "_cfg", Config(yaml.safe_load(DEFAULT_CONFIG_PATH.read_text()) or {}))
+    yield
+    session._engine, session._SessionFactory = before
 
 
 def test_every_scraper_can_be_filtered_for():

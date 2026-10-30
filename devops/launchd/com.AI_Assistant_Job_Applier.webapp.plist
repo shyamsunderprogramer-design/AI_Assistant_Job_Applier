@@ -6,8 +6,10 @@
 	<true/>
 	<key>Label</key>
 	<string>com.AI_Assistant_Job_Applier.webapp</string>
+	<!-- The pages someone is waiting for. As Background, macOS ran it at priority 4 and slowed its
+	     disk reads: the Jobs page took 1.5-2.2 s to build, 0.5 s otherwise (21 Oct 2026). -->
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Interactive</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/.venv/bin/python</string>

@@ -186,7 +186,8 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         "attempts": rendered.attempts,
         "extraction": {"warnings": model.warnings, "ocr": model.ocr,
                        "text": extracted.text if (model.warnings or model.ocr) else ""},
-        "notes": req_notes + report.notes,
+        "notes": req_notes + report.notes + [f"Title used for this posting: {t} (from your titles list)."
+                                             for t in draft.titles],
         "draft": _draft_json(draft),
         "title": draft.title,
     }

@@ -36,7 +36,7 @@ KEEP = 14
 # resume, the general answers and the search profile went unsaved until 19 Oct 2026.
 PERSONAL = ("backend/config/applicant.yaml", "backend/config/answers.yaml",
             "backend/config/general_answers.yaml", "backend/config/search_profile.yaml",
-            "ml/resume/additions.yaml")
+            "ml/resume/additions.yaml", "ml/resume/titles.yaml")
 
 
 def destination(root: Path = ROOT) -> Path:

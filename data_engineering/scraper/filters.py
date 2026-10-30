@@ -78,6 +78,21 @@ class JobFilter:
             if matches_keyword(title, kw):
                 return f"title excluded by {kw!r}"
 
+        reason = self.location_reason(job.location)
+        if reason:
+            return reason
+
+        if self.description_required_keywords:
+            body = (job.description or "").lower()
+            if not matches_any(body, self.description_required_keywords):
+                return "description missing all required keywords"
+
+        return None
+
+    def location_reason(self, location: str | None) -> str | None:
+        """The location half of `reject_reason`. Also asked at apply time: a posting stored
+        before the rule changed is still in the list until it is pruned (23 Oct 2026, a job in
+        Ho Chi Minh City in the next ten to apply to)."""
         # Three answers, not two: in the US, definitely not, or unknowable.
         # A country blocklist alone let "Kfar Saba" through to rank first at
         # 94%, because the posting never said Israel. Requiring a US word
@@ -85,16 +100,9 @@ class JobFilter:
         if self.exclude_location_keywords or self.location_keywords:
             from backend.core.locations import is_us
 
-            verdict = is_us(job.location, self.exclude_location_keywords)
-            if verdict is False:
-                return f"location {job.location!r} is not in the US"
+            if is_us(location, self.exclude_location_keywords) is False:
+                return f"location {location!r} is not in the US"
         # Unknown ("Remote", "Hybrid", blank) is kept: silence is not evidence.
-
-        if self.description_required_keywords:
-            body = (job.description or "").lower()
-            if not matches_any(body, self.description_required_keywords):
-                return "description missing all required keywords"
-
         return None
 
     def matches(self, job: RawJob) -> bool:

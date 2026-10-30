@@ -351,7 +351,10 @@ def _ocr_pages(path: Path, numbers: list[int]) -> list[Block] | None:
         pdf = pdfium.PdfDocument(str(path))
         for number in numbers:
             image = pdf[number - 1].render(scale=2.5).to_pil()
-            found = ocrmac.OCR(image, recognition_level="accurate").recognize()
+            # The accurate model can come back empty while the fast one reads the page: on
+            # 22 Oct 2026 it returned nothing even for plain 48pt Arial. Fast text beats none.
+            found = (ocrmac.OCR(image, recognition_level="accurate").recognize()
+                     or ocrmac.OCR(image, recognition_level="fast").recognize())
             # Vision boxes are (x, y, w, h) with the origin at the bottom-left.
             lines = _group_lines(found)
             for line_no, text in enumerate(lines, 1):

@@ -1,5 +1,6 @@
 """The page checks catch real layout problems, and pass a clean document."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,21 @@ def test_a_missing_section_and_a_missing_line(tmp_path):
     assert len(found) == 1 and "1 line(s)" in found[0].detail
 
 
-@pytest.mark.skipif(not Path("/Applications/Microsoft Word.app").exists(), reason="needs Microsoft Word")
+def test_a_federal_date_is_the_same_date_and_a_lost_one_is_still_caught(tmp_path):
+    # 21 Oct 2026: the Federal template writes "Feb 2025" as "02/2025", and every date of the
+    # resume was reported missing. A date that really is gone still is.
+    from types import SimpleNamespace
+    p = pdf(tmp_path / "f.pdf", [[(72, 740, "SENIOR DEVOPS ENGINEER, ACME 02/2025 - Present")] + body(5)])
+    model = SimpleNamespace(entries=[SimpleNamespace(employer="Acme", dates="Feb 2025 - Present"),
+                                     SimpleNamespace(employer="Acme", dates="Apr 2018 - Dec 2022")])
+    found = content_checks(p, "pdf", [], model=model)
+    assert [c.detail for c in found] == ["“Apr 2018 - Dec 2022” from the original resume is missing."]
+
+
+# Opens the real Microsoft Word, so only when asked for (conftest lets osascript through then).
+@pytest.mark.skipif(not Path("/Applications/Microsoft Word.app").exists()
+                    or os.environ.get("JOB_APPLIER_LIVE_WORD") != "1",
+                    reason="opens Microsoft Word itself: run with JOB_APPLIER_LIVE_WORD=1")
 def test_word_lays_the_docx_out_as_pages(tmp_path, monkeypatch):
     from docx import Document
     from ml.tailoring import documents

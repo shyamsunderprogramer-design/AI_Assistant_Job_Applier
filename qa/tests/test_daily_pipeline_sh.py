@@ -69,7 +69,8 @@ def test_start_from_the_page_runs_whatever_the_switch_says(project):
     done, log, calls = run(MANUAL="1", PMSET_ASLEEP="99")       # someone pressed Start: no waiting
     assert done.returncode == 0
     assert "started from the Jobs page" in log and "waiting for the Mac" not in log
-    assert "main.py daily" in calls and "main.py prepare-apply" in calls
+    assert "main.py daily" in calls
+    assert "main.py prepare-apply" not in calls                  # resumes wait for Auto-apply / Prepare now
     assert "--cloud" not in calls                                # Start now reads the boards here
     assert "devops.cloud_results push-boards" in calls           # the cloud's list kept up to date
     assert not (root / "data" / "daily.lock").exists() and not (root / "data" / "daily.pid").exists()
