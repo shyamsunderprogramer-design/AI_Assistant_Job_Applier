@@ -4,9 +4,15 @@
 <header class="top">
   <div>
     <h1>Auto-apply</h1>
-    <div class="sub">Every morning your best matches are made ready: a tailored resume, a cover letter,
-      and the form's questions it can't answer yet. Answer those once, press Start applying, and each
-      form is filled for you — <b>it always stops before Submit</b>, so you check and send it yourself.</div>
+    <div class="sub"><b>Apply to next 10</b> applies to the jobs under Next up: the ones you saved to your
+      Watch list first, then roles at companies you watch, then your best fits{% if age_limit %} — none
+      older than {{ age_limit }} months{% endif %}, one per company. Or press <b>Prepare now</b> to get your
+      best matches ready first (a tailored resume, a cover letter, the form's questions it can't answer yet),
+      answer those once, and press Start applying. No resume is tailored before you press one of these, or
+      Auto-apply on a job. These runs stop for you to press Submit on every form.
+      <b>Submit by itself</b> applies only to <b>Apply to these</b> in Your chosen jobs, for an
+      Eligible job on Greenhouse's own board with nothing left for you
+      (<a href="{{ url_for('questions_page') }}">Questions</a>).</div>
   </div>
   <div class="row">
     <a class="btn primary" href="{{ url_for('questions_page') }}" title="Answer every application's questions on one page">Answer questions</a>
@@ -14,11 +20,108 @@
   </div>
 </header>
 
+{# The jobs the person ticked on the Jobs page and added here (24 Oct 2026): applied to only on
+   Apply to these, never swapped for the app's own picks, and kept in the database, so a crash or a
+   restart never loses where each one stands (backend/apply/execution.py). #}
+<section class="card" id="chosen-card">
+  <div class="card-head">
+    <h2 id="chosen-title">Your chosen jobs</h2>
+    <div class="row" style="gap:8px">
+      <span class="ch-live" id="chosen-live" role="status" hidden></span>
+      <span class="pill ch-run" id="chosen-run" hidden></span>
+      <button class="btn" id="chosen-clear" type="button" hidden>Clear finished</button>
+      <button class="btn" id="chosen-cancel-all" type="button" hidden>Cancel waiting</button>
+      <button class="btn" id="chosen-pause" type="button" hidden
+        title="Stops before the next form opens; the form on screen is finished or closed first">Pause</button>
+      <button class="btn" id="chosen-prepare" type="button" disabled
+        title="Makes the resume and cover letter ready for each job here that can go, and writes down exactly which files; opens no form and sends nothing">Prepare these</button>
+      <button class="btn primary" id="chosen-start" type="button" disabled
+        title="Opens the app's browser and applies to the jobs here that can go now, one after another">Apply to these</button>
+    </div>
+  </div>
+  <div class="sub" id="chosen-note"></div>
+  <div class="sub ch-say" id="chosen-say" role="status"></div>
+  <div class="out" id="chosen-out" role="log" aria-live="polite" hidden></div>
+  <div id="chosen-list"><p class="sub dim">Loading…</p></div>
+  <details class="ch-activity" id="chosen-activity-box" hidden open>
+    <summary>Live activity</summary>
+    <ol class="ch-log" id="chosen-activity"></ol>
+  </details>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2 id="next-title">Next up</h2>
+    <div class="row" style="gap:8px">
+      <button class="btn primary" id="apply-next"
+        title="Opens the app's browser and applies to the jobs listed here, one after another">Apply to next 10</button>
+    </div>
+  </div>
+  <div class="sub" id="next-note"></div>
+  <div class="out" id="next-out" role="log" aria-live="polite" hidden></div>
+  <div id="next-list"><p class="sub dim">Loading…</p></div>
+  <div id="next-left-out"></div>
+</section>
+
+<style>
+.nx-jobs{width:100%;min-width:0;border-collapse:collapse}
+.nx-jobs th{text-align:left;font-weight:600;padding:6px 8px 6px 0;border-bottom:1px solid var(--line)}
+.nx-jobs td{padding:6px 8px 6px 0;vertical-align:top;border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent);
+  overflow-wrap:anywhere}
+.nx-jobs td.num,.nx-jobs th.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;width:3.5em}
+.nx-jobs .pill{white-space:nowrap}
+.ch-ready{color:var(--good)} .ch-later{color:var(--warn)} .ch-blocked{color:var(--muted)}
+/* A job's state at a glance: moving, needs you, done well, went wrong, set aside. */
+.st-validating,.st-preparing,.st-ready,.st-running{background:var(--signal-soft);color:var(--signal-ink)}
+.st-waiting_user,.st-pending_confirmation{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.st-applied{color:var(--good)} .st-failed{color:var(--crit)}
+/* Set aside: hollow, so it never reads as a queued one waiting its turn (the same grey pill until 25 Oct). */
+.st-skipped,.st-cancelled{background:transparent;border-color:color-mix(in srgb,var(--muted) 55%,transparent);color:var(--muted)}
+.ch-need{margin-top:4px;font-weight:600}
+/* Its eligibility decision (26 Oct 2026), as on the Jobs page's review. */
+.dc{margin-top:4px}
+.dc-eligible{color:var(--good)} .dc-eligible_with_warnings,.dc-needs_information{color:var(--warn)}
+.dc-ineligible{color:var(--crit)} .dc-unverified{color:var(--muted)}
+.dc-words summary{cursor:pointer;font-size:.9em;color:var(--muted)}
+.dc-words ul{margin:4px 0 0;padding-left:1.1em;font-size:.9em}
+.ch-docs{margin-top:4px;overflow-wrap:anywhere}
+.ch-sum{font-family:var(--mono);font-size:.85em;color:var(--muted)}
+.ch-acts{display:flex;gap:6px;flex-wrap:wrap}
+.ch-acts .btn{white-space:nowrap}
+/* Whole words in the job's name: "anywhere" let a phone squeeze it to a letter or two a line. */
+.nx-jobs td.ch-job{overflow-wrap:break-word;min-width:7em}
+.ch-acts-narrow{display:none;margin-top:6px}
+@media (max-width:640px){.ch-acts-wide{display:none}.ch-acts-narrow{display:flex}}
+.ch-say:empty{display:none}
+/* Live (Phase 2): the connection, and the step each job is at. */
+.ch-live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted)}
+.ch-live::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
+.ch-live[data-mode="live"]{color:var(--good)}
+.ch-live[data-mode="reconnecting"],.ch-live[data-mode="polling"]{color:var(--warn)}
+.ch-live[data-mode="down"]{color:var(--crit)}
+@media (prefers-reduced-motion:no-preference){.ch-live[data-mode="live"]::before{animation:ch-pulse 2s ease-in-out infinite}}
+@keyframes ch-pulse{50%{opacity:.3}}
+.ch-now{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:baseline;margin-top:4px}
+.ch-now-dot{width:7px;height:7px;border-radius:50%;background:var(--signal-ink);flex:none}
+.ch-steps-row td{border-top:0;padding-top:0}
+.ch-steps{max-height:220px;margin:0}
+.ch-steps .pill{font-size:10px}
+.ch-activity{margin-top:12px}
+.ch-activity summary{cursor:pointer;font-weight:600}
+.ch-log{list-style:none;margin:8px 0 0;padding:0;max-height:260px;overflow:auto;font-size:.9em}
+.ch-log li{padding:4px 0;border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent);overflow-wrap:anywhere}
+.ch-log time{font-family:var(--mono);font-size:.9em;color:var(--muted);margin-right:6px}
+.nx-saved{background:var(--signal-soft);color:var(--signal-ink);font-weight:600}
+.nx-out{margin:4px 0 0;padding-left:18px}
+.nx-out li{margin:3px 0}
+@media (max-width:640px){.nx-hide-sm{display:none}}
+</style>
+
 <section class="card">
   <div class="card-head">
     <h2 id="ready-title">Ready to apply</h2>
     <div class="row" style="gap:8px">
-      <button class="btn" id="prepare" title="Do the morning preparation now">Prepare now</button>
+      <button class="btn" id="prepare" title="Tailor resumes, write cover letters and list questions for your best matches">Prepare now</button>
       <button class="btn primary" id="start">Start applying</button>
     </div>
   </div>
@@ -49,7 +152,7 @@ async function load() {
   $('ready-title').textContent = `Ready to apply (${d.items.length})`;
   $('start').disabled = !d.items.length;
   if (!d.items.length) {
-    $('ready-list').innerHTML = '<p class="sub">Nothing ready yet. The morning run prepares the day\'s best matches, or press <b>Prepare now</b>. You can also pick jobs yourself on the <a href="/">Jobs page</a>.</p>';
+    $('ready-list').innerHTML = '<p class="sub">Nothing ready yet. Press <b>Prepare now</b> to get your best matches ready, or press Auto-apply on a job you pick on the <a href="/">Jobs page</a>.</p>';
     return;
   }
   $('ready-list').innerHTML = d.items.map(e => {
@@ -98,24 +201,427 @@ async function load() {
     e.preventDefault(); navigator.clipboard?.writeText(a.dataset.folder); a.textContent = 'folder path copied'; });
 }
 
-async function runTask(task, button, label) {
+// -- Next up: what Apply to next 10 applies to ---------------------------------------------
+let AUTO = null;       // Submit by itself, as the profile says (from /apply/next)
+const fit = s => s === null || s === undefined ? '<span class="hint" title="Not scored yet">–</span>' : `<b>${s}%</b>`;
+
+async function loadNext() {
+  let d;
+  try {
+    const r = await fetch('/apply/next');
+    d = await r.json();
+    if (!r.ok && !d.error) throw new Error(r.status);
+  } catch (e) {
+    $('next-list').innerHTML = '<p class="load-error" role="alert">The list could not be loaded. ' +
+      '<button class="btn" id="next-retry" type="button">Try again</button></p>';
+    $('next-retry').onclick = () => { $('next-list').innerHTML = '<p class="sub dim">Loading…</p>'; loadNext(); };
+    return;
+  }
+  if (!d.ok) {
+    $('next-list').innerHTML = `<p class="sub warn">${esc(d.error)}</p>`;
+    $('apply-next').disabled = true;
+    return;
+  }
+  AUTO = d.auto_submit;
+  $('next-title').textContent = `Next up (${d.picks.length})`;
+  $('next-note').innerHTML = (d.left_today ? `${d.left_today} more today` : 'Today\'s limit is reached: these go on the next run, tomorrow')
+    + ' · every form stops before Submit for you';
+  $('next-list').innerHTML = d.picks.length ? `<div class="t-table-wrap"><table class="nx-jobs"><thead><tr>
+      <th class="num">Fit</th><th>Job</th><th>Why</th><th class="nx-hide-sm">Posted</th><th class="nx-hide-sm">Board</th><th class="nx-hide-sm">Resume</th>
+    </tr></thead><tbody>${d.picks.map(j => `<tr>
+      <td class="num">${fit(j.score)}</td>
+      <td><a href="/job/${j.id}"><b>${esc(j.title)}</b></a><div class="hint">${esc(j.company)}${j.location ? ' · ' + esc(j.location) : ''}</div></td>
+      <td><span class="pill${j.saved ? ' nx-saved' : ''}">${j.saved ? '★ ' : ''}${esc(j.why)}</span></td>
+      <td class="hint nx-hide-sm">${esc(j.age)}</td>
+      <td class="hint nx-hide-sm">${esc(j.board)}</td>
+      <td class="hint nx-hide-sm">${j.resume ? 'tailored' : 'tailored when it goes, a few minutes'}</td>
+    </tr>`).join('')}</tbody></table></div>`
+    : `<p class="sub">Nothing to apply to right now: no job you saved, and no open Greenhouse, Workday or JazzHR posting${d.max_age_months ? ` under ${d.max_age_months} months old` : ''} at your score threshold that you haven't applied to or marked.</p>`;
+  $('next-left-out').innerHTML = d.left_out.length
+    ? `<div class="sub" style="margin-top:10px"><b>Saved jobs not in this run</b></div><ul class="nx-out">${d.left_out.map(j =>
+        `<li><a href="/job/${j.id}">${esc(j.title)}</a> · ${esc(j.company)} — ${esc(j.why)}</li>`).join('')}</ul>`
+    : '';
+  $('apply-next').disabled = !d.picks.length || !d.left_today;
+}
+
+// A run's output, followed until it ends; then `done`.
+function follow(task, button, out, done) {
   button.disabled = true;
-  let r;
-  try { r = await (await fetch(`/run/${task}`, {method: 'POST'})).json(); }
-  catch (e) { r = {ok: false, error: 'The app did not answer, so nothing started. Try again.'}; }
-  $('run-out').hidden = false;
-  $('run-out').textContent = r.ok ? `${label}…` : (r.error || r.note || 'Could not start.');
-  if (!r.ok) { button.disabled = false; return; }
+  $(out).hidden = false;
   const poll = setInterval(async () => {
     let s;
     try { s = await (await fetch(`/run/${task}/status`)).json(); } catch (e) { return; }   // try again next tick
-    if (s.tail) $('run-out').textContent = s.tail.split('\n').slice(-12).join('\n');
-    if (!s.running) { clearInterval(poll); button.disabled = false; load(); }
+    if (s.tail) $(out).textContent = s.tail.split('\n').slice(-12).join('\n');
+    if (!s.running) { clearInterval(poll); button.disabled = false; done(); }
   }, 2500);
 }
+
+async function runTask(task, button, label, {start = `/run/${task}`, out = 'run-out', done = load, body = null} = {}) {
+  button.disabled = true;
+  let r;
+  try {
+    r = await (await fetch(start, body ? {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                          body: JSON.stringify(body)} : {method: 'POST'})).json();
+  }
+  catch (e) { r = {ok: false, error: 'The app did not answer, so nothing started. Try again.'}; }
+  // A writer that bills per use (set in Settings) writes only once you say yes (26 Oct 2026).
+  if (!r.ok && r.paid_writer && !(body && body.paid) && confirm(`${r.error}\n\nUse it and go on?`))
+    return runTask(task, button, label, {start, out, done, body: {...(body || {}), paid: true}});
+  $(out).hidden = false;
+  $(out).textContent = r.ok ? `${label}…` : (r.error || r.note || 'Could not start.');
+  if (!r.ok) { button.disabled = false; return; }
+  follow(task, button, out, done);
+}
+const sending = (chosen = false) => chosen && CH.meta && CH.meta.auto_submit
+  ? 'Only an Eligible job on Greenhouse\'s own board with nothing left for you may be sent by itself; every other form waits for you to press Submit'
+  : 'Each form is filled and stops before Submit — check it, press Submit, and the next one opens';
+const afterNext = () => { loadNext(); load(); loadChosen(); };
+$('apply-next').onclick = () => runTask('apply', $('apply-next'), `A browser is opening. ${sending()}`,
+  {start: '/apply/next/start', out: 'next-out', done: afterNext});
+
+// -- Your chosen jobs, as they happen (Phase 2, 25 Oct 2026) ---------------------------------
+// The list is kept in the app's database, so what this shows survives a restart of the app or the
+// Mac. The page reads it once, then is sent each step as it is written (server-sent events): a
+// job's state, the step it is at, the run's own news. A reconnect -- a refresh, a dropped
+// connection, the app restarting, the laptop reopened -- says the last step it had and is sent the
+// rest, none twice. Every job comes with `version`, the id of its latest step: an older picture
+// never replaces a newer one, whichever way the two arrived. Without the stream the page looks
+// every 2 seconds while anything moves (every 20 when nothing does) and tries the stream again.
+const TURN = {ready: 'goes on the next run', later: 'later', needs: 'waits for your answer',
+              answers: 'waits for your answers', blocked: "can't go"};
+const MOVING = ['validating', 'preparing', 'ready', 'running', 'waiting_user'];
+const DONE = ['applied', 'failed', 'skipped', 'cancelled'];
+const MODES = {live: 'Live', reconnecting: 'Reconnecting…', polling: 'Checking every few seconds',
+               down: "The app isn't answering", starting: ''};
+const CH = {items: new Map(), order: [], events: new Map(), last: 0, meta: null, open: new Set(), steps: new Map()};
+let chosenTimer = null, chosenSoon = null, stream = null, streamFailures = 0, streamAgain = null,
+    mode = 'starting', drawing = false;
+
+function since(iso) {             // how long a job has been at the step it is at
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (!isFinite(s)) return '';
+  return s < 60 ? 'just now' : s < 3600 ? `for ${Math.floor(s / 60)} min`
+    : `for ${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
+}
+function setMode(m) {
+  mode = m;
+  const el = $('chosen-live');
+  el.dataset.mode = m;
+  el.textContent = MODES[m];
+  el.hidden = !MODES[m];
+}
+function stepLine(e) {
+  const words = e.kind === 'state' && e.label && e.message.startsWith(e.label + ': ')
+    ? e.message.slice(e.label.length + 2) : e.message;
+  const pill = e.kind === 'state' ? `<span class="pill st-${esc(e.state)}">${esc(e.label)}</span> ` : '';
+  return `<li><time datetime="${esc(e.at)}">${esc(e.clock)}</time>${pill}${esc(words)}</li>`;
+}
+// What a decision covers, said wherever decisions are shown: "Eligible" alone read as if the job's
+// skills and years had been weighed too (26 Oct 2026).
+const SCOPE = 'Eligibility here checks clearance, citizenship and visa sponsorship against your profile, and that '
+  + 'the posting is open and within your own rules (where, how old) — '
+  + 'not skills, experience or qualifications: the Fit score weighs those.';
+// Its eligibility decision: the reasons when its other lines don't say them already, and the posting's
+// own words for each requirement it states. Sent by the app itself only when Eligible.
+function decisionHtml(dc, autoSubmit) {
+  if (!dc) return '';
+  const said = {ELIGIBLE_WITH_WARNINGS: true, UNVERIFIED: true, INELIGIBLE: dc.reasons.length > 1}[dc.decision];
+  const yours = autoSubmit && (dc.decision === 'ELIGIBLE_WITH_WARNINGS' || dc.decision === 'UNVERIFIED')
+    ? ' Submit by itself leaves this one to you.' : '';
+  const words = dc.evidence.length ? `<details class="dc-words"><summary>The posting's words</summary><ul>${
+    dc.evidence.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : '';
+  return `<div class="dc"><span class="pill dc-${esc(dc.decision.toLowerCase())}" title="${esc(SCOPE)}">${esc(dc.label)}</span>`
+    + `${said || yours ? `<div class="hint">${said ? esc(dc.reasons.join('; ')) + '.' : ''}${yours}</div>` : ''}${words}</div>`;
+}
+function chosenRow(i) {
+  const turn = i.state === 'queued' && i.turn
+    ? `<div class="hint">${TURN[i.turn]}${i.turn_reason ? ': ' + esc(i.turn_reason) : ''}${
+        i.turn === 'answers' ? ' · <a href="/apply/questions">Answer them</a>' : ''}</div>` : '';
+  const moving = MOVING.includes(i.state);
+  const now = moving && i.current
+    ? `<div class="ch-now"><span class="ch-now-dot" aria-hidden="true"></span><span>${esc(i.current)}</span>
+         <span class="hint" data-since="${esc(i.current_at || i.since)}">${since(i.current_at || i.since)}</span></div>` : '';
+  const need = i.action ? `<div class="ch-need">${esc(i.action)}</div>` : '';
+  const said = moving ? '' : (i.outcome || i.note);          // on its way, the step above says it
+  // The files made ready for it, by name and checksum: exactly these are given to its form.
+  const docs = (i.documents || []).length ? `<div class="hint ch-docs">${i.documents.every(d => d.state === 'sent') ? 'Sent' : 'Made ready'}: ${
+    i.documents.map(d => `${esc(d.name)} <span class="ch-sum" title="Checksum: checked again when its form opens">${esc(d.sha256.slice(0, 12))}</span>`)
+    .join(' · ')}</div>` : '';
+  // Applied: its record on the Applied page -- the day, what went, its stages (26 Oct 2026).
+  const record = i.state === 'applied' ? `<div class="hint"><a href="/applications/${i.job_id}">See it on the Applied page</a></div>` : '';
+  const open = CH.open.has(i.id);
+  const acts = [
+    i.can.cancel ? `<button class="btn small" type="button" data-ch="cancel" data-item="${i.id}">Cancel</button>` : '',
+    i.can.retry ? `<button class="btn small" type="button" data-ch="retry" data-item="${i.id}">Retry</button>` : '',
+    i.can.confirm ? `<button class="btn primary small" type="button" data-ch="yes" data-item="${i.id}">Yes, it went</button>
+                     <button class="btn small" type="button" data-ch="no" data-item="${i.id}">No, it wasn't sent</button>` : '',
+    `<button class="btn small" type="button" data-steps="${i.id}" aria-expanded="${open}">${open ? 'Hide steps' : 'Steps'}</button>`];
+  // The buttons sit in a column of their own on a wide screen and under the state on a phone,
+  // where a fourth column squeezed "Cancel" to a letter a line.
+  const buttons = acts.join('');
+  const steps = open ? `<tr class="ch-steps-row"><td></td><td colspan="3"><ol class="ch-log ch-steps" aria-label="Every step for this job">${
+    CH.steps.has(i.id) ? (CH.steps.get(i.id).map(stepLine).join('') || '<li class="hint">No steps yet.</li>')
+                       : '<li class="hint">Loading…</li>'}</ol></td></tr>` : '';
+  return [`<tr data-row="${i.id}">
+    <td class="num">${fit(i.score)}</td>
+    <td class="ch-job"><a href="/job/${i.job_id}"><b>${esc(i.title || 'Job ' + i.job_id)}</b></a>
+      <div class="hint">${esc(i.company)}${i.board ? ' · ' + esc(i.board) : ''}</div></td>
+    <td><span class="pill st-${i.state}">${esc(i.label)}</span> <span class="hint">${esc(i.updated)}</span>
+      ${now}${turn}${said ? `<div class="hint">${esc(said)}</div>` : ''}${need}
+      ${i.assisted && i.state === 'queued' ? `<div class="hint">${esc(i.assisted)}</div>` : ''}
+      ${decisionHtml(i.decision, CH.meta && CH.meta.auto_submit && i.board === 'greenhouse')}${docs}${record}
+      <div class="ch-acts ch-acts-narrow">${buttons}</div></td>
+    <td class="ch-acts-wide"><div class="ch-acts">${buttons}</div></td></tr>`, steps];
+}
+
+// Written only when it changes (26 Oct 2026). A press whose button is drawn again between press and release
+// is lost: WebKit (Safari) drops the click when only its text is set again, the same words or not; every
+// browser drops it when the button itself is drawn again. Each redraw of this card used to do both.
+const DRAWN = new Map();                                  // element -> the HTML last written into it
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+function setHTML(el, html) { if (DRAWN.get(el) !== html) { el.innerHTML = html; DRAWN.set(el, html); } }
+function fragment(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; }
+// Each job's row drawn again only when what it shows changed -- the others keep their very buttons -- and
+// the whole table only when a job comes, goes or moves. Its "for N min" is kept up to date in place.
+const ROWS = new Map();                                   // item id -> [its row's HTML, its steps' HTML]
+function resetList(html) { ROWS.clear(); delete $('chosen-list').dataset.order; setHTML($('chosen-list'), html); }
+function drawRows(items) {
+  const box = $('chosen-list'), order = items.map(i => i.id).join(',');
+  if (box.dataset.order !== order || !box.querySelector('tbody')) {
+    ROWS.clear();
+    DRAWN.delete(box);                                    // its rows were drawn in since: the table afresh
+    setHTML(box, `<div class="t-table-wrap"><table class="nx-jobs"><thead><tr>
+      <th class="num">Fit</th><th>Job</th><th>State</th><th class="ch-acts-wide"><span class="sr-only">What you can do</span></th>
+    </tr></thead><tbody></tbody></table></div>`);
+    box.dataset.order = order;
+  }
+  const body = box.querySelector('tbody');
+  for (const i of items) {
+    const [row, steps] = chosenRow(i), key = row.replace(/(data-since="[^"]*">)[^<]*/g, '$1'), had = ROWS.get(i.id) || [];
+    let tr = body.querySelector(`tr[data-row="${i.id}"]`);
+    if (!tr || had[0] !== key) {
+      const fresh = fragment(row);
+      if (tr) tr.replaceWith(fresh); else body.append(fresh);
+      tr = fresh;
+    }
+    const next = tr.nextElementSibling, shown = next && next.classList.contains('ch-steps-row') ? next : null;
+    if (had[1] !== steps || !steps !== !shown) {
+      if (shown) shown.remove();
+      if (steps) tr.after(fragment(steps));
+    }
+    ROWS.set(i.id, [key, steps]);
+  }
+}
+
+// What the page knows, kept newest-first whichever way it came: the full read, or the stream.
+function takeItem(i, full) {
+  const had = CH.items.get(i.id);
+  if (had && had.version > i.version) {                 // older than what is shown: never shown
+    if (full && had.state === 'queued' && i.state === 'queued') { had.turn = i.turn; had.turn_reason = i.turn_reason; }
+    return false;
+  }
+  if (had && !full && had.state === 'queued' && i.state === 'queued') { i.turn = had.turn; i.turn_reason = had.turn_reason; }
+  CH.items.set(i.id, i);
+  if (!CH.order.includes(i.id)) CH.order.push(i.id);
+  return true;
+}
+function takeEvent(e) {
+  if (CH.events.has(e.id)) return false;                // after a reconnect: never twice
+  CH.events.set(e.id, e);
+  if (e.id > CH.last) CH.last = e.id;
+  const steps = e.item_id && CH.steps.get(e.item_id);
+  if (steps && !steps.some(s => s.id === e.id)) steps.push(e);
+  if (CH.events.size > 200) CH.events.delete(Math.min(...CH.events.keys()));
+  return true;
+}
+function takeFull(d) {
+  CH.meta = d;
+  const seen = new Set(d.items.map(i => i.id));
+  d.items.forEach(i => takeItem(i, true));
+  // Gone from the list (cleared): unless a step newer than this read arrived for it meanwhile.
+  for (const [id, i] of CH.items) if (!seen.has(id) && i.version <= d.last_event_id) CH.items.delete(id);
+  CH.order = [...d.items.map(i => i.id), ...CH.order.filter(id => !seen.has(id) && CH.items.has(id))];
+  d.events.forEach(takeEvent);
+  if (d.last_event_id > CH.last) CH.last = d.last_event_id;
+}
+
+function drawSoon() {
+  if (drawing) return;
+  drawing = true;
+  setTimeout(draw, 60);                                  // a burst of steps drawn once
+}
+function draw() {
+  drawing = false;
+  const d = CH.meta;
+  if (!d) return;
+  const items = CH.order.map(id => CH.items.get(id)).filter(Boolean);
+  const n = items.length, run = d.run, live = run.live, last = run.last;
+  const queued = items.filter(i => i.state === 'queued').length;
+  const finished = items.filter(i => DONE.includes(i.state)).length;
+  setText($('chosen-title'), n ? `Your chosen jobs (${n})` : 'Your chosen jobs');
+  $('chosen-run').hidden = !live && !last;
+  setText($('chosen-run'), live ? (run.pausing ? 'Pausing…' : 'Running') : last ? `Last run ${last.started}` : '');
+  $('chosen-pause').hidden = !live || run.pausing;
+  $('chosen-cancel-all').hidden = !queued;
+  $('chosen-clear').hidden = !finished;
+  setText($('chosen-start'), !live && last && last.state === 'paused' && queued ? 'Resume' : 'Apply to these');
+  $('chosen-start').disabled = live || d.running || !d.next_run || !d.left_today || !!d.details_missing;
+  $('chosen-prepare').disabled = live || d.running || !d.to_prepare || !!d.details_missing;
+  setText($('chosen-prepare'), d.to_prepare ? `Prepare these (${d.to_prepare})` : 'Prepare these');
+  setHTML($('chosen-note'), !n ? ''
+    : (d.details_missing ? '<b>Your details are not finished</b> (Settings → Your details): nothing is applied to until they are. ' : '')
+      + (live ? '' : last && last.note ? `${esc(last.note)} · ` : '')
+      + `${d.next_run} can go on the next run · ${d.left_today} more today · `
+      + (d.auto_submit ? 'Submit by itself is <b>on</b>: a Greenhouse form with nothing left for you, for a job marked '
+                         + 'Eligible, is sent without waiting; Workday, JazzHR and every other board\'s form, and a job '
+                         + 'with warnings or unverified, wait for you to press Submit'
+                       : 'every form stops before Submit for you')
+      + `<br>${esc(SCOPE)}`);
+  if (n) drawRows(items);
+  else resetList('<p class="sub">No jobs chosen yet. Tick jobs on the <a href="/">Jobs</a> page, press <b>Review and add to '
+                 + 'Auto-apply</b>, and add the ones that can go. They wait here until you press Apply to these.</p>');
+  const recent = [...CH.events.values()].sort((a, b) => b.id - a.id).slice(0, 60);
+  $('chosen-activity-box').hidden = !recent.length;
+  setHTML($('chosen-activity'), recent.map(e => `<li><time datetime="${esc(e.at)}">${esc(e.clock)}</time>`
+    + `${e.job ? `<b>${esc(e.job)}</b> · ` : ''}${esc(e.message)}</li>`).join(''));
+}
+
+async function loadChosen() {
+  clearTimeout(chosenTimer);
+  let d;
+  try { d = await (await fetch('/apply/chosen')).json(); } catch (e) { d = {ok: false}; }
+  if (!d.ok) {
+    resetList('<p class="load-error" role="alert">Your chosen jobs could not be loaded. It tries again in a moment.</p>');
+    // The last answer may be out of date: nothing claims a run is going, or offers its controls, until one comes.
+    $('chosen-run').hidden = true;
+    for (const id of ['chosen-pause', 'chosen-cancel-all', 'chosen-clear']) $(id).hidden = true;
+    $('chosen-start').disabled = $('chosen-prepare').disabled = true;
+    $('chosen-note').innerHTML = '';
+    if (mode !== 'live') setMode('down');
+    chosenTimer = setTimeout(loadChosen, 5000);
+    return;
+  }
+  if (AUTO === null) AUTO = d.auto_submit;
+  takeFull(d);
+  draw();
+  if (!stream && !streamAgain) follows();
+  // With the stream, a full read each minute, for what steps do not carry (whose turn is next).
+  // Without it: every 2 seconds while anything moves, every 20 when nothing does.
+  const busy = d.run.live || d.items.some(i => MOVING.includes(i.state));
+  chosenTimer = setTimeout(loadChosen, mode === 'live' ? 60000 : busy ? 2000 : 20000);
+}
+function loadSoon() {
+  clearTimeout(chosenSoon);
+  chosenSoon = setTimeout(loadChosen, 300);
+}
+function follows() {                                       // the stream, from the last step the page has
+  clearTimeout(streamAgain);
+  streamAgain = null;
+  if (!window.EventSource) { setMode('polling'); return; }
+  if (stream) stream.close();
+  stream = new EventSource(`/apply/chosen/stream?after=${CH.last}`);
+  stream.addEventListener('open', () => { streamFailures = 0; setMode('live'); });
+  stream.addEventListener('activity', m => { if (takeEvent(JSON.parse(m.data))) drawSoon(); });
+  stream.addEventListener('item', m => { if (takeItem(JSON.parse(m.data), false)) drawSoon(); });
+  stream.addEventListener('run', m => {
+    const run = JSON.parse(m.data), was = CH.meta && CH.meta.run;
+    if (!CH.meta) return;
+    CH.meta.run = run;
+    drawSoon();
+    if (was && was.live !== run.live) loadSoon();         // started or ended: whose turn is next, today's count
+  });
+  stream.addEventListener('error', () => {
+    streamFailures += 1;                                   // the browser tries again by itself
+    setMode('reconnecting');
+    if (streamFailures >= 4) {                             // still failing: look every few seconds instead
+      stream.close();
+      stream = null;
+      setMode('polling');
+      loadChosen();
+      streamAgain = setTimeout(follows, 60000);
+    }
+  });
+}
+async function toggleSteps(id) {
+  if (CH.open.has(id)) { CH.open.delete(id); draw(); return; }
+  CH.open.add(id);
+  draw();
+  if (CH.steps.has(id)) return;
+  let d;
+  try { d = await (await fetch(`/apply/chosen/events?item=${id}`)).json(); } catch (e) { d = {ok: false}; }
+  const steps = d.ok ? d.events : [];
+  for (const e of CH.events.values())                      // any the stream brought while this was read
+    if (e.item_id === id && !steps.some(s => s.id === e.id)) steps.push(e);
+  steps.sort((a, b) => a.id - b.id);
+  CH.steps.set(id, steps);
+  draw();
+}
+setInterval(() => document.querySelectorAll('#chosen-list [data-since]').forEach(el => {
+  el.textContent = since(el.dataset.since);
+}), 15000);
+document.addEventListener('visibilitychange', () => {      // the laptop reopened, the tab back in front
+  if (document.hidden) return;
+  if (!stream) follows();
+  loadSoon();
+});
+window.addEventListener('online', () => { if (!stream) follows(); loadSoon(); });
+async function chosenPost(url, body, said) {
+  let r;
+  try {
+    const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                  body: JSON.stringify(body || {})});
+    // A refusal says why (in its "error"); a page the app broke on has no words for the person.
+    r = await res.json().catch(() => ({ok: false, error: `The app hit an error (${res.status}). `
+      + 'The list below shows where each job stands now; data/webapp.log has the details.'}));
+  } catch (e) { r = {ok: false, error: 'The app did not answer. Try again.'}; }
+  $('chosen-say').textContent = r.ok ? (said || '') : (r.error || 'That could not be done.');
+  if (body && body.item) ROWS.delete(body.item);          // its row drawn afresh: the pressed button back
+  loadSoon();
+  return r;
+}
+$('chosen-list').addEventListener('click', e => {
+  const s = e.target.closest('[data-steps]');
+  if (s) { toggleSteps(+s.dataset.steps); return; }
+  const b = e.target.closest('[data-ch]');
+  if (!b) return;
+  const item = +b.dataset.item;
+  b.disabled = true;
+  if (b.dataset.ch === 'cancel') chosenPost('/apply/chosen/cancel', {item}, 'Cancelled: it will not be opened.');
+  if (b.dataset.ch === 'retry') chosenPost('/apply/chosen/retry', {item}, 'Back in the queue.');
+  if (b.dataset.ch === 'yes') chosenPost('/apply/chosen/confirm', {item, went: true}, 'Recorded as applied.');
+  if (b.dataset.ch === 'no') chosenPost('/apply/chosen/confirm', {item, went: false}, 'Recorded as not sent: Retry puts it back in the queue.');
+});
+$('chosen-pause').onclick = () => chosenPost('/apply/chosen/pause', {}, 'Pausing: the form on screen is finished or closed first; then it stops.');
+$('chosen-cancel-all').onclick = () => {
+  if (confirm('Cancel every job still waiting its turn? They stay in your Jobs list, and Retry brings one back.'))
+    chosenPost('/apply/chosen/cancel', {all: true}, 'The waiting ones are cancelled.');
+};
+$('chosen-clear').onclick = () => chosenPost('/apply/chosen/clear', {}, 'Finished ones cleared from this list (the app keeps their record).');
+$('chosen-start').onclick = () => {
+  runTask('apply-chosen', $('chosen-start'), `A browser is opening. ${sending(true)}`,
+          {start: '/apply/chosen/start', out: 'chosen-out', done: afterNext});
+  setTimeout(loadChosen, 1500);
+};
+$('chosen-prepare').onclick = () => {
+  runTask('prepare-chosen', $('chosen-prepare'), 'Making each one ready: its resume and cover letter, written down '
+          + 'file by file. No form opens and nothing is sent; a tailoring takes a few minutes',
+          {start: '/apply/chosen/prepare', out: 'chosen-out', done: afterNext});
+  setTimeout(loadChosen, 1500);
+};
+loadChosen();
+fetch('/run/apply-chosen/status').then(r => r.json()).then(s => {
+  if (s.running) { $('chosen-out').textContent = s.tail || 'Applying to your chosen jobs…'; follow('apply-chosen', $('chosen-start'), 'chosen-out', afterNext); }
+}).catch(() => {});
+fetch('/run/prepare-chosen/status').then(r => r.json()).then(s => {
+  if (s.running) { $('chosen-out').textContent = s.tail || 'Making your chosen jobs ready…'; follow('prepare-chosen', $('chosen-prepare'), 'chosen-out', afterNext); }
+}).catch(() => {});
 $('prepare').onclick = () => runTask('prepare', $('prepare'), 'Preparing: tailoring, cover letters, questions — a few minutes per job');
-$('start').onclick = () => runTask('apply-ready', $('start'),
-  'A browser is opening. Each form is filled and stops before Submit — check it, press Submit, and the next one opens');
+$('start').onclick = () => runTask('apply-ready', $('start'), `A browser is opening. ${sending()}`);
 load();
+loadNext();
+// An apply run going already (from here, or a job's own page): follow it rather than look idle.
+fetch('/run/apply/status').then(r => r.json()).then(s => {
+  if (s.running) { $('next-out').textContent = s.tail || 'An apply run is going…'; follow('apply', $('apply-next'), 'next-out', afterNext); }
+}).catch(() => {});
 </script>
 {% endblock %}

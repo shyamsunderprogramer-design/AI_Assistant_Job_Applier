@@ -36,6 +36,10 @@ _NOT_LEARNED = ("first name", "last name", "preferred first name", "email", "pho
                 # True for one form only: the day it was signed, the job it was for, a start date.
                 "date", "today", "signature date", "what full time job", "which position", "what position",
                 "when can you start", "start date")
+# A job site's own boxes, not the employer's questions: an Adzuna page's "Receive similar jobs by
+# email" was learned with the person's address (22 Oct 2026), ready to sign them up for alerts.
+_SITE_BOXES = re.compile(r"similar jobs|job alert|jobs? by email|newsletter|subscribe|notify me|"
+                         r"email me|alerts? for", re.I)
 
 
 def normalise(label: str) -> str:
@@ -62,11 +66,14 @@ def _company_words(company: str) -> set[str]:
 
 
 def learnable(label: str, value: str, company: str = "") -> bool:
+    from backend.apply.essays import is_essay
     question, answer = normalise(label), (value or "").strip()
     if not question or not answer or len(answer) > MAX_ANSWER_CHARS:
         return False
-    if any(question.startswith(p) or question == p for p in _NOT_LEARNED):
+    if any(question.startswith(p) or question == p for p in _NOT_LEARNED) or _SITE_BOXES.search(question):
         return False
+    if is_essay(label):
+        return False  # job-specific prose is draft material, never an exact answer for every employer
     words = _company_words(company)
     said = set(re.findall(r"[a-z0-9]+", f"{question} {answer.lower()}"))
     return not (words & said)
@@ -75,22 +82,38 @@ def learnable(label: str, value: str, company: str = "") -> bool:
 def remember(answers: dict[str, str], company: str = "",
              path: Path | None = None) -> list[str]:
     """Add the learnable ones to the bank. Returns the questions learned."""
-    import yaml
+    from backend.apply.filesafe import one_writer
 
     target = Path(path or BANK_PATH)
-    bank = load(target)
-    learned = []
-    for label, value in answers.items():
-        if learnable(label, value, company):
-            key = normalise(label)
-            if bank.get(key) != value.strip():
-                bank[key] = value.strip()
-                learned.append(key)
-    if learned:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            "# Your own answers to screening questions, learned from forms you\n"
-            "# finished yourself. Edit or delete any line; it is reused exactly.\n"
-            + yaml.safe_dump(dict(sorted(bank.items())), sort_keys=False, allow_unicode=True),
-            encoding="utf-8")
+    with one_writer(target):                     # read, changed and written back as one (29 Oct 2026)
+        bank = load(target)
+        learned = []
+        for label, value in answers.items():
+            if learnable(label, value, company):
+                key = normalise(label)
+                if bank.get(key) != value.strip():
+                    bank[key] = value.strip()
+                    learned.append(key)
+        if learned:
+            _write_bank(target, bank)
     return learned
+
+
+def save_answer(question: str, answer: str, path: Path | None = None) -> None:
+    """One answer the person gave outright (the assistant's "remember this"), kept exactly as given."""
+    from backend.apply.filesafe import one_writer
+
+    target = Path(path or BANK_PATH)
+    with one_writer(target):
+        bank = load(target)
+        bank[question] = answer
+        _write_bank(target, bank)
+
+
+def _write_bank(target: Path, bank: dict[str, str]) -> None:
+    import yaml
+
+    from backend.apply.filesafe import write_whole
+    write_whole(target, "# Your own answers to screening questions, learned from forms you\n"
+                        "# finished yourself. Edit or delete any line; it is reused exactly.\n"
+                + yaml.safe_dump(dict(sorted(bank.items())), sort_keys=False, allow_unicode=True))

@@ -289,12 +289,18 @@ thead th{color:var(--muted);font-size:11px}
 td.num,thead th[data-k=score],thead th[data-k=ageDays],thead th[data-k=expMin],thead th[data-k=payMin]{text-align:right}
 thead th[data-k]:not([aria-sort]):hover::after{content:" ↕";opacity:.6}
 tr.ineligible td{opacity:.72}
-/* 5,770 rows: the browser skips laying out the ones off screen. */
+/* Meant to skip laying out rows off screen, but table rows are not skipped: 9,947 of them still took
+   WebKit 1.3 s (21 Oct 2026). The Jobs list now draws 300 at a time instead (index.html). */
 #rows tr{content-visibility:auto;contain-intrinsic-size:auto 52px}
+/* The Jobs heading row, held under the filter bar by the script in index.html (asked for on
+   21 Oct 2026): above the rows sliding under it, square against the bar, and its line drawn by the
+   cell itself -- a collapsed table border would stay behind where the row started. */
+.tw thead th{position:relative;z-index:3}
+.tw.head-pinned thead th{border-radius:0;box-shadow:inset 0 -1px 0 var(--line)}
 @media (min-width:821px){
-  /* No table pins its heading row: pinned, it sat over the rows scrolling under it. Only the app bar
-     and the Jobs filter bar stay at the top, so a row brought into view lands just below them. */
-  html{scroll-padding-top:calc(var(--appbar-h) + var(--bar-h, 0px) + 12px)}
+  /* A row brought into view lands below the app bar. On the Jobs page the filter bar and the heading
+     row stay at the top too, and the script in base.html adds them. */
+  html{scroll-padding-top:calc(var(--appbar-h) + 12px)}
 }
 @media (max-width:820px){
   .phone-only{display:block;margin:12px 0 0}
@@ -307,6 +313,7 @@ tr.ineligible td{opacity:.72}
 .health-stats{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .health-list{margin:6px 0 0;padding:0;list-style:none;display:grid;gap:8px}
 .health-list li{display:flex;gap:10px;align-items:baseline}
+.health-list li .pill{flex:none}  /* on a phone the pill shrank to one letter a line */
 .nowrap{white-space:nowrap}
 .t-table th.num{text-align:right}
 /* Settings and Your details (review R5) */

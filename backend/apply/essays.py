@@ -50,7 +50,9 @@ Reply with JSON only: {"answer": "...", "gaps": ["what the question asks that th
 
 def is_essay(label: str) -> bool:
     """A question that wants a written answer, not a choice or a short fact."""
-    return len(label or "") > 40 and bool(ESSAY.search(label or ""))
+    text = label or ""
+    motivation = re.search(r"\b(?:what excites|what interests|why are you interested|why do you want)\b", text, re.I)
+    return bool(motivation) or (len(text) > 40 and bool(ESSAY.search(text)))
 
 
 def resume_text(cfg) -> str:
@@ -104,7 +106,7 @@ def hedges(answer: str) -> list[str]:
 
 def draft_for_application(cfg, job_id: int, labels: list[str] | None = None, say=print) -> dict:
     """Draft every essay question still open on one prepared application; kept as drafts, never as answers."""
-    from backend.apply.prepare import _save, load
+    from backend.apply.prepare import keep_drafts, load
     from data_engineering.db.models import Job
     from data_engineering.db.session import get_session
     data = load()
@@ -125,7 +127,5 @@ def draft_for_application(cfg, job_id: int, labels: list[str] | None = None, say
                              "made": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         except Exception as exc:
             say(f"    could not draft ({str(exc)[:100]})")
-    data = load()                          # the file may have changed while the model wrote
-    data[str(job_id)].setdefault("drafts", {}).update(drafts)
-    _save(data)
+    keep_drafts(job_id, drafts)            # under the file's lock: it may have changed while the model wrote
     return drafts

@@ -207,6 +207,17 @@ def _no_real_redo_list(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_chosen_jobs(monkeypatch, tmp_path):
+    """The jobs the person ticked and added to Auto-apply, the applications waiting for their
+    "Did it go?", and the prepared ones are never read or changed by tests."""
+    from backend.apply import anyform, chosen, execution, prepare
+    monkeypatch.setattr(chosen, "PATH", tmp_path / "chosen.json")
+    monkeypatch.setattr(anyform, "UNCONFIRMED", tmp_path / "unconfirmed.json")
+    monkeypatch.setattr(prepare, "PREPARED", tmp_path / "prepared.json")
+    monkeypatch.setattr(execution, "AUTO_SUBMIT_HOLD", tmp_path / "auto_submit.hold")   # the live hold, never read
+
+
+@pytest.fixture(autouse=True)
 def _no_real_written_answers(monkeypatch, tmp_path):
     """The person's written answers are never drafted from, or added to, by tests."""
     from backend.apply import written

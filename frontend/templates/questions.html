@@ -6,7 +6,7 @@
     <h1>Application questions</h1>
     <div class="sub">Every question your ready applications ask that your profile doesn't answer.
       Questions several employers ask are shown once — your answer goes to all of them.
-      When an application has nothing left, it can be sent without you.
+      The optional automatic submission setting below applies only to Your chosen jobs.
       <b>Desired salary</b> is answered for you: 80–95% of the posted maximum, or of the market's for similar roles when nothing is posted.</div>
   </div>
 </header>
@@ -19,9 +19,12 @@
       <span>Submit applications by itself</span> <span class="state" id="auto-label" aria-hidden="true">Off</span>
     </label>
   </div>
-  <div class="sub" id="auto-help">When on, an application is submitted for you only if every question is answered,
-    no CAPTCHA puzzle is showing, and your profile says you can take the job. Anything else still
-    waits for you to press Submit. Nothing is sent until you press <b>Start applying</b> on the Auto-apply page.</div>
+  <div class="sub" id="auto-help">This setting applies only when you press <b>Apply to these</b> in Your chosen jobs.
+    Only a job marked <b>Eligible</b> on Greenhouse's own board may be submitted automatically, after its documents
+    and required answers are checked, with no CAPTCHA puzzle or legal question left for you.
+    Warnings, unverified jobs and other boards wait for you to press Submit.
+    <b>Apply to next 10</b>, morning's <b>Start applying</b>, job-page <b>Auto-apply</b> and assistant runs
+    always stop before Submit, even when this setting is on. Eligibility does not evaluate skills or experience.</div>
 </section>
 
 <section class="card" aria-labelledby="written-title" id="written">
@@ -108,7 +111,7 @@ function field(g, i) {
   g.jobs.forEach(j => count[j.company] = (count[j.company] || 0) + 1);
   const names = Object.entries(count).map(([c, n]) => n > 1 ? `${c} ×${n}` : c).join(', ');
   const who = g.jobs.length > 1 ? `<span class="sub"> · ${g.jobs.length} applications: ${esc(names)}</span>` : '';
-  const long = /why|describe|tell us|walk us|explain|share|how have you|how do you|what did you|example|cover letter|additional information|anything else/i.test(g.label);
+  const long = /why|describe|tell us|walk us|explain|share|how have you|how do you|what did you|what excites|what interests|example|cover letter|additional information|anything else/i.test(g.label);
   const input = g.options.length
     ? `<select data-g="${i}"${must}><option value=""></option>${g.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>`
     : (long ? `<textarea rows="${g.draft ? 9 : 4}" data-g="${i}"${must}>${esc(g.draft ? g.draft.answer : '')}</textarea>`
@@ -162,7 +165,7 @@ async function load(keep = {}) {
       <span>${j.required ? `<span class="pill bad">${j.required} required left</span>`
         : (j.open ? `<span class="pill">ready · ${j.open} optional left</span>` : '<span class="pill good">ready</span>')}</span>
     </div>`).join('')
-    + (d.not_eligible.length ? `<div class="sub warn" style="margin-top:8px">Won't be sent (from your profile): `
+    + (d.not_eligible.length ? `<div class="sub warn" style="margin-top:8px">Won't be sent: `
        + d.not_eligible.map(n => `${esc(n.job)} — ${esc(n.why.join(', '))}`).join('; ') + '</div>' : '')
     || '<p class="sub">Nothing ready yet. The morning run prepares applications, or press <b>Prepare now</b> on the <a href="/apply">Auto-apply page</a>.</p>';
 

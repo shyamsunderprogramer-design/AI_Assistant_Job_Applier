@@ -116,6 +116,25 @@ def _click(page, el) -> bool:
     return False
 
 
+def _outline(page, selectors) -> None:
+    """Outline what is left for the person, in the orange the apply pages use for Submit, and bring
+    the first into view. The terms box is theirs to tick: agreeing is not done for them."""
+    try:
+        page.evaluate("""sels => {
+          let first = null;
+          for (const s of sels) {
+            const el = document.querySelector(s);
+            if (!el) continue;
+            el.style.outline = '4px solid #f59e0b';
+            el.style.outlineOffset = '4px';
+            first = first || el;
+          }
+          if (first) first.scrollIntoView({block: 'center'});
+        }""", list(selectors))
+    except Exception as exc:            # an outline is a help, never a reason to stop
+        log.debug("Workday outline: %s", exc)
+
+
 def workday_sign_in(page, state: dict, say=print) -> str:
     """Do the account step on a Workday sign-in page. Returns what happened.
 
@@ -142,10 +161,12 @@ def workday_sign_in(page, state: dict, say=print) -> str:
         _fill(page, "email", address)
         _fill(page, "password", password)
         _fill(page, "verifyPassword", password)
+        _outline(page, ('[data-automation-id="createAccountCheckbox"]',
+                        '[data-automation-id="createAccountSubmitButton"]'))
         state["created"] = True
         say("   New Workday account filled with your job-site email and password. Tick the "
-            "employer's terms box and press Create Account (and enter any emailed code) — "
-            "I'll carry on after that.")
+            "employer's terms box and press Create Account (both outlined in orange), and enter "
+            "any emailed code — I'll carry on after that.")
         return "create-filled"
 
     if not state.get("signed_in_tried") and _visible(page, '[data-automation-id="password"]'):

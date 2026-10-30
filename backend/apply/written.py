@@ -19,14 +19,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import threading
 from datetime import datetime, timezone
 
+from backend.apply.filesafe import one_writer, write_whole
 from backend.config.loader import PROJECT_ROOT
 
 PATH = PROJECT_ROOT / "data" / "written_answers.json"
 MIN_CHARS = 150                       # a written answer, not a fact
-_lock = threading.Lock()
 
 _STOP = set("""a an and are as at be by can describe did do does for from have how i in is it me of on or our
 please share tell that the this to us walk was we were what when where which who why will with would you your
@@ -90,10 +89,7 @@ def load() -> list[dict]:
 
 
 def _save(items: list[dict]) -> None:
-    PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, indent=1, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(PATH)
+    write_whole(PATH, json.dumps(items, indent=1, ensure_ascii=False))
 
 
 def is_written(question: str, answer: str) -> bool:
@@ -113,7 +109,7 @@ def keep(question: str, answer: str, company: str = "", title: str = "", job_id:
     and where a cut-short question was kept, the whole one takes its place."""
     question, answer = " ".join(question.split()), answer.strip()
     asked, said = _norm(question), _norm(answer)
-    with _lock:
+    with one_writer(PATH):                         # any process: read, changed, written back as one
         items = load()
         for item in items:
             if _norm(item["answer"]) != said:
@@ -143,7 +139,7 @@ def keep_from(answers: dict, company: str = "", title: str = "", job_id: int | N
 
 
 def remove(entry_id: str) -> bool:
-    with _lock:
+    with one_writer(PATH):
         items = load()
         left = [i for i in items if i["id"] != entry_id]
         if len(left) == len(items):

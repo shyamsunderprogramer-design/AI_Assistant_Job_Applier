@@ -93,6 +93,15 @@ def starred_ids() -> set[int]:
     return {int(j["id"]) for j in load()["jobs"]}
 
 
+def watched_job_ids(jobs) -> set[int]:
+    """Which of these jobs are at a watched company, matched the way `companies_view` matches."""
+    keys = watched_keys()
+    if not keys:
+        return set()
+    return {job.id for job in jobs
+            if company_key(job.company) in keys or company_key(job.company_slug) in keys}
+
+
 # -- companies ---------------------------------------------------------------------------------------
 
 def add_company(text: str, on_board=None) -> dict:

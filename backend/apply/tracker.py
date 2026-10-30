@@ -147,11 +147,19 @@ def application(job_id: int) -> dict | None:
         folder = Path(record.get("evidence") or "")
         files = [f for f in EVIDENCE_FILES if folder.is_dir() and (folder / f).exists()]
         filled = record.get("filled") or {}
-        out["record"] = {"how": record.get("how"), "resume_source": record.get("resume_source"),
+        queue = record.get("queue") or {}
+        out["record"] = {"how": record.get("how"), "marked_on": record.get("marked_on"),
+                         "resume_source": record.get("resume_source"),
                          "confirmed_by_email": record.get("confirmed_by_email"),
                          "cover_letter": bool(record.get("cover_letter")),
                          "answers": _readable(filled if isinstance(filled, dict) else {k: "" for k in filled}),
-                         "files": files}
+                         "files": files,
+                         # From the chosen jobs' list (26 Oct 2026): its run and attempt, and each document
+                         # by name and checksum -- exactly what went.
+                         "queue": {"run_id": queue.get("run_id"), "attempt": queue.get("attempt"),
+                                   "documents": [{"kind": d.get("kind"), "name": d.get("name"),
+                                                  "sha256": d.get("sha256")} for d in queue.get("documents") or []]}
+                         if queue else None}
     last = events[-1]["stage"] if events else None
     out["follow_up"] = bool(out["days"] is not None and out["days"] >= FOLLOW_UP_DAYS
                             and last in (None, "no_response") and out["status"] == "Applied")
@@ -205,7 +213,17 @@ def add_stage(job_id: int, stage: str, on: str | None = None, note: str = "") ->
         events.sort(key=lambda e: (e["at"], e.get("added", "")))
         _save_stages(data)
         _status_from(job, events)
+        marked = _mark_if_unrecorded(session, job)
+    if marked:
+        from backend.apply.history_outbox import export_pending
+        export_pending(job_id)
     return application(job_id)
+
+
+def _mark_if_unrecorded(session, job) -> bool:
+    """A stage set on a job with no application record: its history line says it was marked by hand."""
+    from backend.apply.runner import record_marked
+    return record_marked(session, job, job.status, "a stage on the Applied page")
 
 
 def remove_stage(job_id: int, index: int) -> dict:
@@ -218,10 +236,15 @@ def remove_stage(job_id: int, index: int) -> dict:
     events.pop(index)
     data[str(job_id)] = events
     _save_stages(data)
+    marked = False
     with get_session() as session:
         job = session.get(Job, job_id)
         if job is not None:
             _status_from(job, events)
+            marked = _mark_if_unrecorded(session, job)
+    if marked:
+        from backend.apply.history_outbox import export_pending
+        export_pending(job_id)
     return application(job_id)
 
 

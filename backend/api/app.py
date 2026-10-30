@@ -24,13 +24,16 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, jsonify, render_template, request, send_file
 
 from backend.config.loader import PROJECT_ROOT, load_config
 from data_engineering.db.models import Job, STATUS_VALUES
 from data_engineering.db.session import get_session, init_engine
 from backend.core.jobage import age_days, age_label
+from backend.core.joblinks import apply_link
+from backend.core.joblinks import kind as employer_kind
 from backend.core.jobfields import (JOB_TYPE_SHORT, JOB_TYPES, UNSTATED, experience_label, salary_label,
                                     workplace_label)
 
@@ -115,7 +118,12 @@ def job_row(job: Job) -> dict:
         "company": job.company,
         "title": job.title,
         "location": job.location or "",
-        "url": job.application_url,
+        # Where to apply: this job's posting on the company's own site when the person added it, else
+        # the job site's link. A careers site added is a link to look from (joblinks.apply_link).
+        "url": apply_link(job),
+        "employerUrl": job.employer_url or "",
+        "employerKind": (job.employer_url_kind or employer_kind(job.employer_url)) if job.employer_url else "",
+        "employerHost": urlparse(job.employer_url).netloc.removeprefix("www.") if job.employer_url else "",
         "board": job.source,
         # None means "not scored yet", which is not the same as scoring zero.
         # `or 0` collapsed the two, so 995 postings that arrived in tonight's
@@ -1431,7 +1439,10 @@ def job_posting(job_id: int):
             return jsonify(ok=False, error="No such job."), 404
         # The content hash is left as the board's: a re-scrape of the same
         # teaser then changes nothing, and the pasted posting stays.
-        job.description = text
+        # A page pasted whole keeps only the posting: the site's menus and "similar jobs" are not it.
+        from backend.core.jobfields import posting_only
+        cleaned = posting_only(text, job.title)
+        job.description = cleaned if score_basis(cleaned) == "full" else text
         job.requirements = None
     try:
         score_jobs(cfg(), job_ids=[job_id], include_closed=True)
@@ -1541,6 +1552,37 @@ def job_type_set(job_id: int):
                        manual=bool(job.job_type_manual))
 
 
+@app.post("/job/<int:job_id>/employer-page")
+def job_employer_page(job_id: int):
+    """The company's own page for this job, added by the person (25 Oct 2026): this job's posting on
+    its careers site, or the careers site itself (backend/core/joblinks.py). A posting is applied on
+    -- Auto-apply and "Open the application form" go there rather than to the job site the posting
+    came through; a careers site is a link to look from, never taken for the form.
+    {"url": "https://..."} sets it, read for its kind; {"url": ..., "kind": "posting" | "careers"}
+    when the person says which; {"url": ""} takes it off. Its own columns: fetching the postings
+    again never overwrites them."""
+    from backend.core import joblinks
+    body = request.get_json(silent=True)
+    raw = body.get("url") if isinstance(body, dict) else None
+    said = body.get("kind") if isinstance(body, dict) else None
+    if not isinstance(raw, str):
+        return jsonify(ok=False, error='Send "url": the link, or "" to take it off.'), 400
+    if said is not None and said not in joblinks.KINDS:
+        return jsonify(ok=False, error='"kind" is "posting" or "careers".'), 400
+    try:
+        url = joblinks.clean(raw)
+    except joblinks.NotALink as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return jsonify(ok=False, error="No such job."), 404
+        job.employer_url = url or None
+        job.employer_url_kind = (said or joblinks.kind(url)) if url else None
+        return jsonify(ok=True, url=job.employer_url or "", kind=job.employer_url_kind or "",
+                       apply=joblinks.apply_link(job))
+
+
 @app.post("/job/<int:job_id>/eligibility")
 def job_eligibility(job_id: int):
     """The person's own reading of clearance, citizenship and visa, kept over re-parsing.
@@ -1625,7 +1667,9 @@ def job_prep_pdf(job_id: int):
 
 @app.get("/apply")
 def apply_page():
-    return render_template("apply.html")
+    from backend.apply.queue import age_limit_months
+    months = age_limit_months(cfg())
+    return render_template("apply.html", age_limit=f"{months:g}" if months > 0 else None)
 
 
 @app.get("/apply/prepared")
@@ -1633,7 +1677,9 @@ def apply_prepared():
     """The jobs prepared for applying, with their tailoring result and open questions."""
     from backend.apply.accounts import status as account_status
     from backend.apply.prepare import pending
+    from backend.apply.runner import not_wanted_now, searched_places
     from ml.tailoring.pipeline import RUNS
+    search = searched_places(cfg())
     items = []
     for e in pending():
         run = (e.get("tailored") or {}).get("run")
@@ -1643,12 +1689,44 @@ def apply_prepared():
                 ba = json.loads((RUNS / run / "result.json").read_text()).get("before_after")
             except (OSError, ValueError):
                 ba = None
+        notes = list(e.get("notes") or [])
         with get_session() as session:
             job = session.get(Job, e["job_id"])
             tags = eligibility_tags(job) if job else []
             ok, why = with_eligibility({}, job, my_authorisation()).values() if job else (True, [])
-        items.append({**e, "before_after": ba, "tags": tags, "eligible": ok, "not_eligible_because": why})
+            # Past the age limit since, or abroad: Start applying leaves it out (runner._still_wanted).
+            unwanted = not_wanted_now(cfg(), job, search) if job is not None else None
+            if unwanted:
+                notes.append(f"Start applying leaves this one out: {unwanted}. Press Skip.")
+        items.append({**e, "before_after": ba, "tags": tags, "eligible": ok, "not_eligible_because": why,
+                      "notes": notes})
     return jsonify(ok=True, items=items, account=account_status())
+
+
+@app.get("/apply/next")
+def apply_next():
+    """What Apply to next 10 would apply to now: saved jobs, watched companies, the best fit."""
+    from backend.apply.profile import ProfileIncomplete
+    from backend.apply.runner import next_up
+    try:
+        return jsonify(ok=True, **next_up(cfg()))
+    except ProfileIncomplete:
+        return jsonify(ok=False, error="Fill in your details in Settings → Applicant first: "
+                                       "every form is filled from them."), 409
+
+
+@app.post("/apply/next/start")
+def apply_next_start():
+    """Apply to next 10, from the Auto-apply page (until 23 Oct 2026 a button on the Jobs page)."""
+    from backend.api.auto_apply import APPLY_TASKS, MARKER
+    busy = next((t for t in APPLY_TASKS if task_pid(t)), None)
+    if busy:
+        return jsonify(ok=False, error="An apply run is going already, and its browser window is open. "
+                                       "Finish it or close that window, then press this again."), 409
+    # The run file is shared with a job page's Auto-apply: left marked, that job's page would
+    # show this run as its own.
+    MARKER.unlink(missing_ok=True)
+    return start_task("apply", TASKS["apply"])
 
 
 @app.post("/apply/answers")
@@ -1663,16 +1741,22 @@ def apply_answers():
 
 
 def _not_eligible(applicant) -> dict[int, list[str]]:
-    """Ready applications the profile now rules out: never sent, so never asked about."""
+    """Ready applications the profile now rules out, or abroad, or past the age limit since
+    they were prepared: never sent, so never asked about."""
     from backend.apply.prepare import pending
+    from backend.apply.runner import not_wanted_now, searched_places
     from backend.core.eligibility import eligible
+    search = searched_places(cfg())
     out = {}
     with get_session() as session:
         for e in pending():
             job = session.get(Job, e["job_id"])
             if job is not None:
                 ok, why = eligible(job, applicant.authorisation or {})
-                if not ok:
+                unwanted = not_wanted_now(cfg(), job, search)
+                if unwanted:
+                    why = [*why, unwanted]
+                if why:
                     out[job.id] = why
     return out
 
@@ -1686,9 +1770,11 @@ def questions_page():
 def questions_data():
     from backend.apply.prepare import pending, questionnaire
     from backend.apply.profile import load as load_applicant
+    from backend.apply import execution
     applicant = load_applicant(applicant_path())
     blocked = _not_eligible(applicant)
-    data = questionnaire(applicant, exclude=set(blocked))
+    # The chosen jobs waiting on the Auto-apply list whose forms were read ahead (26 Oct 2026).
+    data = questionnaire(applicant, exclude=set(blocked), chosen=set(execution.live_job_ids((execution.QUEUED,))))
     names = {e["job_id"]: f'{e["company"]} — {e["title"]}' for e in pending()}
     data["not_eligible"] = [{"job_id": i, "job": names.get(i, str(i)), "why": w} for i, w in blocked.items()]
     data["auto_submit"] = not applicant.stop_before_submit
@@ -1704,7 +1790,11 @@ def questions_save():
     clean = [{"label": str(a.get("label") or ""), "value": str(a.get("value") or ""),
               "job_ids": [int(i) for i in a.get("job_ids") or [] if str(i).isdigit()]}
              for a in answers if isinstance(a, dict) and a.get("label")]
-    return jsonify(ok=True, saved=answer_all(clean))
+    saved = answer_all(clean)
+    from backend.apply import execution
+    from backend.apply.profile import load as load_applicant
+    execution.answers_given(clean, load_applicant(applicant_path()))   # a chosen job's note says what is left
+    return jsonify(ok=True, saved=saved)
 
 
 @app.get("/apply/general.json")
@@ -1967,12 +2057,18 @@ def set_status(job_id: int):
     if value not in STATUS_VALUES:
         return jsonify(ok=False, error=f"{value!r} is not a status."), 400
 
+    from backend.apply.runner import APPLIED_STATUSES, record_marked
     with get_session() as session:
         job = session.get(Job, job_id)
         if job is None:
             return jsonify(ok=False, error="No such job."), 404
         job.status = value
         job.exported_to_excel = False        # push the change to the sheet
+        # Marked applied by hand with no record yet: its history line says so, with the status.
+        marked = value in APPLIED_STATUSES and record_marked(session, job, value, "its status on the job page")
+    if marked:
+        from backend.apply.history_outbox import export_pending
+        export_pending(job_id)
     return jsonify(ok=True, status=value)
 
 
@@ -2033,6 +2129,10 @@ TASKS = {"scrape": ["scrape"], "score": ["score", "--rescore"], "export": ["expo
          # Auto-apply: the morning's preparation on demand, and applying to it.
          "prepare": ["prepare-apply"],
          "apply-ready": ["apply", "--prepared"],
+         # Apply to these: the jobs the person chose on the Jobs page (24 Oct 2026).
+         "apply-chosen": ["apply", "--chosen"],
+         # Prepare these: their resumes and cover letters made ready and written down (26 Oct 2026).
+         "prepare-chosen": ["prepare-apply", "--chosen"],
          "daily": ["daily"], "discover": ["discover", "--names",
                                           "data/mailbox_names.txt", "--max-slugs", "2"]}
 def task_log(task: str) -> Path:
@@ -2115,6 +2215,11 @@ def run_task(task: str):
     """Start a pipeline command and return immediately."""
     if task not in TASKS:
         return jsonify(ok=False, error=f"Unknown task {task!r}"), 400
+    from backend.api.auto_apply import APPLY_TASKS
+    # One browser profile: one apply run at a time, whichever button started the other.
+    if task in APPLY_TASKS and any(t != task and task_pid(t) for t in APPLY_TASKS):
+        return jsonify(ok=False, error="An apply run is going already, and its browser window is "
+                                       "open. Finish it or close that window, then press this again."), 409
     return start_task(task, TASKS[task])
 
 
@@ -2540,7 +2645,7 @@ def run_status(task: str):
                 progress = " ".join(line.split()[-9:])
                 break
 
-        if task == "apply":
+        if task in ("apply", "apply-ready", "apply-chosen"):
             # The runner's own lines are written for the person watching: the
             # latest "[3/10] Company — Title" or "Waiting for you" says it all.
             for line in reversed(lines):
@@ -2983,16 +3088,20 @@ def tailor_edit(run_id):
 
 @app.get("/health")
 def health_report():
-    """The newest weekly health report; ?fresh=1 makes one now (a few seconds)."""
+    """The health report for the last seven days, made again (a few seconds) when the newest is
+    over a quarter of an hour old; ?fresh=1 makes one now.
+
+    Only Sunday's used to be shown: on Wednesday 21 Oct the page still listed 12-18 Oct's
+    problems, some fixed days before, and none of that morning's.
+    """
     folder = PROJECT_ROOT / "data" / "reports"
-    if request.args.get("fresh"):
+    reports = sorted(folder.glob("health-*.json"))
+    if request.args.get("fresh") or not reports or time.time() - reports[-1].stat().st_mtime > 15 * 60:
         subprocess.run([sys.executable, str(PROJECT_ROOT / "devops" / "health_report.py")],
                        cwd=PROJECT_ROOT, capture_output=True, timeout=120)
-    reports = sorted(folder.glob("health-*.json"))
+        reports = sorted(folder.glob("health-*.json"))
     if not reports:
-        if request.args.get("fresh"):
-            return render_template("health.html", r=None), 500
-        return redirect(url_for("health_report", fresh=1))
+        return render_template("health.html", r=None), 500
     try:
         r = json.loads(reports[-1].read_text())
     except (OSError, ValueError):
@@ -3009,3 +3118,4 @@ from backend.api import inbox_pages  # noqa: E402,F401
 from backend.api import written_pages  # noqa: E402,F401
 from backend.api import morning_pages  # noqa: E402,F401
 from backend.api import welcome_pages  # noqa: E402,F401
+from backend.api import chosen_pages  # noqa: E402,F401

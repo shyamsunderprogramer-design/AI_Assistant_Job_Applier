@@ -113,14 +113,15 @@ def save(kind_id: str, answer: str, path: Path | None = None) -> dict[str, str]:
     kind, answer = BY_ID[kind_id], (answer or "").strip()
     if kind.choices and answer and answer not in kind.choices:
         raise ValueError(f"Choose one of: {', '.join(kind.choices)}")
-    data = load(path)
-    if answer:
-        data[kind_id] = answer
-    else:
-        data.pop(kind_id, None)
+    from backend.apply.filesafe import one_writer, write_whole
     target = Path(path or STORE)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(yaml.safe_dump(data, sort_keys=True, allow_unicode=True), encoding="utf-8")
+    with one_writer(target):                       # read, changed and written whole as one (29 Oct 2026)
+        data = load(target)
+        if answer:
+            data[kind_id] = answer
+        else:
+            data.pop(kind_id, None)
+        write_whole(target, yaml.safe_dump(data, sort_keys=True, allow_unicode=True))
     return data
 
 

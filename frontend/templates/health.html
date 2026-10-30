@@ -4,8 +4,8 @@
 <header class="top">
   <div>
     <h1>Health</h1>
-    <div class="sub">{% if r %}The week {{ r['from'] }} to {{ r['to'] }}: what ran unattended, what failed, and whether your data is backed up.
-      Made every Sunday morning.{% else %}The weekly health report could not be read.{% endif %}</div>
+    <div class="sub">{% if r %}The seven days {{ r['from'] }} to {{ r['to'] }}: what ran unattended, what failed, and whether your data is backed up.
+      {% if r.made %}As of {{ r.made|replace('T', ' ') }}; opening this page brings it up to date.{% endif %}{% else %}The health report could not be read.{% endif %}</div>
   </div>
   <div class="row"><a class="btn" href="{{ url_for('health_report', fresh=1) }}">Make a fresh report</a></div>
 </header>
@@ -41,11 +41,14 @@
     <tbody>{% for day, run in r.runs.items() %}<tr>
       <td class="nowrap">{{ day }}</td>
       <td>{% if run is none %}<span class="pill muted">Did not start</span>
+        {% elif run.held_by %}<span class="pill muted">Did not start</span> the run from {{ run.held_by }} was still going
+        {% elif run.stopped %}<span class="pill muted">Stopped</span> from the Jobs page
+        {% elif run.unfinished %}<span class="pill bad">Did not finish</span>
         {% elif run.exit is none %}<span class="pill">Still running</span>
         {% elif run.exit == 0 %}<span class="pill good">OK</span>
         {% elif run.failed %}<span class="pill review">Partly failed</span> {{ run.failed|join(', ') }}
         {% else %}<span class="pill bad">Failed</span> exit {{ run.exit }}{% endif %}</td>
-      <td class="num">{% if run and run.exit is not none %}{{ '%.1f'|format(run.hours) }} h{% endif %}</td>
+      <td class="num">{% if run and not run.held_by and (run.exit is not none or run.stopped) %}{{ '%.1f'|format(run.hours) }} h{% endif %}</td>
     </tr>{% endfor %}</tbody>
   </table></div>
 </section>
@@ -61,10 +64,13 @@
       <td class="num">{% if x.boards %}{{ '%.1f'|format(100 * x.failed / x.boards) }}%{% endif %}</td><td class="num">{{ x.new }}</td>
     </tr>{% else %}<tr><td colspan="5" class="sub">No scraping this week.</td></tr>{% endfor %}</tbody>
   </table></div>
+  {% if r.refused %}<p class="sub">Turned away for asking too often (those boards were not read):
+    {% for x in r.refused %}{{ x.source }} {{ x.refused }} of {{ x.reads }} reads{{ ', ' if not loop.last else '.' }}{% endfor %}</p>{% endif %}
 </section>
 
 <section class="card">
   <h2>Boards failing 3+ times</h2>
+  {% if r.failing_count and r.failing_count > r.failing|length %}<p class="sub">{{ r.failing_count }} boards; the {{ r.failing|length }} that failed most often:</p>{% endif %}
   {% if r.failing %}
   <div class="t-table-wrap"><table class="t-table">
     <caption class="sr-only">Job boards that failed three or more times this week</caption>

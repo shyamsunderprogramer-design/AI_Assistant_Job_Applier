@@ -126,6 +126,39 @@ def test_closing_the_tab_skips_it(page):
     assert verdict == "skipped"
 
 
+@pytest.mark.parametrize("message", [
+    "Couldn’t sign you in. This browser or app may not be secure.",
+    "Your Jobicy account. Sign in or create an account to continue.",
+])
+def test_account_barriers_are_not_treated_as_application_forms(page, message):
+    page.route("https://blocked.example/**", lambda route: route.fulfill(
+        content_type="text/html", body=f"<p>{message}</p><input type=email><input><input>"))
+    reached = anyform.reach(page, "https://blocked.example/job/1", say=lambda s: None)
+    assert reached.kind == "signin-handoff"
+    result = anyform.FillResult(job_id=1, url=page.url)
+    verdict, answers, _ = anyform.watch(page, person(), result, 5, say=lambda s: None)
+    assert verdict == "signin-handoff" and answers == {}
+    assert page.locator("input[type=email]").input_value() == ""
+
+
+def test_sign_in_navigation_alone_does_not_block_an_application(page):
+    page.set_content("<a>Sign in</a><h1>Apply for this role</h1><input type=email><input><input>")
+    assert anyform.sign_in_barrier(page) is None
+    assert anyform.is_form(anyform.shape(page))
+
+
+def test_rejected_signin_in_a_new_tab_ends_the_wait(page):
+    page.context.route("https://auth.example/**", lambda route: route.fulfill(
+        content_type="text/html", body="<h1>Couldn’t sign you in</h1><p>This browser or app may not be secure.</p>"))
+    page.set_content("<h1>Sign in to continue</h1>")
+    page.evaluate("() => setTimeout(() => window.open('https://auth.example/rejected'), 150)")
+    result = anyform.FillResult(job_id=1, url=page.url)
+    verdict, answers, popup = anyform.watch(page, person(), result, 5, poll_ms=100, say=lambda s: None)
+    assert verdict == "signin-handoff" and answers == {}
+    assert popup != page and popup.url == "https://auth.example/rejected"
+    assert not result.submitted
+
+
 def test_a_later_page_of_the_form_is_filled_when_it_shows(page):
     page.set_content("<form><label for='a'>First name</label><input id='a'>"
                      "<label for='e'>Email</label><input id='e' type='email'><input id='z'><input type='file'>"
@@ -165,6 +198,19 @@ def test_known_boards_and_their_forms():
     assert anyform.apply_path(f"https://jobs.lever.co/acme/{uid}?lever-source=x") == f"https://jobs.lever.co/acme/{uid}/apply"
     assert anyform.apply_path(f"https://jobs.ashbyhq.com/acme/{uid}") == f"https://jobs.ashbyhq.com/acme/{uid}/application"
     assert anyform.apply_path("https://careers.example.com/jobs/1") is None
+
+
+def test_apply_navigation_never_clicks_a_short_forms_submit_control(page):
+    page.set_content("""<form id="application" onsubmit="window.sent=true; return false">
+      <input type="hidden" name="saved_applicant" value="fictional">
+      <button>Apply now</button><button type="button">Apply here</button>
+      <input type="submit" value="Apply now"></form>
+      <button form="application">Apply now</button>
+      <a href="https://careers.example.com/jobs/other">Apply for this job</a>""")
+    assert not anyform.is_form(anyform.shape(page))  # too few fields for the old heuristic
+    choices = anyform.apply_controls(page)
+    assert len(choices) == 1 and choices[0]["href"] == "https://careers.example.com/jobs/other"
+    assert not page.evaluate("() => !!window.sent")
 
 
 def test_options_are_chosen_by_what_they_say():

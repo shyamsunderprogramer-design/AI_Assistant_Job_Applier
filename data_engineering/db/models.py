@@ -9,10 +9,12 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -96,6 +98,13 @@ class Job(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     application_url: Mapped[str] = mapped_column(String(1024))
+    # The employer's own page for this job -- the posting on their careers site, or the careers site
+    # itself -- added by the person on the job's page (25 Oct 2026), for a posting that came through a
+    # job site such as Adzuna. Its own column: a fetch rewrites application_url, never this one.
+    employer_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # What that link is (backend/core/joblinks.py): "posting", this job's own page, applied on; or
+    # "careers", the careers site, a link to look from and never taken for the form.
+    employer_url_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
@@ -214,4 +223,124 @@ class ScrapeLog(Base):
     error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# The jobs the person chose to apply to, on their way through (backend/apply/execution.py).
+# Added 24 Oct 2026: kept here rather than in a file so a crash, a restart of the app or of the
+# Mac never loses where each one stands, and two processes never take the same one.
+# ---------------------------------------------------------------------------
+
+FINISHED_STATES = ("applied", "failed", "skipped", "cancelled")
+
+
+class ApplyHistoryOutbox(Base):
+    """One immutable application history payload, committed with the application's state.
+
+    Export acknowledgement may lag a crash; event_id deduplicates the JSONL export.
+    Existing applications are never backfilled into this table.
+    """
+
+    __tablename__ = "apply_history_outbox"
+
+    event_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    payload: Mapped[str] = mapped_column(Text)
+    destination: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    exported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
+class ApplyItem(Base):
+    """One chosen job: its state, what is happening to it, and what it needs from the person."""
+
+    __tablename__ = "apply_items"
+    __table_args__ = (
+        # One live entry per job. A finished one may be chosen again; one on its way may not be
+        # added twice -- the database refuses it, whoever asks.
+        Index("uq_apply_items_live_job", "job_id", unique=True,
+              sqlite_where=text("state NOT IN ('applied', 'failed', 'skipped', 'cancelled')")),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    state: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)          # what is happening, or why
+    action: Mapped[str | None] = mapped_column(Text, nullable=True)        # what the person must do
+    outcome: Mapped[str | None] = mapped_column(Text, nullable=True)       # how it ended
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)          # cleared from the page, kept here
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Its latest eligibility decision (backend/core/eligibility.Decision, 26 Oct 2026): ELIGIBLE ...
+    # UNVERIFIED, and the whole of it -- reasons, the posting's words, unknowns, when, which rules -- as JSON.
+    decision: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    decision_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+LIVE_RUN = "state IN ('running', 'pausing')"
+
+
+class ApplyRun(Base):
+    """One press of Apply to these: the process going down the list, and whether it should stop."""
+
+    __tablename__ = "apply_runs"
+    __table_args__ = (
+        # One live run at most: two processes starting together cannot both have one (25 Oct 2026).
+        Index("uq_apply_runs_one_live", text(f"({LIVE_RUN})"), unique=True, sqlite_where=text(LIVE_RUN)),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ApplyEvent(Base):
+    """What happened to a chosen job, in order: the Auto-apply page's activity. Never edited."""
+
+    __tablename__ = "apply_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    state: Mapped[str | None] = mapped_column(String(24), nullable=True)   # the state entered, if any
+    message: Mapped[str] = mapped_column(Text, default="")
+
+
+class ApplyArtifact(Base):
+    """A document made ready for one chosen job (26 Oct 2026, Auto Apply v3.0 phase 3): exactly
+    which file, its checksum, and the run and attempt that made it ready. A run sends that file's
+    content and no other: checked against the checksum just before the form opens.
+
+    state  ready     made ready, not yet superseded
+           replaced  a later preparation of the same job made another
+           stale     changed or gone since it was made ready: never sent"""
+
+    __tablename__ = "apply_artifacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(Integer, index=True)
+    job_id: Mapped[int] = mapped_column(Integer)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    kind: Mapped[str] = mapped_column(String(16))                       # resume | cover_letter
+    path: Mapped[str] = mapped_column(Text)
+    sha256: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)    # where it came from: "tailored", ...
+    # The file it was made from (the job's tailored resume, its cover letter) and that file's checksum then:
+    # changed since -- tailored again, edited -- and this one is no longer the one the person means to send.
+    origin_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origin_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="ready", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

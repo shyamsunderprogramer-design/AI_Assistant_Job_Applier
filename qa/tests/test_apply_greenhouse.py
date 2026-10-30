@@ -195,3 +195,88 @@ def test_an_unreachable_form_is_reported_not_raised():
 def test_the_summary_says_what_a_person_still_has_to_do():
     result = FillResult(job_id=1, url="u", filled={"a": "b"}, captcha=True)
     assert "submit is yours" in result.summary()
+
+
+# -- refusal 4: a check that could not be completed never counts as passed (29 Oct 2026) ------------
+# Each of these read as "nothing there" before, and with Submit asked for, the form was sent: shown on
+# a made-up page for a failed question read and a failed CAPTCHA read. Now the form is still filled for
+# the person, and Submit is theirs.
+
+class Breaks(FakePage):
+    """The same form, with one of the app's own checks failing the way a real page can: a timeout,
+    a frame torn down mid-read, an element gone between finding it and filling it."""
+
+    def __init__(self, broken, **kw):
+        super().__init__(captcha=False, **kw)
+        self.broken = broken
+
+    def eval_on_selector_all(self, selector, script):
+        if self.broken == "questions":
+            raise TimeoutError("the labels were not read in time")
+        return super().eval_on_selector_all(selector, script)
+
+    def content(self):
+        if self.broken == "captcha":
+            raise TimeoutError("the page was not read in time")
+        return super().content()
+
+    def query_selector(self, selector):
+        if self.broken == "lookup" and "q7" in selector:
+            raise RuntimeError("the element went away")
+        element = super().query_selector(selector)
+        if element is not None and self.broken == "fill" and element.field_id == "first_name":
+            def fill(value):
+                raise RuntimeError("the box would not take it")
+            element.fill = fill
+        return element
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("broken,what", [
+    ("questions", "the form's questions could not be read"),
+    ("captcha", "whether a CAPTCHA is shown could not be checked"),
+    ("lookup", "Years of experience could not be read"),
+    ("fill", "first_name could not be filled"),
+])
+def test_a_check_that_fails_leaves_submit_to_the_person(broken, what):
+    page = Breaks(broken, labels=[{"text": "Years of experience", "id": "q7"}], fields=["first_name", "email", "q7"])
+    years = person(answers={"years of experience": "11"})
+
+    result = fill(page, 1, "https://example.com/apply", years, submit=True)
+
+    assert result.submitted is False and page.clicked is False
+    assert what in result.unchecked and result.needs_person
+    assert "not completed — submit is yours" in result.summary()
+    assert page.filled.get("email") == "d@example.com"            # the rest is still filled for the person
+
+
+def test_a_field_whose_marking_cannot_be_read_counts_as_required():
+    """A blank question whose "required" marking cannot be read is taken as required, not as optional."""
+    page = FakePage(labels=[{"text": "Portfolio link", "id": "q8"}], fields=["first_name", "q8"], captcha=False)
+
+    result = fill(page, 1, "https://example.com/apply", person(), submit=True)   # FakeElement cannot answer
+
+    assert "Portfolio link" in result.required_blank and page.clicked is False
+
+
+def test_a_cover_letter_that_cannot_be_attached_leaves_submit_to_the_person(tmp_path):
+    class NoLetter(FakePage):
+        def query_selector(self, selector):
+            element = super().query_selector(selector)
+            if element is not None and element.field_id == "input#cover_letter":
+                def refuse(path):
+                    raise RuntimeError("upload refused")
+                element.set_input_files = refuse
+            return element
+
+    resume, letter = tmp_path / "r.pdf", tmp_path / "l.pdf"
+    resume.write_bytes(b"%PDF-1.4 r")
+    letter.write_bytes(b"%PDF-1.4 l")
+    page = NoLetter(fields=["first_name", "input#resume", "input#cover_letter"], captcha=False)
+
+    result = fill(page, 1, "https://example.com/apply", person(), resume, letter, submit=True)
+
+    assert result.attachments == ["resume=r.pdf"] and "the cover letter could not be attached" in result.unchecked
+    assert result.submitted is False and page.clicked is False

@@ -1,8 +1,9 @@
-"""Get the day's best matches ready to apply to, before the person sits down.
+"""Get the best matches ready to apply to, when the person presses Prepare now (Apply page).
 
-After the morning scrape, for the top matches (fit at or above
-`apply.auto.min_fit`, at most `apply.auto.per_day`, one per company, freshest
-first -- the apply queue's own order):
+Never by itself: the morning run did this until 21 Oct 2026, when the person chose to have
+no resume tailored before they ask. For the top matches -- the jobs saved to the Watch list
+at any fit, then the rest at or above `apply.auto.min_fit`; at most `apply.auto.per_day`, one
+per company, none older than `apply.max_age_months`, in the apply queue's own order:
 
   1. the application folder, where the person chose to keep them;
   2. the resume, tailored for the posting (Resume Tailoring, in rounds);
@@ -16,8 +17,11 @@ Submit for them to check. Kept in data/apply/prepared.json.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import requests
@@ -38,8 +42,29 @@ def load() -> dict:
 
 
 def _save(data: dict) -> None:
-    PREPARED.parent.mkdir(parents=True, exist_ok=True)
-    PREPARED.write_text(json.dumps(data, indent=1, default=str))
+    # Written whole, then named: a reader never sees half a file -- read as empty, and saved back by
+    # another change, that would have lost every application in it (26 Oct 2026). Each save its own
+    # temporary file (29 Oct 2026): a shared one could be written by two savers at once.
+    from backend.apply.filesafe import write_whole
+    write_whole(PREPARED, json.dumps(data, indent=1, default=str))
+
+
+_writing = threading.Lock()
+
+
+@contextmanager
+def changing():
+    """One change to the file at a time, in this process and any other: a run keeping a chosen job's
+    questions while the Questions page saves answers -- each reads the whole file and writes it back,
+    and unlocked one of the two changes could be lost (26 Oct 2026)."""
+    with _writing:
+        PREPARED.parent.mkdir(parents=True, exist_ok=True)
+        with open(PREPARED.with_suffix(".lock"), "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def pending() -> list[dict]:
@@ -48,24 +73,81 @@ def pending() -> list[dict]:
 
 
 def mark(job_id: int, state: str) -> None:
-    data = load()
-    if str(job_id) in data:
-        data[str(job_id)]["state"] = state
-        _save(data)
+    with changing():
+        data = load()
+        if str(job_id) in data:
+            data[str(job_id)]["state"] = state
+            _save(data)
 
 
 def save_answers(job_id: int, answers: dict[str, str]) -> None:
     """The person's answers to this form's open questions; general ones join the bank."""
     from backend.apply.answers import remember
-    data = load()
-    entry = data.get(str(job_id))
-    if entry is None:
-        return
-    given = {k: v.strip() for k, v in answers.items() if (v or "").strip()}
-    entry.setdefault("answers", {}).update(given)
-    entry["questions"] = [q for q in entry.get("questions", []) if q["label"] not in entry["answers"]]
-    _save(data)
+    with changing():
+        data = load()
+        entry = data.get(str(job_id))
+        if entry is None:
+            return
+        given = {k: v.strip() for k, v in answers.items() if (v or "").strip()}
+        entry.setdefault("answers", {}).update(given)
+        entry["questions"] = [q for q in entry.get("questions", []) if q["label"] not in entry["answers"]]
+        _save(data)
     remember(given, company=entry.get("company", ""))      # reusable ones help every later form
+
+
+CHOSEN = "chosen"           # a job on the Auto-apply list (backend/apply/execution.py): never on the Ready list
+
+
+def keep_questions(job, questions: list[dict]) -> dict:
+    """A chosen job's form questions (open_questions, read when its documents were made ready), kept
+    beside its answers so the Questions page asks them once, and the run fills them in (runner.answers_for).
+    A new entry is a chosen one, never on the Ready list (`pending`); one kept already keeps its state,
+    its answers and its drafts -- only what the form asks now replaces what it asked before."""
+    with changing():
+        data = load()
+        entry = data.get(str(job.id))
+        if entry is None:
+            entry = data[str(job.id)] = {
+                "job_id": job.id, "company": job.company, "title": job.title, "source": job.source,
+                "score": round((job.ats_match_score or 0) * 100), "state": CHOSEN, "notes": [], "answers": {}}
+        entry["questions"] = questions
+        entry["asked_at"] = _now_iso()
+        entry.pop("questions_unread", None)              # read now: the earlier failure no longer stands
+        _save(data)
+        return entry
+
+
+def keep_drafts(job_id: int, drafts: dict) -> None:
+    """Essay drafts for a prepared application, added under the file's lock (essays.draft_for_application):
+    until 29 Oct 2026 they were saved outside it, and could undo an answer saved at the same moment."""
+    with changing():
+        data = load()
+        if str(job_id) in data:
+            data[str(job_id)].setdefault("drafts", {}).update(drafts)
+            _save(data)
+
+
+def mark_questions_unread(job, why: str) -> None:
+    """Its form's questions could not be read ahead: kept beside its answers, so no run sends it by itself
+    until they are read (execution._one)."""
+    with changing():
+        data = load()
+        entry = data.get(str(job.id))
+        if entry is None:
+            entry = data[str(job.id)] = {
+                "job_id": job.id, "company": job.company, "title": job.title, "source": job.source,
+                "score": round((job.ats_match_score or 0) * 100), "state": CHOSEN, "notes": [], "answers": {}}
+        entry["questions_unread"] = {"why": why, "at": _now_iso()}
+        _save(data)
+
+
+def questions_unread(job_id: int) -> str | None:
+    """Why its form's questions could not be read ahead at the last try, or None."""
+    return ((load().get(str(job_id)) or {}).get("questions_unread") or {}).get("why")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # -- one questionnaire for every ready application ----------------------------------
@@ -88,23 +170,28 @@ def _still_open(entry: dict, applicant) -> list[dict]:
         applicant.job = before
 
 
-def questionnaire(applicant=None, exclude: set[int] | frozenset = frozenset()) -> dict:
-    """Every ready application's open questions, with the ones several employers ask merged.
+def questionnaire(applicant=None, exclude: set[int] | frozenset = frozenset(),
+                  chosen: set[int] | frozenset = frozenset()) -> dict:
+    """Every ready application's open questions, and those of the `chosen` jobs waiting on the
+    Auto-apply list, with the ones several employers ask merged.
 
     A question merges only when both its wording and its choices match: the same
     words with different choices are different questions to answer.
     """
     from backend.apply.answers import normalise
+    from backend.apply.essays import is_essay
     groups: dict[tuple, dict] = {}
     jobs = []
-    for e in pending():
+    asking = pending() + [e for e in load().values() if e.get("state") == CHOSEN and e["job_id"] in chosen]
+    for e in asking:
         if e["job_id"] in exclude:
             continue
         open_now = _still_open(e, applicant)
         jobs.append({"job_id": e["job_id"], "company": e["company"], "title": e["title"],
                      "open": len(open_now), "required": sum(1 for q in open_now if q.get("required"))})
         for q in open_now:
-            key = (normalise(q["label"]), tuple(q.get("options") or ()))
+            key = (normalise(q["label"]), tuple(q.get("options") or ()),
+                   e["job_id"] if not q.get("options") and is_essay(q["label"]) else None)
             g = groups.setdefault(key, {"label": q["label"], "options": list(key[1]),
                                         "required": False, "jobs": [],
                                         "draft": (e.get("drafts") or {}).get(q["label"])})
@@ -137,23 +224,39 @@ def answer_all(answers: list[dict]) -> int:
 
 # -- the questions a form asks ------------------------------------------------------
 
+class QuestionsUnread(Exception):
+    """The form's questions could not be read ahead -- which is not "it asks nothing"."""
+
+
 def open_questions(job, applicant) -> list[dict]:
-    """The Greenhouse form's questions no profile or saved answer covers."""
+    """The Greenhouse or JazzHR form's questions no profile or saved answer covers ([] for other boards:
+    theirs are seen on the form). Raises QuestionsUnread when they could not be read: until 29 Oct 2026
+    a board that did not answer read as a form that asks nothing, and the job went on as if checked."""
     from backend.apply.greenhouse import HANDLED
-    if job.source == "jazzhr" and job.application_url:
+    if job.source == "jazzhr":
         from backend.apply import jazzhr
+        if not job.application_url:
+            raise QuestionsUnread("its JazzHR page address is missing")
+        try:
+            asked = jazzhr.fetch_questions(job.application_url, strict=True)
+        except requests.RequestException as exc:
+            raise QuestionsUnread(f"its JazzHR page did not answer ({type(exc).__name__})") from exc
         out = []
-        for q in jazzhr.fetch_questions(job.application_url):
+        for q in asked:
             if jazzhr.answer(q, applicant) is None:
                 out.append({"label": q["label"], "required": q["required"], "options": q["options"][:30]})
         return out
-    if job.source != "greenhouse" or not job.company_slug or not job.external_id:
+    if job.source != "greenhouse":
         return []
+    if not job.company_slug or not job.external_id:
+        raise QuestionsUnread("its Greenhouse board address is incomplete")
     try:
         body = requests.get(GREENHOUSE_API.format(slug=job.company_slug, job=job.external_id),
                             timeout=20).json()
-    except (requests.RequestException, ValueError):
-        return []
+    except (requests.RequestException, ValueError) as exc:
+        raise QuestionsUnread(f"Greenhouse's board did not answer ({type(exc).__name__})") from exc
+    if not isinstance(body, dict):
+        raise QuestionsUnread("Greenhouse's board answered with something else than its questions")
     out = []
     for q in body.get("questions") or []:
         fields = q.get("fields") or []
@@ -220,6 +323,10 @@ def prepare_one(cfg, job, applicant, say=print) -> dict:
     applicant.job = job                           # so desired salary is answered by the rule
     try:
         entry["questions"] = open_questions(job, applicant)
+        entry.pop("questions_unread", None)
+    except QuestionsUnread as exc:
+        entry["questions"], entry["questions_unread"] = [], {"why": str(exc), "at": _now_iso()}
+        entry["notes"].append(f"Its form's questions could not be read ahead ({exc}): they are seen on the form.")
     finally:
         applicant.job = None
     asked = len(entry["questions"])
@@ -231,8 +338,9 @@ def prepare_one(cfg, job, applicant, say=print) -> dict:
 def prepare(cfg, top: int | None = None, min_fit: float | None = None, say=print) -> list[dict]:
     """Get the day's top matches ready. Already-prepared and applied jobs are skipped."""
     from backend.apply.profile import load as load_profile
-    from backend.apply.queue import build_queue
-    from backend.apply.runner import _last_applied_by_company
+    from backend.apply.queue import age_limit_days, age_limit_months, build_queue
+    from backend.apply.runner import _last_applied_by_company, searched_places
+    from backend.core import watchlist
     from data_engineering.db.models import Job
     from data_engineering.db.session import get_session
 
@@ -240,19 +348,30 @@ def prepare(cfg, top: int | None = None, min_fit: float | None = None, say=print
     min_fit = float(min_fit if min_fit is not None else cfg.get("apply.auto.min_fit", 0.80))
     applicant = load_profile(PROJECT_ROOT / "backend" / "config" / "applicant.yaml")
     data = load()
+    saved = watchlist.starred_ids()
+    search = searched_places(cfg)
     with get_session() as session:
         from backend.core.eligibility import eligible
         auth = getattr(applicant, "authorisation", {}) or {}
-        # Not a job the person can take (clearance, citizenship, sponsorship): not prepared.
+        # Not a job the person can take (clearance, citizenship, sponsorship), or one abroad
+        # stored before the location rule caught it: not prepared. The fit first, being cheap.
         jobs = [j for j in session.query(Job).filter(Job.is_open.is_(True)).all()
-                if str(j.id) not in data and j.score_basis == "full" and eligible(j, auth)[0]]
+                if str(j.id) not in data and j.score_basis == "full"
+                and (j.id in saved or (j.ats_match_score or 0) >= min_fit)
+                and eligible(j, auth)[0] and not search.location_reason(j.location)]
+        # The Auto-apply page's one order: saved jobs, watched companies, then the best fit.
         queue = build_queue(jobs, limit=top, min_score=min_fit,
-                            last_applied=_last_applied_by_company(session))
+                            last_applied=_last_applied_by_company(session),
+                            max_age_days=age_limit_days(cfg),
+                            saved=saved, watched=watchlist.watched_job_ids(jobs))
         chosen = [session.get(Job, c.job_id) for c in queue]
         for job in chosen:
             session.expunge(job)
     if not chosen:
-        say(f"Nothing new to prepare: no open Greenhouse or Workday posting at {min_fit:.0%} fit or more.")
+        months = age_limit_months(cfg)
+        say("Nothing new to prepare: no open Greenhouse, Workday or JazzHR posting"
+            + (f" under {months:g} months old" if months > 0 else "")
+            + f" at {min_fit:.0%} fit or more.")
         return []
     say(f"Preparing {len(chosen)} application(s): tailoring, cover letter, questions…")
     done = []
@@ -262,8 +381,9 @@ def prepare(cfg, top: int | None = None, min_fit: float | None = None, say=print
         except Exception as exc:
             say(f"  skipped {job.company} — {job.title[:40]}: {type(exc).__name__}: {str(exc)[:120]}")
             continue
-        data = load()
-        data[str(job.id)] = entry
-        _save(data)
+        with changing():
+            data = load()
+            data[str(job.id)] = entry
+            _save(data)
         done.append(entry)
     return done

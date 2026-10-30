@@ -86,6 +86,21 @@ def test_a_new_account_is_filled_but_the_person_agrees_and_creates_it(keychain):
     assert page.clicked == []                     # never presses Create Account itself
 
 
+def test_what_is_left_for_the_person_is_outlined_and_the_terms_box_is_not_ticked(keychain):
+    # 22 Oct 2026: two clicks are the person's, the terms box and Create Account; both are shown in orange.
+    class Page(FakePage):
+        outlined = None
+
+        def evaluate(self, script, selectors):
+            self.outlined = selectors
+    accounts.save("me@example.com", "correct-horse-9")
+    page = Page({"email", "password", "verifyPassword", "createAccountCheckbox", "createAccountSubmitButton"})
+    assert accounts.workday_sign_in(page, {}, say=lambda s: None) == "create-filled"
+    assert page.outlined == ['[data-automation-id="createAccountCheckbox"]',
+                             '[data-automation-id="createAccountSubmitButton"]']
+    assert page.clicked == []                     # neither ticked nor pressed
+
+
 def test_without_a_saved_account_the_person_signs_in(keychain):
     assert accounts.workday_sign_in(FakePage({"password"}), {}, say=lambda s: None) == "no-account-saved"
 
@@ -140,6 +155,7 @@ def test_the_morning_picks_from_the_queue_by_job(monkeypatch, tmp_path):
                      application_url="https://example.com/1", content_hash="h1", is_open=True,
                      ats_match_score=0.9, score_basis="full"))
     monkeypatch.setattr(prepare, "PREPARED", tmp_path / "prepared.json")
+    monkeypatch.setattr("backend.core.watchlist.PATH", tmp_path / "watchlist.json")
     monkeypatch.setattr("backend.apply.profile.load", lambda path: Applicant())
     seen = []
     monkeypatch.setattr(prepare, "prepare_one", lambda cfg, job, applicant, say: seen.append(job.title) or
@@ -150,6 +166,106 @@ def test_the_morning_picks_from_the_queue_by_job(monkeypatch, tmp_path):
             return default
     prepare.prepare(Cfg(), say=lambda s: None)
     assert seen == ["SRE"] and prepare.pending()[0]["job_id"]
+
+
+def test_nothing_past_four_months_is_prepared_or_sent_unless_asked_for_by_name(monkeypatch, tmp_path):
+    """23 Oct 2026: "I don't want more than 4 months job postings". 15 of the 121 ready
+    applications were older; prepared while younger, they are left out when Start applying runs."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.apply import runner
+    from data_engineering.db.models import Job as JobRow
+    from data_engineering.db.session import get_session, init_engine
+    init_engine("sqlite:///:memory:")
+    now = datetime.now(timezone.utc)
+    with get_session() as s:
+        for n, (company, days) in enumerate((("Globex", 200), ("Acme", 2)), start=1):
+            s.add(JobRow(source="greenhouse", company=company, company_slug=company.lower(),
+                         external_id=str(n), title="Platform Engineer", location="Remote",
+                         description="x " * 400, requirements="", application_url=f"https://example.com/{n}",
+                         content_hash=f"h{n}", is_open=True, ats_match_score=0.9, score_basis="full",
+                         posted_at=now - timedelta(days=days)))
+    old, young = 1, 2
+    monkeypatch.setattr(prepare, "PREPARED", tmp_path / "prepared.json")
+    monkeypatch.setattr("backend.core.watchlist.PATH", tmp_path / "watchlist.json")
+    monkeypatch.setattr("backend.apply.profile.load", lambda path: Applicant())
+    seen = []
+    monkeypatch.setattr(prepare, "prepare_one", lambda cfg, job, applicant, say: seen.append(job.company) or
+                        {"job_id": job.id, "state": "ready"})
+    said = []
+    monkeypatch.setattr(runner, "say", said.append)
+
+    class Cfg:
+        def get(self, key, default=None):
+            return default
+
+    class Person:
+        authorisation, max_per_day = {}, 10
+    prepare.prepare(Cfg(), say=lambda s: None)
+    assert seen == ["Acme"]                                                   # Prepare now
+    assert [c.job_id for c in runner.candidates(Cfg(), Person(), 10)[0]] == [young]   # Apply to next 10
+    assert [c.job_id for c in runner.candidates(Cfg(), Person(), 10, job_ids=[old, young])[0]] == [young]
+    assert said == ["Not applying to Globex — Platform Engineer: posted 200 days ago, over the 4-month limit."]
+    assert [c.job_id for c in runner.candidates(Cfg(), Person(), 10, job_id=old)[0]] == [old]  # its own page
+
+
+def test_the_auto_apply_page_lists_saved_jobs_first_and_says_why_one_is_left_out(monkeypatch, tmp_path):
+    """23 Oct 2026: Apply to next 10 moved to the Auto-apply page, picking "watchlist like and
+    most fitted". The page lists what it will apply to, and no saved job goes missing unexplained."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from backend.apply import runner
+    from data_engineering.db.models import Job as JobRow
+    from data_engineering.db.session import get_session, init_engine
+    init_engine("sqlite:///:memory:")
+    now = datetime.now(timezone.utc)
+    rows = [  # company, board, fit, days old, status
+        ("Globex", "greenhouse", 0.95, 2, "Not Applied"),     # 1: the best fit
+        ("Acme", "greenhouse", 0.62, 10, "Not Applied"),      # 2: saved, a weak fit
+        ("Initech", "jobvite", 0.80, 3, "Not Applied"),       # 3: saved, a board this button can't fill
+        ("Umbrella", "greenhouse", 0.90, 200, "Not Applied"),  # 4: saved, past four months
+        ("Hooli", "greenhouse", 0.88, 5, "Applied"),          # 5: saved, applied already
+        ("Vandelay", "workday", 0.81, 1, "Not Applied"),      # 6: the next best fit
+        ("Accenture", "workday", 0.96, 3, "Not Applied"),     # 7: the best fit of all, but abroad
+        ("Maxwell", "greenhouse", 0.93, 4, "Not Applied"),    # 8: saved, abroad
+    ]
+    places = {7: "Ho ChiMinh", 8: "Taguig City, National Capital Region (Manila)"}
+    with get_session() as s:
+        for n, (company, board, score, days, status) in enumerate(rows, start=1):
+            s.add(JobRow(source=board, company=company, company_slug=company.lower(), external_id=str(n),
+                         title="Platform Engineer", location=places.get(n, "Remote"), description="x " * 400,
+                         requirements="", application_url=f"https://example.com/{n}", content_hash=f"h{n}",
+                         is_open=True, ats_match_score=score, score_basis="full", status=status,
+                         posted_at=now - timedelta(days=days)))
+    (tmp_path / "watchlist.json").write_text(json.dumps(
+        {"companies": [], "jobs": [{"id": i, "added": "2026-10-23T00:00:00+00:00"} for i in (2, 3, 4, 5, 8)]}))
+    monkeypatch.setattr("backend.core.watchlist.PATH", tmp_path / "watchlist.json")
+    monkeypatch.setattr(runner, "tailored_resume", lambda cfg, job: None)
+    from data_engineering.scraper.filters import JobFilter
+    from ml.resume.profile import NON_US_PLACES
+    monkeypatch.setattr(runner, "searched_places", lambda cfg: JobFilter(exclude_location_keywords=list(NON_US_PLACES)))
+
+    class Person:
+        authorisation, max_per_day, stop_before_submit = {}, 10, False
+    monkeypatch.setattr(runner, "load", lambda path: Person())
+
+    class Cfg:
+        def get(self, key, default=None):
+            return default
+    d = runner.next_up(Cfg())
+    assert [(p["company"], p["why"]) for p in d["picks"]] == [
+        ("Acme", "saved by you"), ("Globex", "best fit"), ("Vandelay", "best fit")]
+    why = {j["company"]: j["why"] for j in d["left_out"]}
+    # Worded for any page since 24 Oct 2026 (the Jobs page's review says it too): was "this button fills".
+    assert why["Initech"].startswith("a run fills Greenhouse, Workday and JazzHR forms")
+    assert why["Umbrella"] == "posted 200 days ago, over the 4-month limit"
+    assert why["Hooli"] == "it is marked Applied"
+    # Stored before the location rule caught them, until pruned: never applied to.
+    assert why["Maxwell"] == "location 'Taguig City, National Capital Region (Manila)' is not in the US"
+    assert "Accenture" not in {p["company"] for p in d["picks"]}
+    # The saved switch no longer grants automatic submission to this legacy path.
+    assert d["left_today"] == 10 and d["auto_submit"] is False
 
 
 # -- who can take the job -------------------------------------------------------------
@@ -305,6 +421,17 @@ def test_one_answer_reaches_every_form_and_clears_its_questions(monkeypatch, tmp
     assert data["1"]["answers"] == {"Are you 18 or older?": "Yes"} and data["2"]["questions"] == []
     q = prepare.questionnaire()
     assert q["shared"] == [] and all(j["required"] == 0 for j in q["jobs"])
+
+
+def test_motivation_answers_stay_with_the_job_even_with_identical_questions(monkeypatch, tmp_path):
+    question = {"label": "What Excites You About This Role?", "required": True, "options": []}
+    prepare = _prepared(monkeypatch, tmp_path, [_entry(1, "Acme", [question]), _entry(2, "Globex", [question])])
+    questionnaire = prepare.questionnaire()
+    assert questionnaire["shared"] == []
+    assert all(len(job["questions"]) == 1 for job in questionnaire["jobs"])
+    prepare.answer_all([{"label": question["label"], "value": "Acme's reliability work.", "job_ids": [1]}])
+    assert prepare.load()["1"]["answers"][question["label"]] == "Acme's reliability work."
+    assert prepare.load()["2"]["questions"] == [question]
 
 
 def test_ineligible_applications_are_left_out(monkeypatch, tmp_path):
@@ -542,6 +669,11 @@ def test_essay_questions_are_recognised():
     from backend.apply.essays import is_essay
     assert is_essay("Walk us through your experience operating production Kubernetes clusters — the scale.")
     assert is_essay("Describe how you've worked with Terraform in a production environment.")
+    assert is_essay("What Excites You About This Role?")
+    assert is_essay("What interests you about this role?")
+    assert is_essay("Why are you interested?")
+    assert not is_essay("LinkedIn Profile URL")
+    assert not is_essay("Why do you require sponsorship?")
     assert not is_essay("Desired Salary")
     assert not is_essay("Are you at least 18 years old?")
 

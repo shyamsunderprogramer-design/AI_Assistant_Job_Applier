@@ -385,10 +385,14 @@ feeds:
 
 # -- applying ------------------------------------------------------------------
 apply:
-  # Auto-apply: every morning the best matches are prepared (tailored resume,
-  # cover letter, the form's open questions). Nothing is sent: on the Apply
-  # page you answer the questions and press Start applying, and every form
-  # stops before Submit for you.
+  # The oldest posting the app picks to apply to (Apply to next 10, Prepare now,
+  # Start applying). One with no date counts from when it was first seen.
+  # 0 = no limit. A job you apply to from its own page goes whatever its age.
+  max_age_months: 4
+  # Prepare now (Auto-apply page) gets the best matches ready: tailored resume,
+  # cover letter, the form's open questions. Not every morning since 21 Oct 2026:
+  # only when pressed. It sends nothing; Start applying does, and a form stops
+  # before Submit for you unless Submit by itself is on (Greenhouse forms only).
   auto:
     min_fit: 0.80        # prepare jobs at or above this fit
     per_day: 10          # at most this many a day

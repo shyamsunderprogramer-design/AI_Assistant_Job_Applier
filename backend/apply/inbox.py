@@ -774,8 +774,12 @@ def _notify(found: list[dict]) -> None:
 
 # -- the half-hourly look --------------------------------------------------------------------------------
 
-def watch(load_cfg, every_s: int = EVERY_S, first_after_s: int = 90) -> threading.Thread:
+def watch(load_cfg, every_s: int = EVERY_S, first_after_s: int = 90) -> threading.Thread | None:
     """Look at the mailbox now and then while the app runs, on a thread of its own."""
+    from backend.core.startup import watcher_startup_held
+    if watcher_startup_held("inbox-watch"):
+        return None
+
     def loop():
         time.sleep(first_after_s)
         while True:

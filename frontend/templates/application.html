@@ -44,8 +44,14 @@
     {% if a.record %}
       <div class="hint">{% if a.record.how == 'email' %}Sent outside the app; the employer's email confirmed it{% if a.record.confirmed_by_email %}:
         “{{ a.record.confirmed_by_email }}”{% endif %}
+        {% elif a.record.how == 'marked' %}Marked applied by you ({{ a.record.marked_on or 'by hand' }}); what was sent, and when, is not known to the app
         {% else %}{% if a.record.how == 'auto' %}Sent by the app{% else %}Filled by the app; you pressed Submit{% endif %}
         · resume: {{ a.record.resume_source or 'yours' }}{% if a.record.cover_letter %} · with a cover letter{% endif %}{% endif %}</div>
+      {% if a.record.queue %}
+      <div class="hint ap-queue">From your chosen jobs on the Auto-apply page: run {{ a.record.queue.run_id }}, attempt {{ a.record.queue.attempt }}
+        {% for d in a.record.queue.documents %} · {{ 'resume' if d.kind == 'resume' else 'cover letter' }} {{ d.name }}
+          <span class="ap-sum" title="Its checksum: the file that went, exactly">{{ (d.sha256 or '')[:12] }}</span>{% endfor %}</div>
+      {% endif %}
       <div class="row" style="margin:8px 0">
         {% for f in a.record.files %}
           {% if f.endswith('.pdf') %}<a class="btn" href="{{ url_for('application_file', job_id=a.job_id, name=f) }}" target="_blank">📄 {{ 'Resume' if f.startswith('resume') else 'Cover letter' }} (PDF)</a>
@@ -77,6 +83,8 @@
 
 <style>
 .ap-now{text-align:right}
+.ap-queue{margin-top:4px;overflow-wrap:anywhere}
+.ap-sum{font-family:var(--mono);font-size:.85em;color:var(--muted)}
 .ap-stage{font:700 1.6em var(--cond)}
 .ap-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}
 @media (max-width:900px){.ap-grid{grid-template-columns:1fr}.ap-now{text-align:left}}
@@ -106,7 +114,7 @@ let A = {{ a|tojson }};
 const fmt = iso => iso ? new Date(iso.length === 10 ? iso + 'T12:00' : iso).toLocaleDateString([], {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'}) : '';
 function draw() {
   const items = [`<li class="applied"><b>Applied</b> <span class="when">${fmt(A.applied_at)}${A.applied_at && A.applied_at.length > 10 ? ' · ' + new Date(A.applied_at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : ''}</span>
-      <div class="hint">${A.record ? (A.record.how === 'auto' ? 'Sent by the app' : A.record.how === 'email' ? 'Sent outside the app; confirmed by the employer’s email' : 'Filled by the app; you pressed Submit') : 'Marked Applied by you'}</div></li>`]
+      <div class="hint">${A.record ? (A.record.how === 'auto' ? 'Sent by the app' : A.record.how === 'email' ? 'Sent outside the app; confirmed by the employer’s email' : A.record.how === 'marked' ? 'Marked applied by you' : 'Filled by the app; you pressed Submit') : 'Marked Applied by you'}</div></li>`]
     .concat(A.stages.map((s, i) => ({at: s.at, html: `<li class="${esc(s.stage)}"><b>${esc(s.label)}</b> <span class="when">${fmt(s.at)}</span>
       <button class="x" data-rm="${i}" title="Remove this stage" aria-label="Remove ${esc(s.label)}">✕</button>
       ${s.note ? `<div>${esc(s.note)}</div>` : ''}</li>`}))

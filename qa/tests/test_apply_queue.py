@@ -1,9 +1,8 @@
-"""Ordering applications by freshness — offline, no network, no browser.
+"""Ordering applications — offline, no network, no browser.
 
-A posting's age is the strongest thing we know about its odds: a recruiter
-reads the first applications to arrive and skims the rest. So these tests pin
-that freshness beats score, which is the one ordering rule that is easy to get
-backwards and expensive to get wrong.
+The person's order since 23 Oct 2026: the jobs they saved to the Watch list, then roles at
+companies they watch, then the best fit of the rest; at the same fit, the fresher posting.
+Until then freshness led and fit broke ties, so these tests pin the turn-around.
 """
 
 from dataclasses import dataclass
@@ -57,18 +56,25 @@ def test_a_naive_timestamp_is_treated_as_utc_not_rejected():
 
 # -- the ordering rule ------------------------------------------------------
 
-def test_fresh_beats_a_better_score():
-    """The rule that is easy to get backwards: a 95% match posted a month ago
-    is worth less than an 80% match posted this morning, because four hundred
-    CVs are already in front of it."""
-    stale_great = FakeJob(id=1, company="Globex", ats_match_score=0.95,
-                          posted_at=ago(days=30))
+def test_the_best_fit_goes_first_whatever_its_age():
+    """23 Oct 2026, "most fitted to jobs": a 95% match from a month ago goes before an 80% one
+    from this morning. Until then it was the other way round."""
+    month_old_great = FakeJob(id=1, company="Globex", ats_match_score=0.95,
+                              posted_at=ago(days=30))
     fresh_good = FakeJob(id=2, company="Initech", ats_match_score=0.80,
                          posted_at=ago(hours=2))
 
-    queue = build_queue([stale_great, fresh_good], limit=10, now=NOW)
+    queue = build_queue([month_old_great, fresh_good], limit=10, now=NOW)
 
-    assert [c.job_id for c in queue] == [2, 1]
+    assert [c.job_id for c in queue] == [1, 2]
+
+
+def test_at_the_same_fit_the_fresher_posting_goes_first():
+    """The same percent on the page, so freshness decides: early applications get read."""
+    older = FakeJob(id=1, company="Globex", ats_match_score=0.874, posted_at=ago(days=20))
+    newer = FakeJob(id=2, company="Initech", ats_match_score=0.871, posted_at=ago(hours=4))
+
+    assert [c.job_id for c in build_queue([older, newer], limit=10, now=NOW)] == [2, 1]
 
 
 def test_score_still_decides_within_one_band():
@@ -124,6 +130,101 @@ def test_the_daily_cap_is_the_last_word():
     assert len(build_queue(jobs, limit=30, now=NOW)) == 30
 
 
+# -- the Watch list first ------------------------------------------------------
+# 23 Oct 2026, the person: "auto apply selected means watchlist like and most fitted to jobs".
+
+def test_saved_jobs_go_first_then_watched_companies_then_the_best_fit():
+    best = FakeJob(id=1, company="Globex", ats_match_score=0.97)
+    watched = FakeJob(id=2, company="Initech", ats_match_score=0.70)
+    saved = FakeJob(id=3, company="Umbrella", ats_match_score=0.65)
+
+    queue = build_queue([best, watched, saved], limit=10, saved={3}, watched={2}, now=NOW)
+
+    assert [(c.job_id, c.group_name) for c in queue] == [
+        (3, "saved by you"), (2, "at a company you watch"), (1, "best fit")]
+
+
+def test_a_saved_job_goes_at_any_fit_but_a_watched_companys_role_needs_the_usual_fit():
+    """The person chose a saved job; a watched company's weak match is still a weak match."""
+    saved_weak = FakeJob(id=1, company="Globex", ats_match_score=0.40)
+    watched_weak = FakeJob(id=2, company="Initech", ats_match_score=0.40)
+    saved_unscored = FakeJob(id=3, company="Umbrella", ats_match_score=None)
+
+    queue = build_queue([saved_weak, watched_weak, saved_unscored], limit=10, min_score=0.60,
+                        saved={1, 3}, watched={2}, now=NOW)
+
+    assert [c.job_id for c in queue] == [1, 3]
+
+
+def test_every_other_rule_holds_for_a_saved_job():
+    """Saved is not a pass: applied, closed, a board without a filler, past four months."""
+    jobs = [FakeJob(id=1, company="A", status="Applied"), FakeJob(id=2, company="B", is_open=False),
+            FakeJob(id=3, company="C", source="jobvite"), FakeJob(id=4, company="D", posted_at=ago(days=200))]
+    assert build_queue(jobs, limit=10, saved={1, 2, 3, 4}, max_age_days=FOUR_MONTHS, now=NOW) == []
+
+
+def test_a_saved_job_represents_its_company():
+    jobs = [FakeJob(id=1, company="Acme", ats_match_score=0.95),
+            FakeJob(id=2, company="Acme", ats_match_score=0.62)]
+    assert [c.job_id for c in build_queue(jobs, limit=10, saved={2}, now=NOW)] == [2]
+
+
+# -- how old a posting may be ------------------------------------------------
+# 23 Oct 2026, the person: "I don't want more than 4 months job postings".
+
+FOUR_MONTHS = 4 * 30.44
+
+
+class Cfg(dict):
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
+def test_a_posting_past_four_months_is_not_queued():
+    """Without the limit the best fit leads at any age, so a 95% match from a year ago went
+    ahead of a 75% one from last week."""
+    jobs = [FakeJob(id=1, company="Globex", ats_match_score=0.95, posted_at=ago(days=365)),
+            FakeJob(id=2, company="Initech", ats_match_score=0.75, posted_at=ago(days=10)),
+            FakeJob(id=3, company="Umbrella", ats_match_score=0.90, posted_at=ago(days=118))]
+
+    assert [c.job_id for c in build_queue(jobs, limit=10, now=NOW)] == [1, 3, 2]
+    assert [c.job_id for c in build_queue(jobs, limit=10, max_age_days=FOUR_MONTHS, now=NOW)] == [3, 2]
+
+
+def test_an_undated_posting_counts_from_when_it_was_first_seen():
+    """First seen five months ago and still up: five months old at least."""
+    long_seen = FakeJob(id=1, company="Globex", found_at=ago(days=150))
+    just_met = FakeJob(id=2, company="Initech", found_at=ago(days=2))
+
+    assert [c.job_id for c in build_queue([long_seen, just_met], limit=10,
+                                          max_age_days=FOUR_MONTHS, now=NOW)] == [2]
+
+
+def test_a_posting_with_no_date_at_all_is_kept():
+    """Not knowing a posting's age is not evidence that it is old."""
+    assert len(build_queue([FakeJob()], limit=10, max_age_days=FOUR_MONTHS, now=NOW)) == 1
+
+
+def test_the_limit_comes_from_config_and_zero_lifts_it():
+    from pytest import approx
+
+    from backend.apply.queue import age_limit_days
+
+    assert age_limit_days(Cfg()) == approx(FOUR_MONTHS)                   # the default: 4
+    assert age_limit_days(Cfg({"apply.max_age_months": 6})) == approx(6 * 30.44)
+    assert age_limit_days(Cfg({"apply.max_age_months": 0})) is None
+
+
+def test_a_posting_past_the_limit_says_how_old_in_days():
+    """"4 mo, over the 4-month limit" would read as a contradiction: 124 days says it."""
+    from backend.apply.queue import age_note
+
+    assert age_note(FakeJob(posted_at=ago(days=124)), 4, NOW) == \
+        "posted 124 days ago, over the 4-month limit"
+    assert age_note(FakeJob(found_at=ago(days=150)), 4, NOW) == \
+        "first seen 150 days ago, over the 4-month limit"
+
+
 # -- saying what is about to happen ----------------------------------------
 
 def test_a_run_can_describe_itself_before_it_starts():
@@ -131,8 +232,9 @@ def test_a_run_can_describe_itself_before_it_starts():
             FakeJob(id=2, company="Initech", posted_at=ago(hours=5)),
             FakeJob(id=3, company="Umbrella", posted_at=ago(days=2))]
 
-    text = summarise(build_queue(jobs, limit=10, now=NOW))
+    text = summarise(build_queue(jobs, limit=10, saved={3}, now=NOW))
 
+    assert "1 saved by you · 2 best fit" in text
     assert "2 under a day" in text and "1 1-3 days" in text
 
 
@@ -162,15 +264,14 @@ def test_only_the_best_role_at_a_company_is_queued():
     assert queue[0].job_id == 2            # the best one, not the first seen
 
 
-def test_freshness_still_decides_which_role_represents_a_company():
-    """Within a company, the same rule applies: a fresher posting wins even
-    with a lower score."""
+def test_the_best_fit_represents_a_company():
+    """Within a company, the same rule applies: its best fit goes, however old."""
     jobs = [
         FakeJob(id=1, company="Acme", ats_match_score=0.95, posted_at=ago(days=30)),
         FakeJob(id=2, company="Acme", ats_match_score=0.72, posted_at=ago(hours=3)),
     ]
 
-    assert [c.job_id for c in build_queue(jobs, limit=10, now=NOW)] == [2]
+    assert [c.job_id for c in build_queue(jobs, limit=10, now=NOW)] == [1]
 
 
 def test_different_companies_are_all_kept():
@@ -348,3 +449,15 @@ def test_remote_in_front_of_a_place_abroad_is_still_abroad():
     for vague in ("Global | Remote", "AMER", "North America | Remote", "Remote (Multiple Locations)",
                   "Hybrid - 3 days a week", "Remote - Worldwide"):
         assert is_us(vague, NON_US_PLACES) is None, vague
+
+
+def test_manilas_national_capital_region_is_not_washingtons():
+    """23 Oct 2026: "Taguig City, National Capital Region (Manila)" was kept as American and
+    rose to the next ten to apply to, the region's name being the DC area's too."""
+    from backend.core.locations import is_us
+    from ml.resume.profile import NON_US_PLACES
+
+    for place in ("Taguig City, National Capital Region (Manila)", "Makati, Metro Manila", "Manila, Philippines"):
+        assert is_us(place, NON_US_PLACES) is False, place
+    for place in ("Washington, DC (National Capital Region)", "National Capital Region"):
+        assert is_us(place, NON_US_PLACES) is True, place

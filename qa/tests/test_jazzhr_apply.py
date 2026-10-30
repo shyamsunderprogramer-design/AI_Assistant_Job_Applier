@@ -58,8 +58,13 @@ def test_the_persons_own_answer_for_this_job_fills_the_essay():
     from backend.apply.answers import normalise
     qs = jazzhr.questions_from_html(FORM)
     p = person()
-    p.answers[normalise(qs[3]["label"])] = "I built FedRAMP evidence pipelines."
+    key = normalise(qs[3]["label"])
+    p.answers[key] = "I built FedRAMP evidence pipelines."
+    assert jazzhr.answer(qs[3], p, JOBS) is None  # a global-bank essay is not approval for this job
+    p.job_answers[key] = p.answers[key]  # the runner scopes the saved job answer this way
     assert jazzhr.answer(qs[3], p, JOBS) == "I built FedRAMP evidence pipelines."
+    p.job_answers.clear()
+    assert jazzhr.answer(qs[3], p, JOBS) is None
 
 
 def test_pick_matches_ranges_and_words():

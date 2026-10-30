@@ -117,6 +117,10 @@ class Applicant:
         a question the profile recognises but holds no value for, like salary.
         """
         from backend.apply import salary
+        from backend.apply.essays import is_essay
+        from backend.apply.answers import normalise
+        if is_essay(label):
+            return self.job_answers.get(normalise(label)) or None
         if salary.is_salary_question(label):
             # Desired salary is per job: what the person typed for this job, else 80-95% of the
             # posted maximum (or of the market's, when nothing is posted), else the profile's.

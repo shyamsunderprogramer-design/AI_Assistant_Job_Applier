@@ -289,19 +289,22 @@ def ready(monkeypatch, tmp_path):
     return Cfg({"limits.max_applications_per_day": 15, "resume.min_score": 0.5})
 
 
-def test_a_submitted_application_is_recorded(db, ready, capsys):
+def test_a_submitted_application_is_recorded(db, ready, capsys, monkeypatch):
     job_id = add_job()
     ctx = Context()
+    # Legacy runs now require the person to submit, even with the preference on.
+    monkeypatch.setattr(greenhouse, "watch_submission", lambda page, timeout_s, **kw: ("submitted", {}))
 
     outcomes = runner.run(ready, limit=5, browser_factory=lambda: ctx)
 
     assert [o.result for o in outcomes] == ["submitted"]
     assert ctx.pages[0].url == form_url("acme", "123")
+    assert not ctx.pages[0].submitted
     with get_session() as s:
         job = s.get(Job, job_id)
         assert job.status == "Applied" and job.applied_at is not None
     line = json.loads(runner.AUDIT_LOG.read_text().splitlines()[0])
-    assert line["job_id"] == job_id and line["how"] == "auto"
+    assert line["job_id"] == job_id and line["how"] == "you"
 
 
 def test_a_captcha_waits_and_a_closed_tab_changes_nothing(db, ready, monkeypatch):

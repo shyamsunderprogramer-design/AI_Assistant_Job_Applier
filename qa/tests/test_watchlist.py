@@ -63,6 +63,37 @@ def test_a_watched_company_shows_its_open_roles_best_fit_first_and_what_is_new(d
     assert watchlist.companies_view()[0]["new"] == 0
 
 
+def test_auto_apply_knows_the_jobs_at_a_watched_company(db):
+    """Apply to next 10 takes a watched company's roles right after the saved jobs (23 Oct 2026),
+    matched the way the Watch list page matches them: "ACME, Inc." and "acme" are Acme."""
+    with get_session() as s:
+        jobs = s.query(Job).all()
+        assert watchlist.watched_job_ids(jobs) == set()               # nothing watched yet
+        watchlist.add_company("Acme")
+        assert watchlist.watched_job_ids(jobs) == {1, 2, 4}           # not Acme Rockets, not Hooli AI
+
+
+def test_the_apply_next_button_starts_one_run_and_clears_a_job_pages_mark(db, monkeypatch):
+    """Apply to next 10 on the Auto-apply page: refused while an apply run's browser is open; else
+    started, with the job-page mark cleared so that job's page does not take this run as its own."""
+    from backend.api import app as webapp
+    from backend.api import auto_apply
+    marker = db / "webapp_apply.job"
+    marker.write_text("7")
+    monkeypatch.setattr(auto_apply, "MARKER", marker)
+    started = []
+    monkeypatch.setattr(webapp, "start_task", lambda task, args: started.append((task, args)) or {"ok": True})
+    client = webapp.app.test_client()
+
+    monkeypatch.setattr(webapp, "task_pid", lambda task: 123 if task == "apply-ready" else None)
+    r = client.post("/apply/next/start")
+    assert r.status_code == 409 and "already" in r.get_json()["error"] and started == [] and marker.exists()
+
+    monkeypatch.setattr(webapp, "task_pid", lambda task: None)
+    assert client.post("/apply/next/start").get_json() == {"ok": True}
+    assert started == [("apply", ["apply", "--limit", "10"])] and not marker.exists()
+
+
 def test_twice_is_refused_by_the_companys_own_name_and_removing_works(db):
     watchlist.add_company("Acme")
     with pytest.raises(watchlist.NotWatched, match="Acme is on your watch list already"):

@@ -7,5 +7,13 @@ from backend.apply.inbox import watch
 watch(cfg)
 # A morning run the Mac missed while it was off, started once it is on (backend/api/morning_pages.py).
 watch_mornings()
+# The chosen jobs a crash or a restart left mid-way: forms not yet open back in the queue, forms
+# that were open waiting for the person's word on whether they went (backend/apply/execution.py).
+try:
+    from backend.apply.execution import recover
+    cfg()
+    recover()
+except Exception as exc:                 # never a reason for the app not to start
+    print(f"Chosen jobs not checked after the restart: {exc}")
 
 raise SystemExit(main())

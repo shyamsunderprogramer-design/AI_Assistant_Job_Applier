@@ -124,6 +124,10 @@ class FillResult:
     screenshot: str | None = None
     error: str | None = None
     given: dict[str, str] = field(default_factory=dict)   # the person's own answers, by question
+    # Checks that could not be completed -- the page did not answer, a field could not be read or
+    # filled. A check that failed is never one that passed: any of these leaves Submit to the person
+    # (29 Oct 2026; until then each read as "nothing there", and Submit could be pressed).
+    unchecked: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -132,12 +136,15 @@ class FillResult:
     @property
     def needs_person(self) -> bool:
         """Is there anything only the person can do before this goes out?"""
-        return bool(self.captcha or self.declarations or self.required_blank)
+        return bool(self.captcha or self.declarations or self.required_blank or self.unchecked)
 
     def summary(self) -> str:
         if self.error:
             return f"not filled: {self.error}"
         parts = [f"{len(self.filled)} fields", f"{len(self.attachments)} files"]
+        if self.unchecked:
+            parts.append(f"{len(self.unchecked)} check{'s' if len(self.unchecked) != 1 else ''} not completed — "
+                         "submit is yours")
         if self.declarations:
             parts.append(f"{len(self.declarations)} declarations for you")
         if self.required_blank:
@@ -162,12 +169,15 @@ def _is_declaration(label: str) -> bool:
 
 
 def _is_required(label: str, element=None) -> bool:
+    """As the form marks it. A field whose marking cannot be read counts as required."""
     if (label or "").rstrip().endswith("*"):
         return True
-    try:
-        return element is not None and element.get_attribute("aria-required") == "true"
-    except Exception:
+    if element is None:
         return False
+    try:
+        return element.get_attribute("aria-required") == "true"
+    except Exception:
+        return True
 
 
 def _is_dropdown(element) -> bool:
@@ -297,12 +307,14 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
             result.filled[field_id] = value
         except Exception as exc:                        # one field, not the form
             log.debug("Greenhouse %s: %s could not be filled: %s", job_id, field_id, exc)
+            result.unchecked.append(f"{field_id} could not be filled")
 
     for field_id, value_of in KNOWN_CHOICES.items():
         try:
             element = page.query_selector(f"#{field_id}")
         except Exception:
-            element = None
+            result.unchecked.append(f"{field_id} could not be read")
+            continue
         if element is None:
             continue
         value = value_of(applicant)
@@ -323,6 +335,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
         )
     except Exception:
         questions = []
+        result.unchecked.append("the form's questions could not be read")
 
     for question in questions:
         label, target = question["text"], question["id"]
@@ -331,7 +344,8 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
         try:
             element = page.query_selector(f"#{target}")
         except Exception:
-            element = None
+            result.unchecked.append(f"{label[:60]} could not be read")
+            continue
         required = _is_required(label, element)
 
         if _is_declaration(label):
@@ -364,6 +378,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
             result.filled[label[:300]] = answer   # whole: the Applied page shows the question
         except Exception as exc:
             log.debug("Greenhouse %s: %r could not be filled: %s", job_id, label, exc)
+            result.unchecked.append(f"{label[:60]} could not be filled")
 
     # -- the documents -----------------------------------------------------
     for field_id, path in (("resume", resume_path), ("cover_letter", letter_path)):
@@ -377,6 +392,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
                 page.wait_for_timeout(800)
         except Exception as exc:
             log.warning("Greenhouse %s: could not attach %s: %s", job_id, field_id, exc)
+            result.unchecked.append(f"the {field_id.replace('_', ' ')} could not be attached")
     if resume_path is not None and not any(a.startswith("resume=") for a in result.attachments):
         result.required_blank.append("resume")      # never send one without it
 
@@ -393,6 +409,7 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
         result.captcha = present and not captcha_is_invisible(html)
     except Exception:
         result.captcha = False
+        result.unchecked.append("whether a CAPTCHA is shown could not be checked")
 
     # -- keep the evidence -------------------------------------------------
     try:

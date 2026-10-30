@@ -84,11 +84,14 @@ def questions_from_html(html: str) -> list[dict]:
     return out
 
 
-def fetch_questions(url: str) -> list[dict]:
+def fetch_questions(url: str, *, strict: bool = False) -> list[dict]:
+    """The form's questions. `strict`: a page that does not answer raises instead of reading as none."""
     import requests
     try:
         html = requests.get(url, headers={"User-Agent": BROWSER_UA}, timeout=20).text
     except requests.RequestException:
+        if strict:
+            raise
         return []
     return questions_from_html(html)
 

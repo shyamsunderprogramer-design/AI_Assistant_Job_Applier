@@ -60,8 +60,8 @@
   {% else %}
   <p class="hint">The app's own browser opens this posting{% if job.board not in ['greenhouse', 'workday', 'jazzhr'] %} on {{ job.board }},
     follows it to {{ job.company }}&rsquo;s application form,{% endif %} and fills it from your profile with your resume for this job.
-    Then it stops for you: check it, tick any consent box or CAPTCHA, and press Submit yourself{% if job.board == 'greenhouse' %}
-    (a Greenhouse form with nothing left for you goes by itself when “submit by itself” is on, on the Auto-apply page){% endif %}.</p>
+    Then it stops for you: check it, tick any consent box or CAPTCHA, and press Submit yourself.
+    This job-page run always waits for you, including on Greenhouse.</p>
   {% endif %}
   <pre class="aa-log" id="aa-log"></pre>
   <div class="aa-check" id="aa-check" hidden>
@@ -105,8 +105,30 @@
   {% if job.experience %}<span>Wants <b>{{ job.experience }}</b></span>{% endif %}
   {% if job.salary %}<span>Pays <b>{{ job.salary }}</b></span>{% endif %}
   <span>Board <b>{{ job.board }}</b></span>
+  {# The company's own page for this job, added by the person (25 Oct 2026): a posting found on a job site
+     such as Adzuna is applied to there instead. #}
+  <span id="ep">Company's page {% if job.employerUrl %}<a href="{{ job.employerUrl }}" target="_blank" rel="noopener"><b>{{ job.employerHost }}</b></a>
+    {% if job.employerKind == 'posting' %}<span class="hint" id="ep-kind-now">(this job's posting, added by you)</span>
+    <button class="linkish" type="button" id="ep-kind" data-kind="careers" title="Not this job's own page? Keep it as a link to look from">It's the careers site</button>
+    {% else %}<span class="hint" id="ep-kind-now">(careers site, added by you: Auto-apply uses the {{ job.board }} link)</span>
+    <button class="linkish" type="button" id="ep-kind" data-kind="posting" title="It opens this very job? Apply there">It's this job's posting</button>
+    {% endif %}{% else %}<b>not added</b>{% endif %}
+    <button class="linkish" type="button" id="ep-edit" title="Add the link to this job on the company's own careers site">{{ 'Change' if job.employerUrl else 'Add' }}</button></span>
   {% if job.location %}<span>{{ job.location }}</span>{% endif %}
 </div>
+<form class="jt-form" id="ep-form" hidden novalidate>{# the app checks the link, and adds https:// when it is left off #}
+  <label>Company's own page
+    <input type="url" id="ep-url" value="{{ job.employerUrl }}" inputmode="url" autocomplete="off" spellcheck="false"
+           placeholder="https://careers.example.com/jobs/12345"></label>
+  <button class="btn primary" type="submit">Save</button>
+  <button class="btn" type="button" id="ep-cancel">Cancel</button>
+  {% if job.employerUrl %}<button class="btn" type="button" id="ep-remove">Remove</button>{% endif %}
+  <span class="hint" id="ep-say">Best: this job's own page on the company's site.
+    {% if job.board in ['greenhouse', 'workday', 'jazzhr'] %}“Open the application form” goes there; Auto-apply still fills the {{ job.board|title }} form, the company's own form already.
+    {% else %}Auto-apply and “Open the application form” go there instead of {{ job.board }}.{% endif %}
+    A careers site's front page or search is kept as a link to look from, never taken for the form.
+    Kept when the postings are fetched again.</span>
+</form>
 <form class="jt-form" id="jt-form" hidden>
   <label>Job type
     <select id="jt-pick">
@@ -405,7 +427,7 @@
           {% if job.status in ['Not Applied', 'Manual Review', 'Skipped'] %}
           <button class="btn primary" type="button" data-auto-apply>Auto-apply</button>
           {% endif %}
-          <a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">Open the {{ job.board|replace('-', ' ')|title }} form</a>
+          <a class="btn" href="{{ job.url }}" target="_blank" rel="noopener">{% if job.employerUrl and job.employerKind == 'posting' %}Open {{ job.company }}&rsquo;s page{% else %}Open the {{ job.board|replace('-', ' ')|title }} form{% endif %}</a>
           <select id="status" aria-label="Status">
             {% for s in statuses %}
             <option value="{{ s }}" {% if s == job.status %}selected{% endif %}>{{ s }}</option>
@@ -1180,6 +1202,24 @@ async function sendJobType(body) {
 $('jt-form')?.addEventListener('submit', e => { e.preventDefault(); sendJobType({type: $('jt-pick').value}); });
 $('jt-reset')?.addEventListener('click', () => sendJobType({reset: true}));
 
+// -- The company's own page for this job: Auto-apply and the form button go there ----------
+$('ep-edit')?.addEventListener('click', () => { $('ep-form').hidden = false; $('ep-edit').hidden = true; $('ep-url').focus(); });
+$('ep-cancel')?.addEventListener('click', () => { $('ep-form').hidden = true; $('ep-edit').hidden = false; });
+async function sendEmployerPage(url, kind) {
+  const r = await ask(`/job/${JOB}/employer-page`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                    body: JSON.stringify(kind ? {url, kind} : {url})});
+  if (!r.ok) {
+    $('ep-form').hidden = false;                     // the reason shows under the box, even from the switch
+    $('ep-say').textContent = r.error || 'Not saved.';
+    return;
+  }
+  location.reload();
+}
+$('ep-form')?.addEventListener('submit', e => { e.preventDefault(); sendEmployerPage($('ep-url').value); });
+$('ep-remove')?.addEventListener('click', () => sendEmployerPage(''));
+// The app reads whether the link is this job's posting or the careers site; the person can say otherwise.
+$('ep-kind')?.addEventListener('click', e => sendEmployerPage($('ep-url').value, e.currentTarget.dataset.kind));
+
 // -- Correct the clearance / citizenship / visa reading after reviewing the posting ------
 $('elig-edit')?.addEventListener('click', () => { $('elig-form').hidden = false; $('elig-edit').hidden = true; });
 $('ef-cancel')?.addEventListener('click', () => { $('elig-form').hidden = true; $('elig-edit').hidden = false; });
@@ -1552,7 +1592,9 @@ $('prep-make')?.addEventListener('click', async e => {
     } catch (e) { state.textContent = 'Not saved. Press it again.'; return; }
     ask.hidden = true;
     document.getElementById('aa-ho').hidden = true;
-    if (r.ok && yes) { state.textContent = 'Applied ✓'; setTimeout(() => location.reload(), 1200); }
+    // Refused when it was answered already (another tab, or the Auto-apply page): say so, never "Noted".
+    if (!r.ok) state.textContent = r.error || 'Not saved. Reload the page to see where it stands.';
+    else if (yes) { state.textContent = 'Applied ✓'; setTimeout(() => location.reload(), 1200); }
     else state.textContent = 'Noted: not sent. Press Auto-apply to try again.';
   }
   buttons.forEach(b => b.addEventListener('click', start));

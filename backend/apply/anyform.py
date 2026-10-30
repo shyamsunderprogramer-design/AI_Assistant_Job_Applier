@@ -22,10 +22,13 @@ an employer hiring on Teamtailor, Lever, Ashby, Workable, BambooHR, Breezy, Recr
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import re
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +139,20 @@ def is_form(info: dict) -> bool:
            (info.get("email", 0) > 0 and info.get("text", 0) >= 3)
 
 
+def sign_in_barrier(page) -> str | None:
+    """Explicit sign-in barriers, not a site's ordinary navigation Sign in link.
+
+    Read visible text only. Never save identity-provider URLs, tokens or credentials
+    as navigation knowledge. The caller hands the original posting to the person.
+    """
+    text = " ".join(_body(page).lower().replace("’", "'").split())
+    if "this browser or app may not be secure" in text:
+        return "Sign-in was blocked in the app's browser."
+    if "sign in or create an account to continue" in text:
+        return "This page requires an account before the application can be reached."
+    return None
+
+
 def being_checked(page) -> bool:
     """Is the site checking the browser before it shows the page?"""
     try:
@@ -182,6 +199,10 @@ _APPLY_JS = """() => {
   const els = [...document.querySelectorAll('a[href], button, [role=button], input[type=submit], input[type=button]')].filter(vis);
   const found = [];
   els.forEach((e, i) => {
+    // A short or prefilled application can fail is_form's field-count heuristic.
+    // Never mistake its submit control (including implicit/form-associated buttons)
+    // for a navigation button just because it says "Apply now".
+    if (e.form || e.closest('form') || (e.tagName === 'INPUT' && e.type === 'submit')) return;
     const text = ((e.innerText || e.value || '') + ' ' + (e.getAttribute('aria-label') || '')).replace(/\\s+/g, ' ').trim();
     if (!/\\bapply\\b/i.test(text) || text.length > 60) return;
     if (/\\bapplied\\b|apply (filters?|changes|selection)|how to apply|easy apply|apply (with|using|via) (linkedin|indeed|seek|google)/i.test(text)) return;
@@ -248,6 +269,8 @@ def reach(page, url: str, *, say=print, check_s: float = 180, hops: int = 5) -> 
             page.wait_for_timeout(1500)
         except Exception:
             return Reached(page, None, url, "the window was closed")
+        if sign_in_barrier(page):
+            return Reached(page, "signin-handoff", page.url)
         if not wait_out_check(page, say, check_s):
             return Reached(page, None, page.url, "the site's browser check did not clear")
         here = page.url
@@ -767,7 +790,7 @@ def snapshot(page) -> dict[str, str]:
 def watch(page, applicant: Applicant, result: FillResult, timeout_s: float, *, resume_path=None,
           letter_path=None, letter_text=None, seen=None, evidence: Path | None = None, say=print,
           poll_ms: int = 2000, clock=time.monotonic):
-    """("submitted" | "skipped" | "timeout", answers, page): the person's Submit, or the tab closed.
+    """("submitted" | "skipped" | "timeout" | "signin-handoff", answers, page).
 
     While waiting, a new page of the form, or a form that appears once the person has signed in,
     is filled the first time it shows. On a Submit the confirmation is kept beside the resume.
@@ -793,6 +816,8 @@ def watch(page, applicant: Applicant, result: FillResult, timeout_s: float, *, r
                 known.update(opened)
                 page = opened[-1]
                 baseline, start = _said_done(page), page.url
+        if sign_in_barrier(page):
+            return "signin-handoff", answers, page
         moved = page.url != start and DONE_URL.search(urlparse(page.url).path or "")
         if (_said_done(page) - baseline) or moved:
             if evidence is not None:
@@ -846,14 +871,36 @@ def _read_unconfirmed() -> dict:
         return {}
 
 
-def keep_unconfirmed(job_id: int, entry: dict) -> None:
-    """What went into a form the app could not see sent, for the person to say whether it went."""
-    data = _read_unconfirmed()
-    data[str(job_id)] = {**entry, "kept_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    UNCONFIRMED.parent.mkdir(parents=True, exist_ok=True)
+_writing = threading.Lock()
+
+
+@contextmanager
+def _one_writer():
+    """One change to the file at a time, in this process and in any other: a run keeps an entry while
+    the web page takes another, and each reads the whole file and writes it back -- unlocked, one of
+    the two changes could be lost (25 Oct 2026)."""
+    with _writing:
+        UNCONFIRMED.parent.mkdir(parents=True, exist_ok=True)
+        with open(UNCONFIRMED.with_suffix(".lock"), "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _write_unconfirmed(data: dict) -> None:
     tmp = UNCONFIRMED.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=1))
     tmp.replace(UNCONFIRMED)
+
+
+def keep_unconfirmed(job_id: int, entry: dict) -> None:
+    """What went into a form the app could not see sent, for the person to say whether it went."""
+    with _one_writer():
+        data = _read_unconfirmed()
+        data[str(job_id)] = {**entry, "kept_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        _write_unconfirmed(data)
 
 
 def unconfirmed(job_id: int) -> dict | None:
@@ -861,8 +908,16 @@ def unconfirmed(job_id: int) -> dict | None:
 
 
 def forget_unconfirmed(job_id: int) -> None:
-    data = _read_unconfirmed()
-    if data.pop(str(job_id), None) is not None:
-        tmp = UNCONFIRMED.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=1))
-        tmp.replace(UNCONFIRMED)
+    take_unconfirmed(job_id)
+
+
+def take_unconfirmed(job_id: int) -> dict | None:
+    """The entry for this job, taken off in one step: of two answers to "did it go?" at once -- two
+    tabs of its page -- one gets it, and the other None, so the later one is refused rather than
+    recorded over the first (25 Oct 2026)."""
+    with _one_writer():
+        data = _read_unconfirmed()
+        entry = data.pop(str(job_id), None)
+        if entry is not None:
+            _write_unconfirmed(data)
+        return entry

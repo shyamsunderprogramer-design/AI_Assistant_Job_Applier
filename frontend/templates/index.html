@@ -57,8 +57,7 @@
   <div class="row">
     <button class="btn primary" id="run-scrape">Get latest postings</button>
     <button class="btn" id="run-score">Re-score</button>
-    <button class="btn" id="run-apply"
-      title="Opens a browser, fills each Greenhouse form, and waits for you to press Submit">Apply to next 10</button>
+    {# Apply to next 10 is on the Auto-apply page since 23 Oct 2026, beside the list of what it picks. #}
   </div>
   {# A line of its own, one size whatever it says: beside the buttons it grew with a run's
      longer words and pushed them onto a new line, seconds after every page load. #}
@@ -267,6 +266,13 @@
   </select>
   <button class="chip" id="f-clear">Clear</button>
   <span class="count" id="count" role="status"></span>
+  {# Jobs ticked to apply to (24 Oct 2026). Kept by the app until unticked or cleared; ticking sends nothing. #}
+  <span class="picks" id="picks" hidden>
+    <b id="pick-n">0 selected</b>
+    <button class="btn primary small" id="pick-review" type="button">Review and add to Auto-apply</button>
+    <button class="btn small" id="pick-clear" type="button">Clear selection</button>
+    <span class="hint" id="pick-say" role="status"></span>
+  </span>
 </div>
 <div class="rulebar" id="rulebar">
   <span class="sub">Filter by</span>
@@ -307,12 +313,61 @@
 /* A 1440 screen: the Job type column fits beside the rest when Location and Role give a little. */
 @media (max-width:1599px){ #rows td.loc div{max-width:110px} #rows td.ti{min-width:165px;max-width:165px} }
 .watch-note a{font-weight:600}
+/* Ticking jobs to apply to (24 Oct 2026). */
+.tw thead th.pick,#rows td.pick{width:30px;padding-left:10px;padding-right:0;text-align:center}
+th.pick input,td.pick input{width:16px;height:16px;margin:0;cursor:pointer;accent-color:var(--signal)}
+#rows tr.picked td{background:var(--signal-soft)}
+.picks{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.picks b{font-size:13px;font-variant-numeric:tabular-nums}
+/* Where the filter bar stops following the page, the selection stays at the foot of the screen.
+   The bar's blur made it the frame a fixed child is placed in, so the selection scrolled away with
+   it; there the bar no longer moves over anything, so the blur goes. */
+@media (max-width:820px){
+  .bar{-webkit-backdrop-filter:none;backdrop-filter:none}
+  .picks{position:fixed;left:0;right:0;bottom:0;z-index:40;justify-content:center;
+    padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+    background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -6px 20px rgba(0,0,0,.12)}
+}
+dialog.pickd{width:min(780px,calc(100vw - 32px))}
+dialog.pickd[open]{display:flex;flex-direction:column;max-height:min(84vh,780px)}
+.pickd-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.pickd-list{overflow:auto;min-height:0;margin:8px 0}
+/* min-width:0 -- every table is 900px at least (app.css, for the jobs table to swipe), and in a box at
+   most 780px wide that hid the Untick buttons and the end of the longer reasons, on a laptop too. */
+.pickd-t{width:100%;min-width:0;border-collapse:collapse}
+.pickd-t th{text-align:left;font-weight:600;padding:6px 8px 6px 0;border-bottom:1px solid var(--line)}
+.pickd-t td{padding:7px 8px 7px 0;vertical-align:top;border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent);
+  overflow-wrap:anywhere}
+.pickd-t .pill{white-space:nowrap}
+.pickd-t [data-unpick]{white-space:nowrap;overflow-wrap:normal}   /* "Unti / ck" otherwise: td breaks anywhere */
+.pk-ready{color:var(--good)} .pk-later{color:var(--warn)} .pk-blocked{color:var(--muted)}
+.pk-listed{background:var(--signal-soft);color:var(--signal-ink)}
+.pk-needs,.pk-answers{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+/* Each job's eligibility decision (26 Oct 2026): what the posting asks, against your profile. */
+.dc{margin-top:4px}
+.dc-eligible{color:var(--good)} .dc-eligible_with_warnings,.dc-needs_information{color:var(--warn)}
+.dc-ineligible{color:var(--crit)} .dc-unverified{color:var(--muted)}
+.dc-words summary{cursor:pointer;font-size:.9em;color:var(--muted)}
+.dc-words ul{margin:4px 0 0;padding-left:1.1em;font-size:.9em}
+.pickd-foot{gap:10px;align-items:center}
+/* On a phone each job is a block: its fit and name, then whether it can go and why, then Untick.
+   As a table the reasons ran off the right edge, readable only by swiping inside the box (25 Oct 2026). */
+@media (max-width:640px){
+  .pickd-t thead{display:none}
+  .pickd-t,.pickd-t tbody{display:block}      /* else the table sizes itself to the longest reason, unwrapped */
+  .pickd-t tr{display:grid;grid-template-columns:2.8em minmax(0,1fr);column-gap:8px;padding:8px 0;
+    border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+  .pickd-t td{display:block;border-top:0;padding:2px 0}
+  .pickd-t td:nth-child(n+3){grid-column:2}
+  .pickd-t .pill{white-space:normal}
+}
 </style>
 <p class="sub phone-only">Swipe the table sideways to see every column.</p>
 <div class="tw">
   <table>
     <caption class="sr-only">Open jobs, ranked against your resume. Press a column heading to sort.</caption>
     <thead><tr>
+      <th class="pick"><input type="checkbox" id="pick-all" aria-label="Tick every job shown"></th>
       <th data-k="score">Fit <span class="ar"></span></th>
       <th data-k="ageDays" aria-sort="ascending">Age <span class="ar">▲</span></th>
       <th data-k="workplace">Where</th>
@@ -334,6 +389,20 @@
 
 <div class="out" id="run-out" hidden></div>
 <footer id="foot"></footer>
+
+{# The ticked jobs, each checked by the rules every apply run keeps, before any goes to Auto-apply. #}
+<dialog class="place pickd" id="pickd" aria-labelledby="pickd-title">
+  <div class="pickd-head">
+    <h2 id="pickd-title">Your selected jobs</h2>
+    <button class="btn" type="button" id="pickd-close">Close</button>
+  </div>
+  <p class="hint" id="pickd-note">Checking each job…</p>
+  <div class="pickd-list" id="pickd-list"></div>
+  <div class="row pickd-foot">
+    <button class="btn primary" type="button" id="pickd-add" disabled>Add to Auto-apply</button>
+    <span class="hint" id="pickd-say" role="status"></span>
+  </div>
+</dialog>
 
 
 <script id="data" type="application/json">{{ rows|tojson }}</script>
@@ -358,6 +427,10 @@ const ROWS = RAW.map(r => ({...r,
 const state = {q:'', remote:false, strong:false, paid:false, fresh:false,
                recent:false, board:'', today:false, week:false, pay150:false,
                reach:false, eligible:false, watch:false, clr:'', ctz:'', visa:'', rules:[]};
+// The jobs ticked to apply to (24 Oct 2026), as the app keeps them, and the rows the filters show
+// now: drawn or still waiting to be. Ticking all ticks every one of those, not only the drawn ones.
+const PICKED = new Set();
+let SHOWN = [];
 // Years of experience the derived profile says you have. Used by the
 // "Within my experience" filter, which hides roles asking for more.
 const MY_YEARS = {{ my_years or 'null' }};
@@ -468,15 +541,22 @@ function placeHas(loc, want) {
   return text.includes(STATES[code]) || new RegExp(`(^|[,;(/-]\\s*)${code}\\b`).test(text);
 }
 
+// The rows go in LOT at a time, the next lot as the end of the list comes near. All at once
+// (9,947 on 21 Oct 2026) took the browser 1.3 s to lay out, on every load, filter and letter
+// typed in the search box.
+const LOT = 300;
+let waiting = [], drawRow = null;
 function render() {
   const rows = visible();
+  SHOWN = rows;
   $('count').textContent = `${rows.length} of ${ROWS.length} shown`;
   // The count is every application from the server (closed postings too), not only the open ones listed here.
   const band = s => s >= 70 ? 'hot' : s >= 60 ? 'warm' : 'cool';
   const cls = s => s === 'Applied' ? 'applied' : s === 'Manual Review' ? 'review' : '';
-  $('rows').replaceChildren(...rows.map(r => {
+  drawRow = r => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      <td class="pick"><input type="checkbox" data-pick="${r.id}"${PICKED.has(r.id) ? ' checked' : ''}></td>
       <td class="num">${r.score === null
         ? '<span class="sc sc-none" title="Not scored yet — press Re-score">–</span>'
         : r.basis === 'title'
@@ -522,8 +602,30 @@ function render() {
     if (r.eligible === false) { tr.classList.add('ineligible'); tr.title = 'Not for you: ' + r.not_eligible_because.join(', '); }
     tr.querySelector('.b').textContent = r.board;
     tr.querySelector('.pill').textContent = r.status;
+    tr.querySelector('.pick input').setAttribute('aria-label', `Tick: ${r.title} at ${r.company}`);
+    if (PICKED.has(r.id)) tr.classList.add('picked');
     return tr;
-  }));
+  };
+  waiting = rows.slice(LOT);
+  $('rows').replaceChildren(...rows.slice(0, LOT).map(drawRow));
+  watchEnd();
+  showPicks();
+}
+function more() {
+  $('rows').append(...waiting.splice(0, LOT).map(drawRow));
+}
+// Near the end of the rows drawn so far: the next lot. Watched afresh after every lot and every
+// render, because an observer only speaks when the end crosses its margin, not while it stays inside.
+const listEnd = document.createElement('div');
+listEnd.setAttribute('aria-hidden', 'true');
+$('rows').closest('.tw').after(listEnd);
+const nearEnd = 'IntersectionObserver' in window ? new IntersectionObserver(seen => {
+  if (seen[0].isIntersecting && waiting.length) { more(); watchEnd(); }
+}, {rootMargin: '0px 0px 1500px 0px'}) : null;
+function watchEnd() {
+  if (!nearEnd) { while (waiting.length) more(); return; }     // no observer: every row, as before
+  nearEnd.unobserve(listEnd);
+  nearEnd.observe(listEnd);
 }
 
 $('q').addEventListener('input', e => { state.q = e.target.value; render(); });
@@ -546,11 +648,145 @@ $('rows').addEventListener('click', async e => {
   try {
     const r = await (await fetch(`/job/${b.dataset.star}/watch`, {method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({on})})).json();
-    if (r.ok && row) { row.starred = r.on; render(); }
+    if (r.ok && row) {
+      row.starred = r.on;
+      // Only this row changes. Drawn again, the list would go back to its first lot of rows.
+      if (state.watch) render(); else b.closest('tr').replaceWith(drawRow(row));
+    }
   } catch (err) {}
 });
 [['f-clr', 'clr'], ['f-ctz', 'ctz'], ['f-visa', 'visa']].forEach(([id, k]) =>
   $(id).addEventListener('change', e => { state[k] = e.target.value; render(); }));
+
+// -- ticking jobs to apply to (24 Oct 2026) ---------------------------------------------------
+// The app keeps the ticks (backend/apply/chosen.py), so they last through filters, reloads and
+// other pages until unticked or cleared. Ticking sends nothing; Review checks each job by the rules
+// every apply run keeps, and Add puts the ones that can go on the Auto-apply page's list.
+const escText = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+function showPicks() {
+  const n = PICKED.size, ticked = SHOWN.filter(r => PICKED.has(r.id)).length, all = $('pick-all');
+  $('picks').hidden = !n && !$('pick-say').textContent;
+  $('pick-n').textContent = `${n.toLocaleString()} selected`;
+  all.checked = SHOWN.length > 0 && ticked === SHOWN.length;
+  all.indeterminate = ticked > 0 && ticked < SHOWN.length;
+  all.title = `${all.checked ? 'Untick' : 'Tick'} all ${SHOWN.length.toLocaleString()} jobs shown`;
+  all.setAttribute('aria-label', all.title);
+}
+function syncPicks() {
+  document.querySelectorAll('#rows input[data-pick]').forEach(box => {
+    box.checked = PICKED.has(+box.dataset.pick);
+    box.closest('tr').classList.toggle('picked', box.checked);
+  });
+  showPicks();
+}
+// Shown at once; then the app's answer decides, and a refusal or no answer puts the ticks back.
+async function changePicks(change) {
+  const before = new Set(PICKED);
+  (change.add || []).forEach(i => PICKED.add(i));
+  (change.remove || []).forEach(i => PICKED.delete(i));
+  if (change.clear) PICKED.clear();
+  $('pick-say').textContent = '';
+  syncPicks();
+  try {
+    const d = await (await fetch('/selection', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                body: JSON.stringify(change)})).json();
+    if (!d.ok) throw new Error(d.error);
+    PICKED.clear(); d.ids.forEach(i => PICKED.add(i));
+  } catch (err) {
+    PICKED.clear(); before.forEach(i => PICKED.add(i));
+    $('pick-say').textContent = 'Not saved: the app did not answer. Try again.';
+  }
+  syncPicks();
+}
+$('rows').addEventListener('change', e => {
+  const box = e.target.closest('input[data-pick]');
+  if (box) changePicks(box.checked ? {add: [+box.dataset.pick]} : {remove: [+box.dataset.pick]});
+});
+$('pick-all').addEventListener('change', e => {
+  const ids = SHOWN.map(r => r.id);
+  changePicks(e.target.checked ? {add: ids.filter(i => !PICKED.has(i))} : {remove: ids.filter(i => PICKED.has(i))});
+});
+$('pick-clear').addEventListener('click', () => changePicks({clear: true}));
+fetch('/selection').then(r => r.json()).then(d => {
+  if (d.ok) { d.ids.forEach(i => PICKED.add(i)); syncPicks(); }
+}).catch(() => {});
+
+const STATE_WORDS = {ready: 'Goes on the next run', later: 'Later', needs: 'Waits for your answer',
+                     answers: 'Waits for your answers', listed: 'On Auto-apply already', blocked: "Can't go"};
+// What a decision covers, said wherever decisions are shown: "Eligible" alone read as if the job's
+// skills and years had been weighed too (26 Oct 2026).
+const SCOPE = 'Eligibility here checks clearance, citizenship and visa sponsorship against your profile, and that '
+  + 'the posting is open and within your own rules (where, how old) — '
+  + 'not skills, experience or qualifications: the Fit score weighs those.';
+// A job's eligibility decision under where it stands: its reasons when they add to that line, and the
+// posting's own words for each requirement it states. `autoSubmit`: Submit by itself could send this
+// one (it is on, and the form is Greenhouse's) -- only then is "leaves this one to you" news.
+function decisionHtml(dc, autoSubmit) {
+  if (!dc) return '';
+  const said = {ELIGIBLE_WITH_WARNINGS: true, UNVERIFIED: true, INELIGIBLE: dc.reasons.length > 1}[dc.decision];
+  const yours = autoSubmit && (dc.decision === 'ELIGIBLE_WITH_WARNINGS' || dc.decision === 'UNVERIFIED')
+    ? ' Submit by itself leaves this one to you.' : '';
+  const words = dc.evidence.length ? `<details class="dc-words"><summary>The posting's words</summary><ul>${
+    dc.evidence.map(e => `<li>${escText(e)}</li>`).join('')}</ul></details>` : '';
+  return `<div class="dc"><span class="pill dc-${dc.decision.toLowerCase()}" title="${escText(SCOPE)}">${escText(dc.label)}</span>`
+    + `${said || yours ? `<div class="hint">${said ? escText(dc.reasons.join('; ')) + '.' : ''}${yours}</div>` : ''}${words}</div>`;
+}
+async function review() {
+  $('pickd-note').textContent = 'Checking each job…';
+  $('pickd-list').replaceChildren();
+  $('pickd-add').disabled = true;
+  let d;
+  try { d = await (await fetch('/selection/review')).json(); } catch (err) { d = {ok: false}; }
+  if (!d.ok) {
+    $('pickd-note').textContent = 'The jobs could not be checked: the app did not answer. Close this and try again.';
+    return;
+  }
+  const go = d.ready + d.later + (d.needs || 0) + (d.answers || 0);   // one waiting for answers waits on the list
+  $('pickd-note').innerHTML = (d.details_missing
+      ? '<b>Your details are not finished</b> (Settings → Your details): nothing is applied to until they are. ' : '')
+    + `${d.ready} can go on the next run, ${d.later} later, `
+    + (d.needs ? `${d.needs} wait for your answer, ` : '') + (d.answers ? `${d.answers} wait for your answers, ` : '')
+    + (d.listed ? `${d.listed} on the Auto-apply list already, ` : '') + `${d.blocked} can't go. `
+    + 'Adding sends nothing: they are applied to only when you press <b>Apply to these</b> on the Auto-apply page '
+    + `(${d.left_today} more today${d.auto_submit ? '; Submit by itself is on, for Greenhouse forms only' : ''}).`
+    + `<br>${escText(SCOPE)}`;
+  $('pickd-list').innerHTML = d.jobs.length ? `<table class="pickd-t"><thead><tr>
+      <th class="num">Fit</th><th>Job</th><th>Can it go?</th><th><span class="sr-only">Untick</span></th>
+    </tr></thead><tbody>${d.jobs.map(j => `<tr>
+      <td class="num">${j.score === null ? '–' : j.score + '%'}</td>
+      <td><a href="/job/${j.id}">${escText(j.title || 'Job ' + j.id)}</a>
+        <div class="hint">${escText(j.company)}${j.board ? ' · ' + escText(j.board) : ''}${j.age ? ' · ' + escText(j.age) : ''}</div></td>
+      <td><span class="pill pk-${j.state}">${STATE_WORDS[j.state]}</span>${j.reason ? `<div class="hint">${escText(j.reason)}</div>` : ''}
+        ${j.assisted && j.state !== 'blocked' ? `<div class="hint">${escText(j.assisted)}</div>` : ''}
+        ${decisionHtml(j.decision, d.auto_submit && j.board === 'greenhouse')}</td>
+      <td><button class="btn small" type="button" data-unpick="${j.id}">Untick</button></td>
+    </tr>`).join('')}</tbody></table>` : '<p class="hint">Nothing is ticked.</p>';
+  $('pickd-add').disabled = !go;
+  $('pickd-add').textContent = go ? `Add ${go} to Auto-apply` : 'Add to Auto-apply';
+}
+$('pick-review').addEventListener('click', () => { $('pickd-say').textContent = ''; $('pickd').showModal(); review(); });
+$('pickd-close').addEventListener('click', () => $('pickd').close());
+$('pickd-list').addEventListener('click', async e => {
+  const b = e.target.closest('[data-unpick]');
+  if (!b) return;
+  await changePicks({remove: [+b.dataset.unpick]});
+  review();
+});
+$('pickd-add').addEventListener('click', async e => {
+  e.target.disabled = true;
+  let d;
+  try { d = await (await fetch('/selection/transfer', {method: 'POST'})).json(); } catch (err) { d = {ok: false}; }
+  if (!d.ok) {
+    $('pickd-say').textContent = 'Nothing was added: the app did not answer. Try again.';
+    e.target.disabled = false;
+    return;
+  }
+  PICKED.clear(); d.selected.forEach(i => PICKED.add(i)); syncPicks();
+  $('pickd-say').innerHTML = `Added ${d.added} to Auto-apply${d.already ? ` (${d.already} were on it already)` : ''}. `
+    + (d.kept.length ? `${d.kept.length} stay ticked here: they can't go, and each says why. ` : '')
+    + 'Nothing is sent until you press Apply to these there. <a href="/apply">Open Auto-apply →</a>';
+  review();
+});
 
 $('f-clear').addEventListener('click', () => {
   // Reset every key in `state` rather than a hand-written list. The list had
@@ -678,9 +914,8 @@ $('upload').addEventListener('submit', async e => {
 
 // A scrape of every board takes about four hours awake (13,500 boards). Start it, then watch — the button stays
 // honest about what is happening instead of appearing to hang.
-const LABEL = {scrape: 'Get latest postings', score: 'Re-score', apply: 'Apply to next 10'};
-const NAME = {scrape: 'Fetching new postings', score: 'Re-scoring against your resume',
-              apply: 'Applying — watch the browser window'};
+const LABEL = {scrape: 'Get latest postings', score: 'Re-score'};
+const NAME = {scrape: 'Fetching new postings', score: 'Re-scoring against your resume'};
 
 function mins(seconds) {
   if (seconds === null || seconds === undefined) return '';
@@ -793,14 +1028,8 @@ async function watch(task, button) {
       $('sb-title').textContent = 'Finished';
       $('sb-eta').textContent = '';
       $('sb-track').hidden = true;
-      if (task === 'apply') {
-        // No reload: what was sent and what was skipped is in the output,
-        // and a reload would wipe it before it could be read.
-        $('sb-detail').textContent = 'See below for what was sent · reload to update statuses';
-      } else {
-        $('sb-detail').textContent = 'Reloading with the new postings…';
-        setTimeout(() => location.reload(), 2500);
-      }
+      $('sb-detail').textContent = 'Reloading with the new postings…';
+      setTimeout(() => location.reload(), 2500);
     } else {
       setIdle();
       $('sb-title').textContent = 'Stopped before finishing';
@@ -809,11 +1038,10 @@ async function watch(task, button) {
   };
   poll();
 }
-['scrape','score','apply'].forEach(task => $('run-'+task).addEventListener('click', async e => {
+['scrape','score'].forEach(task => $('run-'+task).addEventListener('click', async e => {
   const b = e.currentTarget;
   b.disabled = true;
-  b.textContent = {scrape: 'Fetching… (about 4 hours)', score: 'Scoring…',
-                   apply: 'Applying… (browser window)'}[task];
+  b.textContent = {scrape: 'Fetching… (about 4 hours)', score: 'Scoring…'}[task];
   const d = await ask('/run/'+task, {method:'POST'});
   if (!d.ok) { b.disabled = false; b.textContent = LABEL[task];
     $('run-out').hidden = false; $('run-out').className='out bad';
@@ -1044,14 +1272,13 @@ pollCareers();
 
 // If a run is already going when the page opens, pick it up rather than
 // pretending nothing is happening.
-['scrape','score','apply'].forEach(async task => {
+['scrape','score'].forEach(async task => {
   const d = await ask(`/run/${task}/status`);
   if (d.scheduled && !d.running && task === 'scrape') watchScheduled(d);
   if (d.running) {
     const b = $('run-'+task);
     b.disabled = true;
-    b.textContent = {scrape: 'Fetching… (about 4 hours)', score: 'Scoring…',
-                     apply: 'Applying… (browser window)'}[task];
+    b.textContent = {scrape: 'Fetching… (about 4 hours)', score: 'Scoring…'}[task];
     watch(task, b);
   }
 });
@@ -1120,5 +1347,32 @@ function resetRules() {
 }
 $('rules-reset').addEventListener('click', () => { resetRules(); render(); });
 render();
+
+// -- the heading row stays under the filter bar ---------------------------------------------
+// Asked for on 21 Oct 2026: "the next line also with them". Not position:sticky -- the table
+// swipes sideways inside its card (.tw), and a sticky cell sticks to that card, which never
+// scrolls up or down. So each heading cell is moved down by as far as the table's top has gone
+// under the bar, and stops at the list's last row.
+(() => {
+  const wrap = document.querySelector('.tw'), bar = document.querySelector('.bar');
+  const head = wrap && wrap.querySelector('thead');
+  if (!head || !bar) return;
+  const cells = [...head.querySelectorAll('th')];
+  let queued = false;
+  const place = () => {
+    queued = false;
+    const under = bar.getBoundingClientRect().bottom, box = wrap.getBoundingClientRect();
+    const tall = head.getBoundingClientRect().height;
+    const shift = Math.max(0, Math.min(under - box.top, box.height - 2 * tall));
+    const move = shift > 0 ? `translateY(${shift}px)` : '';
+    cells.forEach(c => { c.style.transform = move; });
+    wrap.classList.toggle('head-pinned', shift > 0);
+  };
+  const ask = () => { if (!queued) { queued = true; requestAnimationFrame(place); } };
+  addEventListener('scroll', ask, {passive: true});
+  addEventListener('resize', ask);
+  if ('ResizeObserver' in window) new ResizeObserver(ask).observe(wrap);
+  place();
+})();
 </script>
 {% endblock %}

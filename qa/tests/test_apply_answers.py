@@ -69,6 +69,22 @@ def test_a_paragraph_is_never_learned():
     assert not learnable("Why do you want this role?", "Because " * 30)
 
 
+def test_short_motivation_is_not_reused_for_another_employer():
+    label = "What Excites You About This Role?"
+    assert not learnable(label, "Building reliable systems.")
+    key = normalise(label)
+    a = Applicant(answers={key: "An old employer's project."})
+    assert a.answer_for(label) is None
+    a.job_answers = {key: "This role's infrastructure work."}
+    assert a.answer_for(label) == "This role's infrastructure work."
+
+
+def test_linkedin_comes_from_the_saved_profile_and_is_unknown_when_missing():
+    a = Applicant(links={"linkedin": "https://www.linkedin.com/in/fictional-example"})
+    assert a.answer_for("LinkedIn Profile URL") == a.links["linkedin"]
+    assert Applicant().answer_for("LinkedIn Profile URL") is None
+
+
 def test_nothing_naming_the_employer_is_learned():
     assert not learnable("What makes you uniquely qualified for this role at CMT?",
                          "Ten years", company="Cambridge Mobile Telematics (CMT)")

@@ -65,13 +65,21 @@
   });
   show();
 })();
-// The sticky filter bar's height, so table headings can stick just under it.
+// Where a row brought into view lands on the Jobs page: below the app bar, the filter bar and the
+// heading row. Set on <html> itself, not as a custom property there (--bar-h until 21 Oct 2026):
+// every row inherited that, and each change restyled all of them -- 0.45 s with 9,947 rows.
 (() => {
   const bar = document.querySelector('.bar');
   if (!bar) return;
-  const set = () => document.documentElement.style.setProperty('--bar-h', bar.offsetHeight + 'px');
+  const top = document.querySelector('.appbar'), head = document.querySelector('.tw thead');
+  const wide = matchMedia('(min-width: 821px)');
+  const set = () => {
+    const pad = (top ? top.offsetHeight : 0) + bar.offsetHeight + (head ? head.offsetHeight : 0) + 12;
+    document.documentElement.style.scrollPaddingTop = wide.matches ? pad + 'px' : '';
+  };
   set();
   if ('ResizeObserver' in window) new ResizeObserver(set).observe(bar); else addEventListener('resize', set);
+  wide.addEventListener('change', set);
 })();
 </script>
 </body>

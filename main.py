@@ -658,8 +658,17 @@ def cmd_letter(cfg, args) -> int:
 
 
 def cmd_prepare_apply(cfg, args) -> int:
-    """Get the day's best matches ready to apply to: tailored, with letters and questions."""
+    """Get the day's best matches ready to apply to: tailored, with letters and questions. With
+    --chosen, the jobs the person chose (Auto-apply page: Prepare these), each file written down."""
     init_engine(cfg.database_url)
+    if getattr(args, "chosen", False):
+        from backend.apply.runner import NotReady, prepare_chosen
+        try:
+            prepare_chosen(cfg, tailor=not args.no_tailor, paid_ok=args.paid_ok)
+        except NotReady as exc:
+            print(f"Can't prepare yet. {exc}")
+            return 2
+        return 0
     from backend.apply.prepare import prepare
     prepare(cfg, top=args.top, min_fit=args.min_fit)
     return 0
@@ -749,14 +758,16 @@ def cmd_setup_helper(cfg, args) -> int:
 
 
 def cmd_apply(cfg, args) -> int:
-    """Fill Greenhouse applications in a visible browser, freshest first."""
+    """Fill application forms in a visible browser: the app's picks, the prepared ones, the
+    person's chosen ones, or one job by its number."""
     init_engine(cfg.database_url)
     from backend.apply.runner import NotReady, run
 
     try:
         outcomes = run(cfg, limit=args.limit, job_id=args.job_id,
                        tailor=not args.no_tailor, wait_minutes=args.wait,
-                       prepared=getattr(args, "prepared", False))
+                       prepared=getattr(args, "prepared", False),
+                       chosen=getattr(args, "chosen", False), paid_ok=getattr(args, "paid_ok", False))
     except NotReady as exc:
         print(f"Can't apply yet. {exc}")
         return 2
@@ -1112,18 +1123,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_suggest.add_argument("--top", type=int, default=10, help="How many of the best-scoring jobs")
 
     p_apply = sub.add_parser(
-        "apply", help="Fill Greenhouse applications in a browser; you press Submit")
+        "apply", help="Fill application forms in a browser (Greenhouse, Workday, JazzHR; any board "
+                      "with --job-id); you press Submit unless Submit by itself is on (Greenhouse only)")
     p_apply.add_argument("--limit", type=int, default=10,
                          help="At most this many (today's cap still applies)")
     p_apply.add_argument("--job-id", type=int, default=None,
                          help="Apply to this one job only")
     p_apply.add_argument("--prepared", action="store_true",
-                         help="Apply to the jobs prepared this morning (Apply page)")
+                         help="Apply to the jobs made ready with Prepare now (Apply page)")
+    p_apply.add_argument("--chosen", action="store_true",
+                         help="Apply to the jobs you chose on the Jobs page (Auto-apply page: Apply to these)")
 
     p_prep = sub.add_parser(
         "prepare-apply", help="Tailor, write letters and list questions for the day's top matches")
     p_prep.add_argument("--top", type=int, default=None, help="How many (default apply.auto.per_day)")
     p_prep.add_argument("--min-fit", type=float, default=None, help="Lowest fit, 0-1 (default apply.auto.min_fit)")
+    p_prep.add_argument("--chosen", action="store_true",
+                        help="Make the jobs you chose ready instead (Auto-apply page: Prepare these); nothing is sent")
+    p_prep.add_argument("--no-tailor", action="store_true",
+                        help="With --chosen: never tailor; use what exists or your own resume's best lines")
+    for runs in (p_prep, p_apply):
+        runs.add_argument("--paid-ok", action="store_true",
+                          help="Let a writer that bills per use (set in Settings) write; asked first on the page")
     p_apply.add_argument("--no-tailor", action="store_true",
                          help="Never tailor during the run; use what exists or the base resume")
     p_apply.add_argument("--wait", type=float, default=None,

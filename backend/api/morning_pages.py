@@ -107,6 +107,10 @@ def watch_mornings(every_s: int = 900) -> None:
     import logging
     import threading
 
+    from backend.core.startup import watcher_startup_held
+    if watcher_startup_held("morning-catch-up"):
+        return
+
     def loop():
         time.sleep(60)                     # the app first; a morning run is not in a hurry
         while True:

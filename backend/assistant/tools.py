@@ -228,28 +228,27 @@ def reopen(action_id: str) -> None:
 def run_direct(action: dict) -> str:
     """Carry out the actions that need no background run. Returns what happened."""
     if action["kind"] == "remember":
-        from backend.apply.answers import BANK_PATH, load
-        import yaml
+        from backend.apply.answers import save_answer
 
-        bank = load()
-        bank[action["params"]["question"]] = action["params"]["answer"]
-        BANK_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BANK_PATH.write_text(
-            "# Your own answers to screening questions, learned from forms you\n"
-            "# finished yourself. Edit or delete any line; it is reused exactly.\n"
-            + yaml.safe_dump(dict(sorted(bank.items())), sort_keys=False, allow_unicode=True),
-            encoding="utf-8")
+        save_answer(action["params"]["question"], action["params"]["answer"])   # locked, written whole
         return "Saved — it will be used on the next form that asks."
     if action["kind"] == "status":
+        from backend.apply.runner import APPLIED_STATUSES, record_marked
         from data_engineering.db.models import Job
 
+        status = action["params"]["status"]
         with _session() as session:
             job = session.get(Job, action["params"]["job_id"])
             if job is None:
                 return "That job no longer exists."
-            job.status = action["params"]["status"]
+            job.status = status
             job.exported_to_excel = False
-        return f"Marked {action['params']['status']}."
+            # Marked applied with no record yet: its history line says so, with the status (29 Oct 2026).
+            marked = status in APPLIED_STATUSES and record_marked(session, job, status, "the assistant")
+        if marked:
+            from backend.apply.history_outbox import export_pending
+            export_pending(action["params"]["job_id"])
+        return f"Marked {status}."
     raise ValueError(action["kind"])
 
 
