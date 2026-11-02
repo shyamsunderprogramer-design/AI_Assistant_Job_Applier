@@ -466,6 +466,8 @@ main.py careers                                  # find each company's careers p
 # Tracking sheet
 main.py export                           # append new jobs
 main.py export --all                     # re-export everything
+main.py readback                         # preview status changes you made in the sheet
+main.py readback --apply                 # ...and take them into the app
 
 # The daily loop — everything below, in one command
 main.py daily                            # scrape -> retire -> rank -> export -> digest
@@ -1468,7 +1470,10 @@ still tuned by intuition.
       response, each with a date and a note (`backend/apply/tracker.py`)
 - [x] Replies read from your mailbox move an application on, and an employer's
       "thank you for applying" marks the job Applied (`backend/apply/inbox.py`)
-- [ ] Status changes read back from the Excel sheet you already edit
+- [x] Status changes read back from the Excel sheet you already edit (`main.py readback`, a preview
+      until `--apply`): only a cell changed since the last read, only your own statuses (Skipped,
+      Applied, Interviewing, Offer, Rejected), an application only ever moving on, and the app's
+      status kept where both changed (`data_engineering/excel/readback.py`)
 - [ ] Funnel stats: response rate by company, by title keyword, by score band
 - [ ] **Does the score actually predict a response?** Report the correlation
       honestly, including if the answer is "no" — that result is what would justify P8

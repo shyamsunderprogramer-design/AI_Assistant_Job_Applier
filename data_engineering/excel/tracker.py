@@ -226,8 +226,14 @@ class ExcelTracker:
         """Append new jobs, refresh changed ones. Returns (appended, updated).
 
         A row's Application Status is never overwritten — that column belongs to
-        the user.
+        the user. Each status the export writes there itself is noted for the
+        read-back (readback.kept_in_step), so it is never taken for the user's edit.
         """
+        from data_engineering.excel import readback
+        with readback.kept_in_step(self.path) as seen:
+            return self._export(jobs, seen)
+
+    def _export(self, jobs: list[Job], seen: dict | None) -> tuple[int, int]:
         wb = self._open()
         ws = self._sheet(wb)
         # Must precede _existing_rows: every read and write below is keyed off
@@ -243,20 +249,23 @@ class ExcelTracker:
             key = job_key(job)
             values = _row_values(job)
             row_idx = existing.get(key)
+            wrote = None
 
             if row_idx is None:
                 row_idx = ws.max_row + 1
                 self._write_row(ws, row_idx, values, columns)
                 status_col = columns.get("Application Status")
                 if status_col:
-                    ws.cell(row=row_idx, column=status_col).value = job.status
+                    ws.cell(row=row_idx, column=status_col).value = wrote = job.status
                 existing[key] = row_idx
                 appended += 1
             else:
                 self._write_row(ws, row_idx, values, columns)
-                self._sync_status(ws, row_idx, job.status, columns)
+                wrote = self._sync_status(ws, row_idx, job.status, columns)
                 updated += 1
             written.add(row_idx)
+            if seen is not None and wrote:
+                seen[key] = {"sheet": wrote, "app": wrote}
 
         self._refresh_ages(ws, columns, skip=written)
         self._format(ws, columns)
@@ -386,7 +395,7 @@ class ExcelTracker:
         return refreshed
 
     @staticmethod
-    def _sync_status(ws: Worksheet, row_idx: int, db_status: str, columns: ColumnMap) -> None:
+    def _sync_status(ws: Worksheet, row_idx: int, db_status: str, columns: ColumnMap) -> str | None:
         """Let system-set statuses through only while the row is untouched.
 
         The Status column belongs to the user — once they've moved a row to
@@ -394,15 +403,17 @@ class ExcelTracker:
         still in a system-owned state records no user decision, so the pipeline
         may update it in both directions: flagging a low scorer "Manual
         Review", and clearing that flag when the job later clears the
-        threshold.
+        threshold. Returns the status it wrote, if it wrote one.
         """
         status_col = columns.get("Application Status")
         if status_col is None:
-            return
+            return None
         cell = ws.cell(row=row_idx, column=status_col)
         current = (cell.value or "").strip()
         if current in SYSTEM_STATUSES and db_status and db_status != current:
             cell.value = db_status
+            return db_status
+        return None
 
     @staticmethod
     def _write_row(

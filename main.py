@@ -301,6 +301,24 @@ def cmd_export(cfg, args) -> int:
     return 0
 
 
+def cmd_readback(cfg, args) -> int:
+    """Status changes made in the Excel sheet, taken back into the app. A preview unless --apply;
+    the rules that keep it safe are in data_engineering/excel/readback.py."""
+    init_engine(cfg.database_url)
+    from data_engineering.excel import readback
+    from data_engineering.excel.tracker import ExcelTracker
+
+    path = ExcelTracker(cfg.get("excel.path", "data/job_tracker.xlsx")).path
+    try:
+        changes = readback.read_back(path, apply=args.apply)
+    except readback.Unreadable as exc:
+        print(exc)
+        return 1
+    print(f"Read {path} as last saved")
+    print("\n".join(readback.report(changes, applied=args.apply)))
+    return 0
+
+
 def cmd_job_types(cfg, args) -> int:
     """What kind of job each posting is, read again from what is stored: no network. A kind the
     person set on a job's page is kept."""
@@ -1052,6 +1070,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.add_argument(
         "--all", action="store_true", help="Re-export every job, not just new ones"
     )
+    p_readback = sub.add_parser(
+        "readback", help="Take status changes made in the Excel tracker back into the app")
+    p_readback.add_argument("--apply", action="store_true", help="Actually take them in (default: preview)")
 
     sub.add_parser("job-types", help="What kind of job each posting is, read again (no network)")
     p_reparse = sub.add_parser(
@@ -1229,6 +1250,7 @@ COMMANDS = {
     "import-names": cmd_import_names,
     "import-csv": cmd_import_csv,
     "export": cmd_export,
+    "readback": cmd_readback,
     "reparse": cmd_reparse,
     "job-types": cmd_job_types,
     "profile": cmd_profile,
