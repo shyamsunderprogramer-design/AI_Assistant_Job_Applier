@@ -108,3 +108,18 @@ def test_a_live_run_keeps_its_lock_and_a_dead_ones_lock_is_cleared(project):
     done, log, calls = run(MANUAL="1")
     assert "clearing a lock its run left behind" in log and "main.py daily" in calls
     assert not lock.exists()
+
+
+def test_the_nights_postings_are_added_after_the_morning_only_when_asked_for(project):
+    """The morning run that took last evening's GitHub fetch asks for the night's
+    (data/cloud_topup.json); the script adds them after the summary, inside its own lock."""
+    root, run = project
+    done, log, calls = run()
+    assert "main.py daily --top-up" not in calls and "top-up starting" not in log
+    (root / "data" / "cloud_topup.json").write_text('{"after": 41, "at": 0}')
+    done, log, calls = run()
+    assert done.returncode == 0
+    order = calls.splitlines()
+    assert order.index("-u main.py daily --cloud") < order.index("-u main.py daily --top-up")
+    assert log.index("=== daily finished") < log.index("=== top-up starting ===") < log.index("=== top-up finished")
+    assert not (root / "data" / "daily.lock").exists()            # the lock was held to the end

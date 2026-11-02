@@ -92,9 +92,13 @@ def sync_seed_companies(cfg) -> int:
     return len(seeds)
 
 
-def load_companies(cfg) -> list[CompanyRef]:
-    """Every active company in the DB whose portal is enabled."""
+def load_companies(cfg, sites=None, skip_sites=None) -> list[CompanyRef]:
+    """Every active company in the DB whose portal is enabled -- of `sites` only, when given, and
+    none of `skip_sites`: one part of the GitHub fetch, split four ways (devops/fetch_parts.py)."""
     enabled = {name for name in SCRAPER_TYPES if cfg.get(f"portals.{name}.enabled", True)}
+    if sites:
+        enabled &= set(sites)
+    enabled -= set(skip_sites or ())
     include_discovered = bool(cfg.get("companies.scrape_discovered", True))
     limit = int(cfg.get("limits.max_companies_per_run", 0) or 0)
 
@@ -112,7 +116,7 @@ def load_companies(cfg) -> list[CompanyRef]:
     return refs[:limit] if limit > 0 else refs
 
 
-def run_scrape(cfg) -> RunSummary:
+def run_scrape(cfg, sites=None, skip_sites=None) -> RunSummary:
     client = PoliteClient(HttpSettings.from_config(cfg))
     scrapers = build_scrapers(cfg, client)
     job_filter = resolve_filter(cfg)
@@ -120,7 +124,7 @@ def run_scrape(cfg) -> RunSummary:
     deactivate_after = int(cfg.get("limits.deactivate_after_failures", 5) or 0)
     close_on_empty = bool(cfg.get("limits.close_on_empty_board", False))
 
-    companies = load_companies(cfg)
+    companies = load_companies(cfg, sites, skip_sites)
     workers = int(cfg.get("limits.scrape_workers", 6) or 1)
     if _is_in_memory():
         # An in-memory SQLite database belongs to the connection that opened

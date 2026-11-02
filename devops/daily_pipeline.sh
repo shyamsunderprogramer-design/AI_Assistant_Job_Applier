@@ -218,4 +218,16 @@ PYEOF
     log "notified: $BODY"
   fi
 fi
+
+# The night's postings, when this morning took last evening's GitHub fetch and asked GitHub for
+# another (devops/cloud_results.py top_up). After the summary and the notice, so neither waits for
+# it; inside this run's lock, so no other morning run starts while it waits and merges. Its own
+# result is not the morning's: the list it adds to is complete without it.
+if [ "$TASK" = "daily" ] && [ -f "$PROJECT/data/cloud_topup.json" ]; then
+  log "=== top-up starting ==="
+  $CAFFEINATE "$PY" -u main.py daily --top-up >> "$LOG" 2>&1
+  log "=== top-up finished, exit $? ==="
+  "$PY" devops/build_dashboard.py "$PROJECT/data/console/dashboard.html" >> "$LOG" 2>&1 \
+    && log "rebuilt data/console/dashboard.html"
+fi
 exit "$STATUS"

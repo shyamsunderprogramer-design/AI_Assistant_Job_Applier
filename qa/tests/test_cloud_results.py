@@ -129,9 +129,16 @@ def test_a_new_posting_comes_in_only_if_the_search_here_would_keep_it(tmp_path):
 
 
 # -- taking today's run: ready, under way, or none ---------------------------------------------
+# (Switched off, as shipped: only GitHub's own schedule runs, and only a run started today counts.
+# Switched on, and the night's fetch: qa/tests/test_morning_speedup.py.)
+
+def _stamp(dt):
+    return dt.isoformat()
+
 
 RUN = {"databaseId": 42, "status": "completed", "conclusion": "success",
-       "createdAt": (datetime.now().astimezone() - timedelta(hours=1)).isoformat()}
+       "createdAt": _stamp(datetime.now().astimezone() - timedelta(minutes=10)),
+       "updatedAt": _stamp(datetime.now().astimezone() - timedelta(minutes=5))}
 
 
 @pytest.fixture
@@ -139,13 +146,16 @@ def cloud(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_results, "COLLECTED", tmp_path / "collected.json")
     monkeypatch.setattr(cloud_results, "BOARDS_SENT", tmp_path / "sent.txt")
     monkeypatch.setattr(cloud_results, "usual_minutes", lambda: 150)
+    monkeypatch.setattr(cloud_results, "trigger_on", lambda: False)
+    monkeypatch.setattr(cloud_results, "dispatch", lambda: pytest.fail("started a GitHub fetch"))
     said = []
     return said
 
 
 def run_with(monkeypatch, *states):
-    runs = list(states)
-    monkeypatch.setattr(cloud_results, "today_run", lambda: runs.pop(0) if len(runs) > 1 else runs[0])
+    """GitHub's run list, one look at a time: each state is today's run (None: no run today)."""
+    runs = [[s] if s else [] for s in states]
+    monkeypatch.setattr(cloud_results, "recent_runs", lambda: runs.pop(0) if len(runs) > 1 else runs[0])
     got = {"added": 12, "refreshed": 900, "closed": 3, "boards": 21000, "run": 42}
 
     def collect(run_id, started=""):
@@ -157,17 +167,20 @@ def run_with(monkeypatch, *states):
 
 def test_a_finished_run_is_taken(cloud, monkeypatch):
     got = run_with(monkeypatch, RUN)
-    assert cloud_results.bring_in(say=cloud.append, sleep=lambda s: None) == got
+    took = cloud_results.bring_in(say=cloud.append, sleep=lambda s: None)
+    assert {k: took[k] for k in got} == got and took["runs"] == [42]
     assert any("bringing in" in s for s in cloud) and any(" seen again, " in s for s in cloud)
     # Once in, a second morning run takes nothing twice.
-    assert cloud_results.state(RUN) == "collected"
+    assert cloud_results.state([RUN]) == "collected"
+    cloud.clear()
+    assert cloud_results.bring_in(say=cloud.append)["run"] == 42 and "is in already" in cloud[-1]
 
 
 def test_a_run_under_way_is_waited_for_not_fetched_again(cloud, monkeypatch):
     running = {**RUN, "status": "in_progress", "conclusion": None}
-    got = run_with(monkeypatch, running, running, RUN)
+    run_with(monkeypatch, running, running, RUN)
     slept = []
-    assert cloud_results.bring_in(say=cloud.append, sleep=slept.append, poll_s=60) == got
+    assert cloud_results.bring_in(say=cloud.append, sleep=slept.append, poll_s=60)["run"] == 42
     waits = [s for s in cloud if "waiting for today's GitHub fetch" in s]
     assert len(waits) == 1 and "usually about 150 min" in waits[0] and slept == [60, 60]
 
@@ -185,7 +198,7 @@ def test_no_run_today_a_failed_one_or_too_long_a_wait_means_a_fetch_here(cloud, 
 def test_github_out_of_reach_means_a_fetch_here(cloud, monkeypatch):
     def broken():
         raise cloud_results.CloudError("gh is not installed")
-    monkeypatch.setattr(cloud_results, "today_run", broken)
+    monkeypatch.setattr(cloud_results, "recent_runs", broken)
     assert cloud_results.bring_in(say=cloud.append) is None and "could not reach" in cloud[-1]
 
 

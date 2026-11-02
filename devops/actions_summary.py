@@ -22,16 +22,19 @@ from pathlib import Path
 
 DB = Path("data/jobs.db")
 
-LAST_RUN = ("SELECT run_id FROM scrape_log ORDER BY created_at DESC LIMIT 1")
+# The last fetch: since 2 Nov 2026 four parts, each its own scrape run, all within these hours
+# of the newest line (devops/fetch_parts.py). One run before that, the same answer.
+LAST_RUN = ("SELECT DISTINCT run_id FROM scrape_log WHERE created_at >= "
+            "(SELECT datetime(MAX(created_at), '-7 hours') FROM scrape_log)")
 
 ROWS = (
     ("Boards watched", "SELECT COUNT(*) FROM companies WHERE active=1"),
     ("Postings seen", f"SELECT COALESCE(SUM(jobs_seen), 0) FROM scrape_log "
-                      f"WHERE run_id=({LAST_RUN})"),
+                      f"WHERE run_id IN ({LAST_RUN})"),
     ("Open matches", "SELECT COUNT(*) FROM jobs WHERE is_open=1"),
     ("Found today", "SELECT COUNT(*) FROM jobs WHERE date(found_at)=date('now')"),
     ("Boards that failed", f"SELECT COUNT(*) FROM scrape_log WHERE ok=0 "
-                           f"AND run_id=({LAST_RUN})"),
+                           f"AND run_id IN ({LAST_RUN})"),
 )
 
 

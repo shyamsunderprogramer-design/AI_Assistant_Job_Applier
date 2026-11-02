@@ -32,6 +32,7 @@ import json
 import os
 import signal
 from collections import deque
+from contextlib import contextmanager
 import socket
 import subprocess
 import sys
@@ -56,6 +57,13 @@ STATE = Path("data/probe_state.json")
 PIDFILE = Path("data/probe_runner.pid")
 LOG = Path("data/probe_runner.log")
 STOPFILE = Path("data/probe_runner.stop")
+# Asked by a fetch of the job boards or a merge of the GitHub fetch's postings (devops/cloud_results.py,
+# backend/core/daily.py): the search waits between batches while it lasts, then carries on from the
+# same name. Nothing is stopped and nothing is lost. Its own path, not cwd's: the web app, launchd and
+# the morning run all ask from wherever they were started.
+PAUSEFILE = Path(__file__).resolve().parents[1] / "data" / "probe_runner.pause"
+PAUSE_STALE_S = 6 * 3600        # an ask older than this is forgotten: the longest fetch is ~4 h
+PAUSE_POLL_S = 30
 RATE_WINDOW_S = 30 * 60
 
 # Names handed to the discovery pass at a time. Small enough that the progress
@@ -182,6 +190,73 @@ def running_pid() -> int | None:
     except (OSError, subprocess.SubprocessError):
         pass
     return pid
+
+
+def _alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def pause_asked() -> dict | None:
+    """Who asked the board search to wait, while they still need it: their process alive and the
+    ask no older than PAUSE_STALE_S. One killed mid-fetch leaves a file that pauses nothing."""
+    try:
+        ask = json.loads(PAUSEFILE.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(ask, dict) or not _alive(ask.get("pid")) \
+            or time.time() - float(ask.get("at") or 0) > PAUSE_STALE_S:
+        return None
+    return ask
+
+
+_held = 0
+
+
+@contextmanager
+def paused(reason: str):
+    """The board search waits between batches for as long as this lasts (a running search
+    started before 2 Nov 2026 does not know to). Nested asks in one process are one ask."""
+    global _held
+    if _held == 0:
+        try:
+            PAUSEFILE.parent.mkdir(parents=True, exist_ok=True)
+            PAUSEFILE.write_text(json.dumps({"pid": os.getpid(), "reason": reason, "at": time.time()}))
+        except OSError:
+            pass
+    _held += 1
+    try:
+        yield
+    finally:
+        _held -= 1
+        if _held == 0:
+            try:
+                if json.loads(PAUSEFILE.read_text()).get("pid") == os.getpid():
+                    PAUSEFILE.unlink()
+            except (OSError, ValueError):
+                pass
+
+
+def wait_while_paused(should_stop, sleep=time.sleep) -> bool:
+    """Between batches: wait while a fetch or a merge has asked. Returns whether it waited."""
+    waited = False
+    while not should_stop():
+        ask = pause_asked()
+        if not ask:
+            break
+        if not waited:
+            log(f"Pausing while {ask.get('reason') or 'the job boards are read'} — "
+                "carrying on from the same name after.")
+            write_state(status="paused")
+            waited = True
+        sleep(PAUSE_POLL_S)
+    if waited:
+        log("Carrying on.")
+        write_state(status="running")
+    return waited
 
 
 def load_names(path: Path) -> list[str]:
@@ -316,6 +391,12 @@ def run(names_path: Path = NAMES, *, batch: int = BATCH,
     for start in range(resume_at, total, batch):
         if stopping or STOPFILE.exists():
             log("Stopping as asked.")
+            break
+
+        # A fetch of the job boards, or a merge of the GitHub fetch, has the Mac's connection
+        # and database first; this batch waits for it, and nothing checked so far is lost.
+        wait_while_paused(should_stop)
+        if stopping or STOPFILE.exists():
             break
 
         chunk = names[start:start + batch]

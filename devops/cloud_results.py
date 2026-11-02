@@ -1,12 +1,23 @@
-"""Today's cloud fetch, brought into this Mac's database -- or a fetch here when there is none.
+"""The GitHub fetch's postings brought into this Mac's database -- or a fetch here when there is none.
 
-GitHub Actions fetches every board early each morning, whether the laptop is open, shut or off
-(.github/workflows/daily-scrape.yml), and leaves the postings on the run, encrypted. The morning
-run here (devops/daily_pipeline.sh -> main.py daily --cloud) then:
+GitHub Actions reads every job board, whether the laptop is open, shut or off
+(.github/workflows/daily-scrape.yml, four parts at once: devops/fetch_parts.py), and leaves the
+postings on the run, encrypted. The morning run here (devops/daily_pipeline.sh -> main.py daily
+--cloud) then:
 
-  * takes that run's postings when it has finished -- minutes, where a fetch here takes hours;
-  * waits for it when it is under way, rather than fetching the same boards twice;
-  * fetches on this Mac when GitHub has no run today (it skips scheduled runs when it is busy).
+  * takes every finished run it has not taken yet -- minutes, where a fetch here takes hours;
+  * waits for one under way, rather than fetching the same boards twice;
+  * fetches on this Mac when GitHub has nothing, fails, or is out of reach.
+
+With `cloud.trigger_runs: true` in backend/config/config.yaml (off until switched on, 2 Nov 2026)
+this Mac also starts the fetches itself, so the morning list is ready in minutes:
+
+  * at 8 pm (`evening`, a launchd job; until midnight if the Mac was asleep at 8);
+  * in the morning, when the run it took is hours old: a second fetch for the postings of the
+    night, added by `main.py daily --top-up` when it finishes (`top_up`);
+  * in the morning, when there is nothing to take and nothing under way: one fetch, waited for.
+
+Without it, only GitHub's own schedule runs, and only a run started today counts, as before.
 
 The cloud reads its boards from a list kept out of the public repository: this Mac sends
 backend/config/boards.csv as an encrypted release asset whenever the list changes, and the run
@@ -14,7 +25,8 @@ unlocks it with the same passphrase. Both directions use RESULTS_PASSPHRASE from
 GitHub secret of the same name holds too.
 
     python -m devops.cloud_results state         # ready | running | collected | none
-    python -m devops.cloud_results collect       # bring in today's run, if it finished
+    python -m devops.cloud_results collect       # bring in the finished runs not taken yet
+    python -m devops.cloud_results evening       # start the evening fetch (8 pm to midnight)
     python -m devops.cloud_results push-boards   # send the board list if it changed
 """
 
@@ -41,8 +53,15 @@ BOARDS = PROJECT_ROOT / "backend" / "config" / "boards.csv"
 BOARDS_ASSET = "boards.csv.enc"
 COLLECTED = PROJECT_ROOT / "data" / "cloud_collected.json"    # the last run brought in, and what it gave
 BOARDS_SENT = PROJECT_ROOT / "data" / "cloud_boards_sent.txt"  # the list's fingerprint when last sent
+TOPUP = PROJECT_ROOT / "data" / "cloud_topup.json"   # the night's fetch asked for, to add when done
 WAIT_S = 3 * 3600                              # longest wait for a run under way, before fetching here
 POLL_S = 120
+FRESH_H = 20        # a run that finished longer ago than this is yesterday's news: never taken
+TOPUP_AFTER_H = 3   # postings older than this when taken: ask for the night's as well
+TOPUP_WAIT_S = 3 * 3600
+TOPUP_STALE_H = 6   # an ask for the night's fetch older than this is dropped
+APPEAR_S = 10 * 60  # how long a fetch just asked for may take to show on GitHub
+EVENING = (20, 24)  # the evening fetch starts between 8 pm and midnight, local time
 # Both ends name the digest: the cloud's OpenSSL 3 and this Mac's LibreSSL must derive the same key.
 CIPHER = ["enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-md", "sha256"]
 
@@ -96,13 +115,61 @@ def _local_day(stamp: str):
     return datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().date()
 
 
-def today_run() -> dict | None:
-    """Today's run of the cloud fetch (today where you are), the latest if several."""
-    runs = json.loads(_gh("run", "list", "--workflow", WORKFLOW, "--limit", "8", "--json",
+def _when(stamp: str) -> datetime:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
+def _hours_ago(stamp: str, now: datetime | None = None) -> float:
+    return ((now or datetime.now(timezone.utc)) - _when(stamp)).total_seconds() / 3600
+
+
+def recent_runs() -> list[dict]:
+    """The fetch's last runs on GitHub, newest first."""
+    return json.loads(_gh("run", "list", "--workflow", WORKFLOW, "--limit", "20", "--json",
                           "databaseId,status,conclusion,createdAt,updatedAt") or "[]")
-    today = datetime.now().date()
-    mine = [r for r in runs if _local_day(r["createdAt"]) == today]
-    return max(mine, key=lambda r: r["createdAt"]) if mine else None
+
+
+def _last_taken() -> int:
+    """The newest run brought in here. GitHub numbers runs in the order they start."""
+    try:
+        return int(_collected().get("run") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _counts(run: dict, today_only: bool, now: datetime | None = None) -> bool:
+    """Whether a run is recent enough to stand for this morning's postings: started today, as
+    before, when this Mac starts no fetches; finished (or started, while under way) within
+    FRESH_H hours when it does, so last night's 8 pm fetch counts at 6 am."""
+    if today_only:
+        return _local_day(run["createdAt"]) == (now or datetime.now(timezone.utc)).astimezone().date()
+    stamp = run.get("updatedAt") if run.get("status") == "completed" else run["createdAt"]
+    return _hours_ago(stamp or run["createdAt"], now) <= FRESH_H
+
+
+def pending(runs: list[dict], today_only: bool, now: datetime | None = None) -> tuple[list[dict], list[dict]]:
+    """(finished and not yet taken, oldest first; under way). A failed run is neither: a fetch
+    that failed is never taken, and the Mac fetches instead when nothing else is left."""
+    last = _last_taken()
+    recent = [r for r in runs if _counts(r, today_only, now)]
+    ready = sorted((r for r in recent if r["status"] == "completed" and r.get("conclusion") == "success"
+                    and r["databaseId"] > last), key=lambda r: r["databaseId"])
+    going = [r for r in recent if r["status"] != "completed"]
+    return ready, going
+
+
+def trigger_on() -> bool:
+    """Whether this Mac starts GitHub fetches itself: `cloud.trigger_runs` in config.yaml."""
+    try:
+        from backend.config.loader import load_config
+        return load_config().get("cloud.trigger_runs", False) is True
+    except Exception:
+        return False
+
+
+def dispatch() -> None:
+    """Start the fetch on GitHub now (its own "Run workflow" button)."""
+    _gh("workflow", "run", WORKFLOW)
 
 
 def usual_minutes() -> int | None:
@@ -122,17 +189,17 @@ def _collected() -> dict:
         return {}
 
 
-def state(run: dict | None = None) -> str:
-    """ready (finished, not yet here), collected (already here), running, or none (no run today,
-    or one that failed)."""
-    run = run if run is not None else today_run()
-    if not run:
-        return "none"
-    if run["status"] != "completed":
+def state(runs: list[dict] | None = None, today_only: bool | None = None) -> str:
+    """ready (finished, not yet here), running, collected (the newest is here already), or none."""
+    runs = recent_runs() if runs is None else runs
+    today_only = (not trigger_on()) if today_only is None else today_only
+    ready, going = pending(runs, today_only)
+    if ready:
+        return "ready"
+    if going:
         return "running"
-    if run.get("conclusion") != "success":
-        return "none"
-    return "collected" if _collected().get("run") == run["databaseId"] else "ready"
+    taken = _last_taken()
+    return "collected" if any(r["databaseId"] == taken for r in runs if _counts(r, today_only)) else "none"
 
 
 def collect(run_id: int, started: str = "") -> dict:
@@ -156,42 +223,111 @@ def collect(run_id: int, started: str = "") -> dict:
                                        (since,)).fetchone()[0]
         except sqlite3.DatabaseError as exc:
             raise CloudError(f"the unlocked file is not a database ({exc}); yours is untouched") from exc
-        # Into the live file, in one transaction: a failure leaves nothing half-merged.
-        result = merge(db, PROJECT_ROOT / "data" / "jobs.db", search=search)
-    result.update(run=run_id, boards=boards, at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        # Into the live file, in one transaction: a failure leaves nothing half-merged. The board
+        # search waits meanwhile, so the two never write the database at once.
+        from devops.probe_runner import paused
+        with paused("the GitHub fetch's postings are brought in"):
+            result = merge(db, PROJECT_ROOT / "data" / "jobs.db", search=search)
+    result.update(run=max(run_id, _last_taken()), boards=boards,
+                  at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     COLLECTED.parent.mkdir(parents=True, exist_ok=True)
     COLLECTED.write_text(json.dumps(result))
     return result
 
 
-def bring_in(say=print, wait_s: int = WAIT_S, poll_s: int = POLL_S, sleep=time.sleep) -> dict | None:
-    """Today's cloud postings, waiting for a run under way. None: fetch on this Mac instead."""
+def _say_got(got: dict, say) -> None:
+    news = "".join(f", {got[k]:,} {what}" for k, what in (("edited", "edited by the employer"),
+                                                         ("typed", "given a job type by their board"))
+                   if got.get(k))
+    left = f" ({got['skipped']:,} more your search leaves out)" if got.get("skipped") else ""
+    say(f"cloud: {got['added']:,} new postings{left}, {got['refreshed']:,} seen again{news}, "
+        f"{got.get('closed', 0):,} taken down, from {got['boards']:,} boards")
+
+
+def _take(ready: list[dict], say) -> dict | None:
+    """Each finished run brought in, oldest first, and what they gave together. A run that cannot
+    be brought in is said and left for next time; None when none could."""
+    total: dict = {}
+    for run in ready:
+        say(f"cloud: bringing in today's GitHub fetch (run {run['databaseId']})…")
+        try:
+            got = collect(run["databaseId"], run["createdAt"])
+        except CloudError as exc:
+            say(f"cloud: run {run['databaseId']} could not be brought in ({str(exc)[:160]})")
+            continue
+        for key, value in got.items():
+            if key == "boards":
+                total[key] = max(total.get(key, 0), value)
+            elif isinstance(value, int) and key != "run":
+                total[key] = total.get(key, 0) + value
+        total.update(run=got.get("run"), at=got.get("at"), runs=[*total.get("runs", []), run["databaseId"]])
+    if not total:
+        return None
+    total.setdefault("boards", 0)
+    for key in ("added", "refreshed"):
+        total.setdefault(key, 0)
+    COLLECTED.write_text(json.dumps(total))
+    _say_got(total, say)
+    return total
+
+
+def _ask_top_up(newest: dict, going: list[dict], say) -> None:
+    """The run just taken read the boards hours ago (last night's): ask for the night's postings
+    too, added by `main.py daily --top-up` when that fetch finishes. A run under way already
+    (GitHub's own schedule) is that fetch."""
+    if _hours_ago(newest.get("updatedAt") or newest["createdAt"]) < TOPUP_AFTER_H:
+        return
     try:
-        deadline, said_wait = time.monotonic() + wait_s, False
+        if not going:
+            dispatch()
+        TOPUP.parent.mkdir(parents=True, exist_ok=True)
+        TOPUP.write_text(json.dumps({"after": newest["databaseId"], "at": time.time()}))
+        usual = usual_minutes()
+        say("cloud: the night's postings are being fetched on GitHub"
+            + (f" (usually about {usual} min)" if usual else "") + "; they are added when it finishes")
+    except (CloudError, OSError, subprocess.SubprocessError) as exc:
+        say(f"cloud: could not ask GitHub for the night's postings ({str(exc)[:160]}); "
+            "the list has last evening's")
+
+
+def bring_in(say=print, wait_s: int = WAIT_S, poll_s: int = POLL_S, sleep=time.sleep,
+             clock=time.time, trigger: bool | None = None) -> dict | None:
+    """The GitHub fetch's postings, waiting for a run under way. None: fetch on this Mac instead.
+    The wait is on the wall clock: a Mac asleep with its lid shut comes back to a deadline that
+    has passed, and a run that finished meanwhile is still taken before giving up."""
+    trigger = trigger_on() if trigger is None else trigger
+    try:
+        deadline, said_wait, asked_at = clock() + wait_s, False, None
         while True:
-            run = today_run()
-            now = state(run)
-            if now == "collected":
-                say(f"cloud: today's GitHub fetch (run {run['databaseId']}) is in already")
-                return _collected()
-            if now == "ready":
-                say(f"cloud: bringing in today's GitHub fetch (run {run['databaseId']})…")
-                got = collect(run["databaseId"], run["createdAt"])
-                news = "".join(f", {got[k]:,} {what}" for k, what in (("edited", "edited by the employer"),
-                                                                     ("typed", "given a job type by their board"))
-                               if got.get(k))
-                left = f" ({got['skipped']:,} more your search leaves out)" if got.get("skipped") else ""
-                say(f"cloud: {got['added']:,} new postings{left}, {got['refreshed']:,} seen again{news}, "
-                    f"{got.get('closed', 0):,} taken down, from {got['boards']:,} boards")
+            runs = recent_runs()
+            ready, going = pending(runs, today_only=not trigger)
+            if ready:
+                got = _take(ready, say)
+                if got is None:
+                    say("cloud: no GitHub fetch could be brought in — fetching on this Mac")
+                    return None
+                if trigger:
+                    _ask_top_up(ready[-1], going, say)
                 return got
-            if now == "none":
-                say("cloud: no GitHub fetch today — fetching on this Mac")
-                return None
-            if time.monotonic() >= deadline:
+            if not going:
+                taken = _last_taken()
+                if asked_at is None and any(r["databaseId"] == taken for r in runs if _counts(r, not trigger)):
+                    say(f"cloud: today's GitHub fetch (run {taken}) is in already")
+                    return _collected()
+                if trigger and asked_at is None:
+                    dispatch()
+                    asked_at = clock()
+                    say("cloud: no GitHub fetch to take — asked GitHub for one")
+                elif asked_at is None or clock() - asked_at >= APPEAR_S or clock() >= deadline:
+                    say("cloud: no GitHub fetch today — fetching on this Mac")
+                    return None
+                sleep(poll_s)
+                continue
+            if clock() >= deadline:
                 say("cloud: the GitHub fetch is taking too long — fetching on this Mac")
                 return None
             if not said_wait:
-                started = datetime.fromisoformat(run["createdAt"].replace("Z", "+00:00")).astimezone()
+                started = _when(going[0]["createdAt"]).astimezone()
                 usual = usual_minutes()
                 say(f"cloud: waiting for today's GitHub fetch (started {started:%H:%M}"
                     + (f", usually about {usual} min" if usual else "") + ") instead of fetching again")
@@ -200,6 +336,69 @@ def bring_in(say=print, wait_s: int = WAIT_S, poll_s: int = POLL_S, sleep=time.s
     except (CloudError, OSError, ValueError, subprocess.SubprocessError) as exc:
         say(f"cloud: could not reach the GitHub fetch ({str(exc)[:160]}) — fetching on this Mac")
         return None
+
+
+def top_up(say=print, wait_s: int = TOPUP_WAIT_S, poll_s: int = POLL_S, sleep=time.sleep,
+           clock=time.time) -> dict | None:
+    """The night's postings, asked for by the morning run: waited for, then brought in. None when
+    nothing was asked, the ask is stale, the fetch failed or never came, or GitHub is out of
+    reach -- the morning's list stands as it is, and a run left over is taken tomorrow if fresh."""
+    if not TOPUP.exists():
+        return None
+    try:
+        ask = json.loads(TOPUP.read_text())
+        if clock() - float(ask.get("at") or 0) > TOPUP_STALE_H * 3600:
+            say("cloud: the night's fetch was asked for too long ago — not waiting for it")
+            return None
+        start = clock()
+        deadline = start + wait_s
+        said = False
+        while True:
+            ready, going = pending(recent_runs(), today_only=False)
+            ready = [r for r in ready if r["databaseId"] > int(ask.get("after") or 0)]
+            if ready:
+                return _take(ready, say)
+            if not going and clock() - start >= APPEAR_S:
+                say("cloud: the night's GitHub fetch did not run or did not finish — the list stays as it is")
+                return None
+            if clock() >= deadline:
+                say("cloud: the night's GitHub fetch is taking too long — the list stays as it is")
+                return None
+            if not said:
+                say("cloud: waiting for the night's GitHub fetch")
+                said = True
+            sleep(poll_s)
+    except (CloudError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        say(f"cloud: could not reach the night's GitHub fetch ({str(exc)[:160]}) — the list stays as it is")
+        return None
+    finally:
+        TOPUP.unlink(missing_ok=True)
+
+
+def evening(say=print, now: datetime | None = None) -> str:
+    """The evening fetch, started from this Mac at 8 pm (a launchd job, run on waking when the
+    Mac slept through 8). Nothing after midnight: the morning run covers it. Nothing while a run
+    is under way, or when one finished in the last four hours. Returns what it did."""
+    if not set_up():
+        return "not set up"
+    if not trigger_on():
+        say("cloud: the evening GitHub fetch is switched off (cloud.trigger_runs in config.yaml)")
+        return "off"
+    now = now or datetime.now().astimezone()
+    if not EVENING[0] <= now.hour < EVENING[1]:
+        say(f"cloud: {now:%H:%M} is outside 8 pm to midnight — the morning run fetches instead")
+        return "outside"
+    runs = recent_runs()
+    if any(r["status"] != "completed" for r in runs if _hours_ago(r["createdAt"], now) <= FRESH_H):
+        say("cloud: a GitHub fetch is under way already — not starting another")
+        return "running"
+    if any(r["status"] == "completed" and r.get("conclusion") == "success"
+           and _hours_ago(r.get("updatedAt") or r["createdAt"], now) < 4 for r in runs):
+        say("cloud: a GitHub fetch finished this evening already — not starting another")
+        return "done"
+    dispatch()
+    say("cloud: started the evening GitHub fetch")
+    return "asked"
 
 
 def _fingerprint(path: Path) -> str:
@@ -251,11 +450,14 @@ def main(argv: list[str]) -> int:
         if command == "state":
             print(state())
         elif command == "collect":
-            run = today_run()
-            if state(run) != "ready":
-                print(f"nothing to bring in: {state(run)}")
+            runs = recent_runs()
+            ready, _ = pending(runs, today_only=not trigger_on())
+            if not ready:
+                print(f"nothing to bring in: {state(runs)}")
                 return 1
-            print(json.dumps(collect(run["databaseId"], run["createdAt"])))
+            print(json.dumps(_take(ready, print)))
+        elif command == "evening":
+            evening(say=lambda line: print(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {line}", flush=True))
         elif command == "push-boards":
             if not set_up():
                 print("no GitHub fetch is set up here; the board list stays on this Mac")

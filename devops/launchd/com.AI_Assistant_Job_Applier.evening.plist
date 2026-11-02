@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.AI_Assistant_Job_Applier.evening</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>5</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/.venv/bin/python</string>
+		<string>-m</string>
+		<string>devops.cloud_results</string>
+		<string>evening</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_evening.log</string>
+	<key>StandardOutPath</key>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier/data/launchd_evening.log</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>20</integer>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Volumes/Storage/D Drive /Rep/AI_Assistant_Job_Applier</string>
+</dict>
+</plist>

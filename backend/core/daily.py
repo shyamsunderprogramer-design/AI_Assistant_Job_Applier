@@ -122,7 +122,8 @@ def run_daily(cfg, skip_scrape: bool = False, since_hours: int = 24, cloud: bool
 
     `cloud`: the scheduled morning. The GitHub run reads the boards early, laptop shut or off;
     its postings are brought in when it has finished, waited for when it is under way, and the
-    boards are read here only when there is no run today (devops/cloud_results.py). The job feeds
+    boards are read here only when there is none to take (devops/cloud_results.py). When the run
+    taken is last evening's, the night's postings follow in `run_top_up`. The job feeds
     and alert emails are read here either way: they need this Mac's keys and mailbox."""
     report = DailyReport()
     cutoff = utcnow() - timedelta(hours=since_hours)
@@ -137,22 +138,19 @@ def run_daily(cfg, skip_scrape: bool = False, since_hours: int = 24, cloud: bool
 
         from_cloud = _run_stage(report, "cloud", _cloud)
         if from_cloud:
-            report.companies = from_cloud.get("boards", 0)
-            report.jobs_new = from_cloud.get("added", 0)
-            report.jobs_seen = report.jobs_new + from_cloud.get("refreshed", 0)
-            report.jobs_closed = from_cloud.get("closed", 0)
-            report.jobs_reopened = from_cloud.get("reopened", 0)
-            report.fetched_by = "the GitHub run"
-            report.stages[-1].detail = (f"{report.jobs_new} new, {report.jobs_closed} closed, "
-                                        f"from run {from_cloud.get('run')}")
+            _from_cloud(report, from_cloud)
 
     # -- 1. scrape (also closes postings that vanished) --------------------
     if not skip_scrape and not from_cloud:
         def _scrape():
             from data_engineering.scraper.runner import run_scrape, sync_seed_companies
 
+            from devops.probe_runner import paused
+
             sync_seed_companies(cfg)
-            return run_scrape(cfg)
+            # The board search waits while the boards are read here: one connection, one writer.
+            with paused("the job boards are read on this Mac"):
+                return run_scrape(cfg)
 
         summary = _run_stage(report, "scrape", _scrape)
         if summary is not None:
@@ -211,6 +209,40 @@ def run_daily(cfg, skip_scrape: bool = False, since_hours: int = 24, cloud: bool
                 report.jobs_new += stored[0]
                 report.stages[-1].detail = f"{stored[0]} new from alert emails"
 
+    _rank_and_gather(report, cfg, cutoff)
+    return report
+
+
+def _from_cloud(report: DailyReport, got: dict) -> None:
+    report.companies = got.get("boards", 0)
+    report.jobs_new = got.get("added", 0)
+    report.jobs_seen = report.jobs_new + got.get("refreshed", 0)
+    report.jobs_closed = got.get("closed", 0)
+    report.jobs_reopened = got.get("reopened", 0)
+    report.fetched_by = "the GitHub run"
+    report.stages[-1].detail = (f"{report.jobs_new} new, {report.jobs_closed} closed, "
+                                f"from run {got.get('run')}")
+
+
+def run_top_up(cfg, since_hours: int = 24) -> DailyReport | None:
+    """The night's postings, after the morning run took last evening's GitHub fetch: waited for,
+    brought in, ranked and put in the sheet, and the digest written again with them
+    (devops/cloud_results.py top_up). None when the morning run asked for none."""
+    from devops.cloud_results import TOPUP, set_up, top_up
+    if not TOPUP.exists() or not set_up():
+        return None
+    report = DailyReport()
+    got = _run_stage(report, "top-up", lambda: top_up(
+        say=lambda line: print(f"{datetime.now():%H:%M:%S}  {line}", flush=True)))
+    if not got:
+        return report
+    _from_cloud(report, got)
+    _rank_and_gather(report, cfg, utcnow() - timedelta(hours=since_hours))
+    return report
+
+
+def _rank_and_gather(report: DailyReport, cfg, cutoff) -> None:
+    """Rank what is new, put it in the sheet, and gather what changed for the digest."""
     # -- 2. rank ------------------------------------------------------------
     def _score():
         from ml.resume.pipeline import score_jobs
@@ -264,7 +296,6 @@ def run_daily(cfg, skip_scrape: bool = False, since_hours: int = 24, cloud: bool
         return True
 
     _run_stage(report, "digest", _collect)
-    return report
 
 
 def render_digest(report: DailyReport, cfg, top: int = 10) -> str:

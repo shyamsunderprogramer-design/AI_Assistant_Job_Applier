@@ -355,6 +355,14 @@ logging:
   level: "INFO"
   file: "logs/agent.log"
 
+# The GitHub fetch (devops/cloud_results.py). With trigger_runs on, this Mac starts it
+# at 8 pm and again in the morning, so the morning list is ready in minutes and the
+# night's postings follow about two and a half hours later. Off: only GitHub's own
+# schedule runs, as before. Needs the four-part workflow pushed and the 8 pm job
+# installed (devops/launchd/README.md) before it is switched on.
+cloud:
+  trigger_runs: false
+
 # Adzuna's job index (data_engineering/scraper/adzuna.py). Runs in the daily
 # job only when ADZUNA_APP_ID and ADZUNA_APP_KEY are in .env. The free tier
 # allows ~250 calls a day; one run uses at most max_calls.

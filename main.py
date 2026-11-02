@@ -40,8 +40,19 @@ def cmd_scrape(cfg, args) -> int:
     init_engine(cfg.database_url)
     from data_engineering.scraper.runner import run_scrape, sync_seed_companies
 
+    # One part of the GitHub fetch reads only its own job sites (devops/fetch_parts.py). A name
+    # with no reader here is said and passed over: it has no boards to read either way.
+    from data_engineering.scraper.runner import SCRAPER_TYPES
+    sites, skip = (_site_list(getattr(args, name, "")) for name in ("sites", "skip_sites"))
+    unknown = sorted((sites | skip) - set(SCRAPER_TYPES))
+    if unknown:
+        print(f"No reader for job site(s) {', '.join(unknown)}; passed over.")
+    sites, skip = sites & set(SCRAPER_TYPES), skip & set(SCRAPER_TYPES)
+    if getattr(args, "sites", "") and not sites:
+        print("None of the job sites asked for has a reader here; nothing to read.")
+        return 0
     sync_seed_companies(cfg)
-    summary = run_scrape(cfg)
+    summary = run_scrape(cfg, sites or None, skip or None)
 
     print()
     print(f"Run {summary.run_id}")
@@ -59,6 +70,10 @@ def cmd_scrape(cfg, args) -> int:
         for source, slug, error in summary.failures:
             print(f"    {source}/{slug}: {error}")
     return 0
+
+
+def _site_list(value) -> set[str]:
+    return {part.strip().lower() for part in (value or "").split(",") if part.strip()}
 
 
 def cmd_discover(cfg, args) -> int:
@@ -886,9 +901,19 @@ def cmd_daily(cfg, args) -> int:
     from pathlib import Path
 
     from backend.config.loader import PROJECT_ROOT
-    from backend.core.daily import render_digest, run_daily
+    from backend.core.daily import render_digest, run_daily, run_top_up
 
-    report = run_daily(cfg, skip_scrape=args.no_scrape, since_hours=args.since_hours, cloud=args.cloud)
+    if args.top_up:
+        # The night's postings, asked for by this morning's run (devops/cloud_results.py top_up).
+        report = run_top_up(cfg, since_hours=args.since_hours)
+        if report is None:
+            print("No night's fetch was asked for; nothing to add.")
+            return 0
+        if report.fetched_by == "":
+            print("No night's postings added; this morning's list stands.")
+            return report.exit_code()
+    else:
+        report = run_daily(cfg, skip_scrape=args.no_scrape, since_hours=args.since_hours, cloud=args.cloud)
     digest = render_digest(report, cfg, top=args.top)
     print()
     print(digest)
@@ -1016,7 +1041,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="Create tables and sync seed companies")
-    sub.add_parser("scrape", help="Scrape all configured/discovered companies")
+    p_scrape = sub.add_parser("scrape", help="Scrape all configured/discovered companies")
+    p_scrape.add_argument("--sites", default="",
+                          help="Only these job sites, comma-separated (one part of the GitHub fetch)")
+    p_scrape.add_argument("--skip-sites", default="", help="Every job site except these, comma-separated")
 
     p_discover = sub.add_parser("discover", help="Probe company names for ATS boards")
     p_discover.add_argument("--names", required=True, help="A .txt (one name per line) or .csv")
@@ -1205,6 +1233,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_daily.add_argument("--cloud", action="store_true",
                          help="Take today's GitHub fetch when there is one (waiting while it runs); "
                               "read the boards here when there is none")
+    p_daily.add_argument("--top-up", action="store_true",
+                         help="Add the night's GitHub fetch the morning run asked for, when it finishes")
     p_daily.add_argument("--since-hours", type=int, default=24,
                          help='What counts as "new" in the digest (default 24)')
     p_daily.add_argument("--top", type=int, default=10, help="New jobs to list in the digest")

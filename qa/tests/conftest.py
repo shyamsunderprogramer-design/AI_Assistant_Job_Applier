@@ -222,3 +222,13 @@ def _no_real_written_answers(monkeypatch, tmp_path):
     """The person's written answers are never drafted from, or added to, by tests."""
     from backend.apply import written
     monkeypatch.setattr(written, "PATH", tmp_path / "written_answers.json")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_fetch_bookkeeping(monkeypatch, tmp_path):
+    """The board search's pause, the GitHub runs taken and the night's fetch asked for are never
+    read or written by tests (2 Nov 2026): a pause file in data/ would hold the real search."""
+    from devops import cloud_results, probe_runner
+    monkeypatch.setattr(probe_runner, "PAUSEFILE", tmp_path / "probe_runner.pause")
+    monkeypatch.setattr(cloud_results, "COLLECTED", tmp_path / "cloud_collected.json")
+    monkeypatch.setattr(cloud_results, "TOPUP", tmp_path / "cloud_topup.json")
