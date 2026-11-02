@@ -6,7 +6,10 @@
 # hardcodes the interpreter, logs everything with timestamps, refuses to run
 # twice at once, and exits non-zero when a stage fails so the caller can alert.
 #
-#   devops/daily_pipeline.sh [daily|discover|enrich|backup|health]
+#   devops/daily_pipeline.sh [daily|discover|enrich|backup|health|topup]
+#
+# `topup` is not scheduled: a morning run that asked GitHub for the night's postings becomes it
+# when it ends (see the end of this script).
 #
 # Prints a one-line JSON summary on stdout as its last line, for a scheduler
 # to branch on. Human-readable output goes to data/daily_run.log.
@@ -18,6 +21,10 @@ set -uo pipefail
 # tests (qa/tests/test_daily_pipeline_sh.py); launchd never sets it.
 PROJECT="${PIPELINE_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 PY="$PROJECT/.venv/bin/python"
+# This script, by its real path: the top-up runs it again, as the web app would recognise it.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+# TOPUP_MERGE=1: a morning run that only adds the night's postings, started by `topup` below.
+TOPUP_MERGE="${TOPUP_MERGE:-0}"
 
 # Hold the Mac awake for the length of the run.
 #
@@ -51,7 +58,8 @@ log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 # The 6 AM start can be switched off on the Jobs page (data/daily_auto_off). The
 # scheduled tick then does nothing, and the run happens only when Start on that
 # page is pressed -- which sets MANUAL=1 and runs whatever the switch says.
-if [ "$TASK" = "daily" ] && [ "${MANUAL:-0}" != "1" ] && [ -f "$PROJECT/data/daily_auto_off" ]; then
+if [ "$TASK" = "daily" ] && [ "${MANUAL:-0}" != "1" ] && [ "$TOPUP_MERGE" != "1" ] \
+   && [ -f "$PROJECT/data/daily_auto_off" ]; then
   log "daily: the 6 AM start is switched off on the Jobs page — not starting"
   echo '{"ok":true,"skipped":"switched off"}'
   exit 0
@@ -84,16 +92,62 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   # the trap below) is cleared at once instead of costing the next morning's run.
   # No pid file at all is a run from before pids were kept: the old 6-hour rule.
   if owner_alive || { [ ! -f "$PIDFILE" ] && [ -z "$(find "$LOCK" -maxdepth 0 -mmin +$((STALE_HOURS * 60)) 2>/dev/null)" ]; }; then
+    # The top-up's merge is told apart (75, "try again later"): it waits for the lock, quietly.
+    [ "$TOPUP_MERGE" = "1" ] && exit 75
     log "$TASK already running — skipping this tick"
     echo '{"ok":true,"skipped":"already running"}'
     exit 0
   fi
   log "clearing a lock its run left behind"
   rmdir "$LOCK" 2>/dev/null
-  mkdir "$LOCK" 2>/dev/null || { echo '{"ok":false,"error":"locked"}'; exit 0; }
+  mkdir "$LOCK" 2>/dev/null || { [ "$TOPUP_MERGE" = "1" ] && exit 75; echo '{"ok":false,"error":"locked"}'; exit 0; }
 fi
 echo $$ > "$PIDFILE"
 trap 'rmdir "$LOCK" 2>/dev/null; rm -f "$PIDFILE"' EXIT
+
+# The night's postings brought in, holding the morning lock for that alone: a morning run of its
+# own, so a morning run, Start, or a fetch or scoring from the web app never runs beside it.
+if [ "$TASK" = "daily" ] && [ "$TOPUP_MERGE" = "1" ]; then
+  log "=== top-up starting (morning lock held to add the night's postings) ==="
+  $CAFFEINATE "$PY" -u main.py daily --top-up >> "$LOG" 2>&1
+  STATUS=$?
+  log "=== top-up finished, exit $STATUS ==="
+  "$PY" devops/build_dashboard.py "$PROJECT/data/console/dashboard.html" >> "$LOG" 2>&1 \
+    && log "rebuilt data/console/dashboard.html"
+  exit "$STATUS"
+fi
+
+# The wait for the night's GitHub fetch (up to 3 hours), under its own lock -- one wait at a time
+# -- and not the morning's: Start and the web app's fetches go on meanwhile, and the database is
+# not opened. When the fetch is ready, the merge above takes the morning lock, waiting for a run
+# that holds it. If the lock stays busy past TOPUP_LOCK_TRIES, the ask is kept
+# (data/cloud_topup.json) and the next morning run to end takes it up.
+if [ "$TASK" = "topup" ]; then
+  log "=== top-up: waiting for the night's GitHub fetch (the morning lock is free) ==="
+  if ! $CAFFEINATE "$PY" -u -m devops.cloud_results wait-top-up >> "$LOG" 2>&1; then
+    log "=== top-up: nothing to add ==="
+    echo '{"ok":true,"task":"topup","added":false}'
+    exit 0
+  fi
+  tries=0
+  while :; do
+    TOPUP_MERGE=1 /bin/bash "$SELF" daily > /dev/null
+    rc=$?
+    if [ "$rc" -ne 75 ]; then
+      [ "$rc" -eq 0 ] && ok=true || ok=false
+      echo "{\"ok\":$ok,\"task\":\"topup\",\"exit\":$rc}"
+      exit "$rc"
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -gt "${TOPUP_LOCK_TRIES:-180}" ]; then
+      log "top-up: the morning run's lock stayed busy — the night's postings are kept for the next run"
+      echo '{"ok":true,"task":"topup","deferred":true}'
+      exit 0
+    fi
+    [ "$tries" -eq 1 ] && log "top-up: another run holds the morning lock — waiting for it to finish"
+    sleep "${TOPUP_LOCK_POLL:-60}"
+  done
+fi
 
 SUMMARY=""
 log "=== $TASK starting ==="
@@ -220,14 +274,15 @@ PYEOF
 fi
 
 # The night's postings, when this morning took last evening's GitHub fetch and asked GitHub for
-# another (devops/cloud_results.py top_up). After the summary and the notice, so neither waits for
-# it; inside this run's lock, so no other morning run starts while it waits and merges. Its own
-# result is not the morning's: the list it adds to is complete without it.
+# another (devops/cloud_results.py wait_top_up, top_up). After the summary and the notice, so
+# neither waits for it. The morning lock is let go first and this run becomes `topup` (the same
+# process, so launchd still waits for it): the wait, up to 3 hours, holds no lock the web app
+# looks at, and the lock is taken again only to add the postings.
 if [ "$TASK" = "daily" ] && [ -f "$PROJECT/data/cloud_topup.json" ]; then
-  log "=== top-up starting ==="
-  $CAFFEINATE "$PY" -u main.py daily --top-up >> "$LOG" 2>&1
-  log "=== top-up finished, exit $? ==="
-  "$PY" devops/build_dashboard.py "$PROJECT/data/console/dashboard.html" >> "$LOG" 2>&1 \
-    && log "rebuilt data/console/dashboard.html"
+  log "morning lock released; the night's GitHub fetch is waited for without it"
+  trap - EXIT
+  rmdir "$LOCK" 2>/dev/null
+  rm -f "$PIDFILE"
+  exec /bin/bash "$SELF" topup
 fi
 exit "$STATUS"

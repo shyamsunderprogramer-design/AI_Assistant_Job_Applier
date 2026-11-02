@@ -14,7 +14,8 @@ this Mac also starts the fetches itself, so the morning list is ready in minutes
 
   * at 8 pm (`evening`, a launchd job; until midnight if the Mac was asleep at 8);
   * in the morning, when the run it took is hours old: a second fetch for the postings of the
-    night, added by `main.py daily --top-up` when it finishes (`top_up`);
+    night, waited for with no lock held (`wait_top_up`) and added under the morning lock when it
+    finishes (`top_up`, run by `main.py daily --top-up`);
   * in the morning, when there is nothing to take and nothing under way: one fetch, waited for.
 
 Without it, only GitHub's own schedule runs, and only a run started today counts, as before.
@@ -27,6 +28,7 @@ GitHub secret of the same name holds too.
     python -m devops.cloud_results state         # ready | running | collected | none
     python -m devops.cloud_results collect       # bring in the finished runs not taken yet
     python -m devops.cloud_results evening       # start the evening fetch (8 pm to midnight)
+    python -m devops.cloud_results wait-top-up   # wait for the night's fetch: exit 0 when ready
     python -m devops.cloud_results push-boards   # send the board list if it changed
 """
 
@@ -338,37 +340,70 @@ def bring_in(say=print, wait_s: int = WAIT_S, poll_s: int = POLL_S, sleep=time.s
         return None
 
 
-def top_up(say=print, wait_s: int = TOPUP_WAIT_S, poll_s: int = POLL_S, sleep=time.sleep,
-           clock=time.time) -> dict | None:
-    """The night's postings, asked for by the morning run: waited for, then brought in. None when
-    nothing was asked, the ask is stale, the fetch failed or never came, or GitHub is out of
-    reach -- the morning's list stands as it is, and a run left over is taken tomorrow if fresh."""
+def _night(ask: dict) -> tuple[list[dict], list[dict]]:
+    """(the night's fetch, finished and not yet taken; fetches under way). A run a morning run took
+    meanwhile is not in the first: `pending` leaves out every run already brought in."""
+    ready, going = pending(recent_runs(), today_only=False)
+    return [r for r in ready if r["databaseId"] > int(ask.get("after") or 0)], going
+
+
+def wait_top_up(say=print, wait_s: int = TOPUP_WAIT_S, poll_s: int = POLL_S, sleep=time.sleep,
+                clock=time.time) -> bool:
+    """Wait for the night's fetch, asked for by the morning run, holding no lock and opening no
+    database: Start, a fetch or scoring from the web app, and the board search all go on meanwhile
+    (devops/daily_pipeline.sh topup). True: it finished, and the ask is kept for `top_up`, which
+    brings it in under the morning lock. False: nothing to add, and the ask is dropped -- it is
+    stale, the fetch failed or never came, took too long, or GitHub is out of reach."""
     if not TOPUP.exists():
-        return None
+        return False
+    keep = False
     try:
         ask = json.loads(TOPUP.read_text())
         if clock() - float(ask.get("at") or 0) > TOPUP_STALE_H * 3600:
             say("cloud: the night's fetch was asked for too long ago — not waiting for it")
-            return None
+            return False
         start = clock()
         deadline = start + wait_s
         said = False
         while True:
-            ready, going = pending(recent_runs(), today_only=False)
-            ready = [r for r in ready if r["databaseId"] > int(ask.get("after") or 0)]
+            ready, going = _night(ask)
             if ready:
-                return _take(ready, say)
+                keep = True
+                say("cloud: the night's GitHub fetch has finished — adding it")
+                return True
             if not going and clock() - start >= APPEAR_S:
                 say("cloud: the night's GitHub fetch did not run or did not finish — the list stays as it is")
-                return None
+                return False
             if clock() >= deadline:
                 say("cloud: the night's GitHub fetch is taking too long — the list stays as it is")
-                return None
+                return False
             if not said:
                 say("cloud: waiting for the night's GitHub fetch")
                 said = True
             sleep(poll_s)
-    except (CloudError, OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (CloudError, OSError, ValueError, AttributeError, subprocess.SubprocessError) as exc:
+        say(f"cloud: could not reach the night's GitHub fetch ({str(exc)[:160]}) — the list stays as it is")
+        return False
+    finally:
+        if not keep:
+            TOPUP.unlink(missing_ok=True)
+
+
+def top_up(say=print) -> dict | None:
+    """The night's fetch brought in, once `wait_top_up` found it finished. Called under the
+    morning lock (main.py daily --top-up, run by devops/daily_pipeline.sh as a morning run of its
+    own), so it never merges beside a morning run or another top-up, and it waits for nothing. A
+    run taken meanwhile is not taken twice. The ask is dropped either way: a run that could not be
+    brought in is left for the next morning run, as any other. None: nothing was added."""
+    if not TOPUP.exists():
+        return None
+    try:
+        ready, _ = _night(json.loads(TOPUP.read_text()))
+        if not ready:
+            say("cloud: the night's GitHub fetch is in already — nothing to add")
+            return None
+        return _take(ready, say)
+    except (CloudError, OSError, ValueError, AttributeError, subprocess.SubprocessError) as exc:
         say(f"cloud: could not reach the night's GitHub fetch ({str(exc)[:160]}) — the list stays as it is")
         return None
     finally:
@@ -456,6 +491,12 @@ def main(argv: list[str]) -> int:
                 print(f"nothing to bring in: {state(runs)}")
                 return 1
             print(json.dumps(_take(ready, print)))
+        elif command == "wait-top-up":
+            # Exit 0: the night's fetch is ready to bring in. 1: nothing to add.
+            if not set_up():
+                return 1
+            return 0 if wait_top_up(say=lambda line: print(
+                f"{datetime.now():%Y-%m-%d %H:%M:%S}  {line}", flush=True)) else 1
         elif command == "evening":
             evening(say=lambda line: print(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {line}", flush=True))
         elif command == "push-boards":

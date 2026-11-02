@@ -225,9 +225,10 @@ def _from_cloud(report: DailyReport, got: dict) -> None:
 
 
 def run_top_up(cfg, since_hours: int = 24) -> DailyReport | None:
-    """The night's postings, after the morning run took last evening's GitHub fetch: waited for,
-    brought in, ranked and put in the sheet, and the digest written again with them
-    (devops/cloud_results.py top_up). None when the morning run asked for none."""
+    """The night's postings, after the morning run took last evening's GitHub fetch: brought in,
+    ranked and put in the sheet, and the digest written again with them. Run under the morning
+    lock once the wait, which holds none, found the fetch finished (devops/cloud_results.py
+    wait_top_up, top_up; devops/daily_pipeline.sh topup). None when the morning run asked for none."""
     from devops.cloud_results import TOPUP, set_up, top_up
     if not TOPUP.exists() or not set_up():
         return None

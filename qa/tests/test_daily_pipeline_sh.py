@@ -110,16 +110,165 @@ def test_a_live_run_keeps_its_lock_and_a_dead_ones_lock_is_cleared(project):
     assert not lock.exists()
 
 
-def test_the_nights_postings_are_added_after_the_morning_only_when_asked_for(project):
-    """The morning run that took last evening's GitHub fetch asks for the night's
-    (data/cloud_topup.json); the script adds them after the summary, inside its own lock."""
-    root, run = project
-    done, log, calls = run()
-    assert "main.py daily --top-up" not in calls and "top-up starting" not in log
+# -- the night's postings (data/cloud_topup.json) ----------------------------------------------------
+
+def top_up_stub(root, wait_rc=0, merge_rc=0, merge_sleep=0):
+    """python as the top-up sees it. The wait records which locks exist and what its parent process
+    is called (the web app's Start looks for a process ending in "daily_pipeline.sh daily"); the
+    merge records whether it holds the morning lock."""
+    python = root / ".venv" / "bin" / "python"
+    calls = Path(python.read_text().split('>> "')[1].split('"')[0])
+    data = root / "data"
+    python.write_text(f"""#!/bin/bash
+echo "$*" >> "{calls}"
+if [ "$*" = "-u -m devops.cloud_results wait-top-up" ]; then
+  [ -d "{data}/daily.lock" ] && echo "wait: morning lock held" >> "{calls}"
+  [ -d "{data}/topup.lock" ] && echo "wait: own lock held" >> "{calls}"
+  echo "wait: parent $(ps -o args= -p $PPID)" >> "{calls}"
+  exit {wait_rc}
+fi
+if [ "$*" = "-u main.py daily --top-up" ]; then
+  [ -d "{data}/daily.lock" ] && echo "merge: morning lock held" >> "{calls}"
+  sleep {merge_sleep}
+  rm -f "{data}/cloud_topup.json"
+  exit {merge_rc}
+fi
+exit 0
+""")
+
+
+def asked(root):
     (root / "data" / "cloud_topup.json").write_text('{"after": 41, "at": 0}')
+
+
+def test_nothing_asked_no_top_up(project):
+    root, run = project
+    top_up_stub(root)
     done, log, calls = run()
-    assert done.returncode == 0
-    order = calls.splitlines()
-    assert order.index("-u main.py daily --cloud") < order.index("-u main.py daily --top-up")
-    assert log.index("=== daily finished") < log.index("=== top-up starting ===") < log.index("=== top-up finished")
-    assert not (root / "data" / "daily.lock").exists()            # the lock was held to the end
+    assert "wait-top-up" not in calls and "--top-up" not in calls and "top-up" not in log
+
+
+def test_the_wait_holds_no_morning_lock_and_the_merge_holds_it(project):
+    """The morning run lets its lock go and becomes the top-up: during the wait, nothing the web
+    app's Start or its fetches look at is held; the merge alone takes the morning lock."""
+    root, run = project
+    top_up_stub(root)
+    asked(root)
+    done, log, calls = run()
+    assert done.returncode == 0 and '"task":"topup","exit":0' in done.stdout
+    lines = calls.splitlines()
+    assert lines.index("-u main.py daily --cloud") < lines.index("-u -m devops.cloud_results wait-top-up") \
+        < lines.index("-u main.py daily --top-up")
+    assert "wait: morning lock held" not in calls and "wait: own lock held" in calls
+    parent = next(line for line in lines if line.startswith("wait: parent"))
+    assert parent.endswith("daily_pipeline.sh topup") and not parent.endswith(" daily")
+    assert "merge: morning lock held" in calls
+    assert log.index("=== daily finished") < log.index("morning lock released") \
+        < log.index("waiting for the night's GitHub fetch") < log.index("=== top-up starting") \
+        < log.index("=== top-up finished, exit 0")
+    for left in ("daily.lock", "daily.pid", "topup.lock", "topup.pid", "cloud_topup.json"):
+        assert not (root / "data" / left).exists(), left
+
+
+def test_nothing_to_add_takes_no_lock_and_merges_nothing(project):
+    root, run = project
+    top_up_stub(root, wait_rc=1)
+    asked(root)
+    done, log, calls = run()
+    assert done.returncode == 0 and '"added":false' in done.stdout
+    assert "--top-up" not in calls and "top-up: nothing to add" in log
+    assert not (root / "data" / "daily.lock").exists() and not (root / "data" / "topup.lock").exists()
+
+
+def live_holder(root, task="daily"):
+    """A live run holding `task`'s lock, its command line naming the script, like the real one."""
+    (root / "data" / f"{task}.lock").mkdir()
+    holder = subprocess.Popen(["/bin/bash", "-c", f'exec -a "daily_pipeline.sh {task}" sleep 20'])
+    (root / "data" / f"{task}.pid").write_text(str(holder.pid))
+    return holder
+
+
+def test_a_run_holding_the_morning_lock_is_waited_out_then_the_merge_runs(project):
+    """Start pressed during the wait: its run holds the morning lock when the fetch is ready, and
+    the merge waits for it instead of writing beside it."""
+    root, run = project
+    top_up_stub(root)
+    asked(root)
+    holder = live_holder(root)
+    # The scheduled morning run itself must not stop at the holder's lock: start it as a top-up.
+    import threading
+    threading.Timer(1.5, holder.kill).start()
+    try:
+        done, log, calls = run_topup(root, TOPUP_LOCK_POLL="0.2", TOPUP_LOCK_TRIES="50")
+    finally:
+        holder.kill()
+        holder.wait()
+    assert done.returncode == 0 and "another run holds the morning lock" in log
+    assert log.count("another run holds the morning lock") == 1 and "already running" not in log
+    assert "merge: morning lock held" in calls and "-u main.py daily --top-up" in calls
+
+
+def test_a_lock_that_stays_busy_defers_the_merge_and_keeps_the_ask(project):
+    root, run = project
+    top_up_stub(root)
+    asked(root)
+    holder = live_holder(root)
+    try:
+        done, log, calls = run_topup(root, TOPUP_LOCK_POLL="0.05", TOPUP_LOCK_TRIES="3")
+    finally:
+        holder.kill()
+        holder.wait()
+    assert done.returncode == 0 and '"deferred":true' in done.stdout
+    assert "--top-up" not in calls and "kept for the next run" in log
+    assert (root / "data" / "cloud_topup.json").exists()                 # the ask is not lost
+    assert not (root / "data" / "topup.lock").exists()
+    assert (root / "data" / "daily.lock").is_dir()                         # the holder's lock untouched
+
+
+def test_one_wait_at_a_time(project):
+    """A morning run (Start) that ends while a top-up waits does not start a second wait."""
+    root, run = project
+    top_up_stub(root)
+    asked(root)
+    holder = live_holder(root, "topup")
+    try:
+        done, log, calls = run(MANUAL="1")
+    finally:
+        holder.kill()
+        holder.wait()
+    assert "-u main.py daily" in calls and "wait-top-up" not in calls
+    assert "topup already running" in log and not (root / "data" / "daily.lock").exists()
+    assert (root / "data" / "cloud_topup.json").exists()
+
+
+def test_a_failed_merge_is_reported_and_lets_every_lock_go(project):
+    root, run = project
+    top_up_stub(root, merge_rc=1)
+    asked(root)
+    done, log, calls = run()
+    assert done.returncode == 1 and '"ok":false,"task":"topup","exit":1' in done.stdout
+    assert "=== top-up finished, exit 1" in log
+    for left in ("daily.lock", "daily.pid", "topup.lock", "topup.pid"):
+        assert not (root / "data" / left).exists(), left
+
+
+def test_the_merge_runs_even_with_the_6am_start_switched_off(project):
+    """Switching off the 6 AM start stops the next morning, not the end of this one."""
+    root, run = project
+    top_up_stub(root)
+    asked(root)
+    (root / "data" / "daily_auto_off").write_text("off")
+    done, log, calls = run(MANUAL="1")
+    assert "merge: morning lock held" in calls
+
+
+def run_topup(root, **env):
+    """devops/daily_pipeline.sh topup, as a morning run becomes it when it ends."""
+    calls = Path((root / ".venv" / "bin" / "python").read_text().split('>> "')[1].split('"')[0])
+    bin_dir = calls.parent / "bin"
+    full = {"PATH": f"{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin", "PIPELINE_PROJECT": str(root),
+            "NOTIFY": "0", "WAKE_POLL": "0.05", "HOME": os.environ.get("HOME", "/tmp"), **env}
+    done = subprocess.run(["/bin/bash", str(SCRIPT), "topup"], env=full, capture_output=True,
+                          text=True, timeout=30)
+    log = root / "data" / "daily_run.log"
+    return done, log.read_text() if log.exists() else "", calls.read_text() if calls.exists() else ""

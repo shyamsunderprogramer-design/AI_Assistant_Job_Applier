@@ -448,42 +448,92 @@ def ask(after, hours_ago=0.0, clock=None):
     cloud_results.TOPUP.write_text(json.dumps({"after": after, "at": at}))
 
 
-def test_the_nights_fetch_is_waited_for_and_taken(gh):
+def test_the_nights_fetch_is_waited_for_then_taken_in_a_separate_step(gh):
+    """The wait brings nothing in and keeps the ask; the step run under the morning lock takes it."""
     clock = Clock()
     ask(41, clock=clock)
     taken_before(41)
     gh["lists"] = [[going(42), done(41, 8)], [going(42), done(41, 8)], [done(42, 0), done(41, 8)]]
     said = []
-    got = cloud_results.top_up(say=said.append, sleep=clock.sleep, clock=clock)
-    assert gh["taken"] == [42] and got["run"] == 42 and not cloud_results.TOPUP.exists()
+    assert cloud_results.wait_top_up(say=said.append, sleep=clock.sleep, clock=clock) is True
+    assert gh["taken"] == [] and cloud_results.TOPUP.exists()
     assert sum("waiting for the night's GitHub fetch" in s for s in said) == 1
+    got = cloud_results.top_up(say=said.append)
+    assert gh["taken"] == [42] and got["run"] == 42 and not cloud_results.TOPUP.exists()
+
+
+def test_the_step_under_the_lock_waits_for_nothing(gh):
+    ask(41)
+    taken_before(41)
+    gh["lists"] = [[going(42), done(41, 8)]]
+    said = []
+    assert cloud_results.top_up(say=said.append) is None
+    assert gh["taken"] == [] and len(gh["lists"]) == 1 and not cloud_results.TOPUP.exists()
+
+
+def test_a_night_fetch_taken_meanwhile_is_not_added_twice(gh):
+    """A morning run that ran during the wait took the night's fetch itself: nothing twice."""
+    ask(41)
+    taken_before(42)
+    gh["lists"] = [[done(42, 0), done(41, 8)]]
+    said = []
+    assert cloud_results.top_up(say=said.append) is None
+    assert gh["taken"] == [] and "in already" in said[-1] and not cloud_results.TOPUP.exists()
+
+
+def test_a_night_fetch_that_cannot_be_brought_in_is_left_for_the_next_morning(gh):
+    ask(41)
+    taken_before(41)
+    gh["fail"] = {42}
+    gh["lists"] = [[done(42, 0), done(41, 8)]]
+    said = []
+    assert cloud_results.top_up(say=said.append) is None
+    assert "could not be brought in" in said[-1] and not cloud_results.TOPUP.exists()
+    assert cloud_results._last_taken() == 41                    # still not taken: the next run takes it
 
 
 def test_no_ask_a_stale_ask_or_a_fetch_that_never_comes_adds_nothing(gh):
     clock = Clock()
-    assert cloud_results.top_up(say=[].append, clock=clock) is None              # nothing asked
+    assert cloud_results.wait_top_up(say=[].append, clock=clock) is False      # nothing asked
+    assert cloud_results.top_up(say=[].append) is None
     ask(41, hours_ago=7, clock=clock)
     said = []
-    assert cloud_results.top_up(say=said.append, clock=clock) is None
+    assert cloud_results.wait_top_up(say=said.append, clock=clock) is False
     assert "too long ago" in said[-1] and not cloud_results.TOPUP.exists()
     ask(41, clock=clock)
     taken_before(41)
     gh["lists"] = [[done(41, 8)]]
-    assert cloud_results.top_up(say=said.append, sleep=clock.sleep, clock=clock) is None
+    assert cloud_results.wait_top_up(say=said.append, sleep=clock.sleep, clock=clock) is False
     assert "did not run or did not finish" in said[-1] and gh["taken"] == []
+    assert not cloud_results.TOPUP.exists()
+    ask(41, clock=clock)
+    gh["lists"] = [[going(42), done(41, 8)]]
+    assert cloud_results.wait_top_up(say=said.append, wait_s=600, sleep=clock.sleep, clock=clock) is False
+    assert "taking too long" in said[-1] and not cloud_results.TOPUP.exists()
     cloud_results.TOPUP.write_text("{half")                                      # unreadable: dropped
-    assert cloud_results.top_up(say=said.append, clock=clock) is None and not cloud_results.TOPUP.exists()
+    assert cloud_results.wait_top_up(say=said.append, clock=clock) is False
+    assert not cloud_results.TOPUP.exists()
 
 
 def test_github_out_of_reach_leaves_the_morning_list_as_it_is(gh, monkeypatch):
-    ask(41)
-
     def broken():
         raise cloud_results.CloudError("gh is not installed")
     monkeypatch.setattr(cloud_results, "recent_runs", broken)
-    said = []
-    assert cloud_results.top_up(say=said.append) is None
-    assert "list stays as it is" in said[-1] and not cloud_results.TOPUP.exists()
+    for step in (cloud_results.wait_top_up, cloud_results.top_up):
+        ask(41)
+        said = []
+        assert not step(say=said.append)
+        assert "list stays as it is" in said[-1] and not cloud_results.TOPUP.exists()
+
+
+def test_the_wait_command_says_ready_by_its_exit(gh, monkeypatch):
+    monkeypatch.setattr(cloud_results, "set_up", lambda: True)
+    monkeypatch.setattr(cloud_results, "wait_top_up", lambda say=print: True)
+    assert cloud_results.main(["wait-top-up"]) == 0
+    monkeypatch.setattr(cloud_results, "wait_top_up", lambda say=print: False)
+    assert cloud_results.main(["wait-top-up"]) == 1
+    monkeypatch.setattr(cloud_results, "set_up", lambda: False)
+    assert cloud_results.main(["wait-top-up"]) == 1
 
 
 # -- 8 pm: the evening fetch ------------------------------------------------------------------------
