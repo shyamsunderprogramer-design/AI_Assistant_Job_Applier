@@ -49,6 +49,7 @@ class Desk:
     def __init__(self, root: Path):
         self.root, self.calls = root, []
         self.letters, self.checked = True, False      # a cover letter for each; no checked tailoring run
+        self.approved = False                         # nor the person's approval of the resume (2 Nov 2026)
 
     def own(self, job_id, kind) -> Path:
         return self.root / "jobs" / str(job_id) / f"{kind}.pdf"
@@ -72,6 +73,9 @@ class Desk:
         letter.write_bytes(self.own(job.id, "letter").read_bytes())
         if self.checked:
             checked_run(job.id, self.own(job.id, "resume"))
+        if self.approved:
+            from qa.tests.test_document_approval import give_word
+            give_word(job.id, "resume", kept, "approved")
         if not self.letters:
             return runner.Prepared(kept, None, "tailored", evidence, {"resume": self.own(job.id, "resume")})
         return runner.Prepared(kept, letter, "tailored", evidence,
@@ -462,7 +466,7 @@ def test_a_database_from_before_gains_the_documents_table_and_keeps_every_row(tm
     ("a letter", "a cover letter goes with it, and a letter's checks are not kept"),
     ("to be made again", "its resume is set to be made again"),
 ])
-def test_documents_go_by_themselves_only_when_their_own_checks_vouch_for_them(tmp_path, case, why):
+def test_documents_go_by_themselves_only_when_their_own_checks_vouch_for_them(db, tmp_path, case, why):
     from ml.tailoring import pipeline as tailoring
     resume = tmp_path / "Dana_Example_Resume_Globex.pdf"
     resume.write_bytes(b"%PDF-1.4 the resume made for job 1")
@@ -484,6 +488,9 @@ def test_documents_go_by_themselves_only_when_their_own_checks_vouch_for_them(tm
     elif case == "to be made again":
         checked_run(1, resume)
         tailoring.REDO.write_text(json.dumps({"1": "made from a master since repaired"}))
+    # And, since 2 Nov 2026, approved by the person (qa/tests/test_document_approval.py).
+    from qa.tests.test_document_approval import give_word
+    give_word(1, "resume", resume, "approved")
     assert execution.documents_unready(1, resume, letter) == why
 
 

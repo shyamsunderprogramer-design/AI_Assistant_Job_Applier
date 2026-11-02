@@ -85,6 +85,8 @@
 .dc-words summary{cursor:pointer;font-size:.9em;color:var(--muted)}
 .dc-words ul{margin:4px 0 0;padding-left:1.1em;font-size:.9em}
 .ch-docs{margin-top:4px;overflow-wrap:anywhere}
+.ch-doc .btn.small{margin-left:4px}
+.ch-ok{color:var(--good)} .ch-no{color:var(--crit)}
 .ch-sum{font-family:var(--mono);font-size:.85em;color:var(--muted)}
 .ch-acts{display:flex;gap:6px;flex-wrap:wrap}
 .ch-acts .btn{white-space:nowrap}
@@ -333,6 +335,17 @@ function decisionHtml(dc, autoSubmit) {
   return `<div class="dc"><span class="pill dc-${esc(dc.decision.toLowerCase())}" title="${esc(SCOPE)}">${esc(dc.label)}</span>`
     + `${said || yours ? `<div class="hint">${said ? esc(dc.reasons.join('; ')) + '.' : ''}${yours}</div>` : ''}${words}</div>`;
 }
+// Your word on one document: shown, and -- while it is made ready and not yet sent -- given or changed.
+function docWord(i, d) {
+  const word = d.approval === 'approved' ? ' <span class="pill ch-ok">Approved</span>'
+    : d.approval === 'rejected' ? ' <span class="pill ch-no">Rejected: not sent</span>'
+    : d.approval_earlier ? ' <span class="hint">Changed since your last word: not approved</span>'
+    : d.state === 'ready' ? ' <span class="hint">Not approved yet</span>' : '';
+  if (d.state !== 'ready') return word;
+  const btn = (w, label) => `<button class="btn small" type="button" data-doc="${d.id}" data-word="${w}" data-item="${i.id}">${label}</button>`;
+  return word + (d.approval !== 'approved' ? ' ' + btn('approved', 'Approve') : '')
+              + (d.approval !== 'rejected' ? ' ' + btn('rejected', 'Reject') : '');
+}
 function chosenRow(i) {
   const turn = i.state === 'queued' && i.turn
     ? `<div class="hint">${TURN[i.turn]}${i.turn_reason ? ': ' + esc(i.turn_reason) : ''}${
@@ -343,9 +356,11 @@ function chosenRow(i) {
          <span class="hint" data-since="${esc(i.current_at || i.since)}">${since(i.current_at || i.since)}</span></div>` : '';
   const need = i.action ? `<div class="ch-need">${esc(i.action)}</div>` : '';
   const said = moving ? '' : (i.outcome || i.note);          // on its way, the step above says it
-  // The files made ready for it, by name and checksum: exactly these are given to its form.
+  // The files made ready for it, by name and checksum: exactly these are given to its form. Each one
+  // opens to be read, and takes your word: Approve or Reject (2 Nov 2026). A rejected one is never sent.
   const docs = (i.documents || []).length ? `<div class="hint ch-docs">${i.documents.every(d => d.state === 'sent') ? 'Sent' : 'Made ready'}: ${
-    i.documents.map(d => `${esc(d.name)} <span class="ch-sum" title="Checksum: checked again when its form opens">${esc(d.sha256.slice(0, 12))}</span>`)
+    i.documents.map(d => `<span class="ch-doc">${esc(d.name)} <span class="ch-sum" title="Checksum: checked again when its form opens">${esc(d.sha256.slice(0, 12))}</span>
+      <a href="/apply/chosen/document/${d.id}" target="_blank" rel="noopener">Open</a>${docWord(i, d)}</span>`)
     .join(' · ')}</div>` : '';
   // Applied: its record on the Applied page -- the day, what went, its stages (26 Oct 2026).
   const record = i.state === 'applied' ? `<div class="hint"><a href="/applications/${i.job_id}">See it on the Applied page</a></div>` : '';
@@ -582,6 +597,14 @@ async function chosenPost(url, body, said) {
 $('chosen-list').addEventListener('click', e => {
   const s = e.target.closest('[data-steps]');
   if (s) { toggleSteps(+s.dataset.steps); return; }
+  const w = e.target.closest('[data-doc]');
+  if (w) {
+    w.disabled = true;
+    const rejected = w.dataset.word === 'rejected';
+    chosenPost('/apply/chosen/document', {item: +w.dataset.item, document: +w.dataset.doc, decision: w.dataset.word},
+               rejected ? 'Rejected: it will not be sent. Make a new one on its job page.' : 'Approved.');
+    return;
+  }
   const b = e.target.closest('[data-ch]');
   if (!b) return;
   const item = +b.dataset.item;

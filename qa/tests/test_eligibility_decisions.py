@@ -279,8 +279,10 @@ def test_only_an_eligible_job_is_sent_by_the_app_itself_and_each_check_before_it
     from qa.tests.test_prepared_documents import checked_run          # their resumes made and checked
     made = cfg_dir = db[2] / "checked-resume.pdf"
     made.write_bytes(b"%PDF-1.4 made-up resume")
+    from qa.tests.test_document_approval import give_word             # and approved by the person
     for job_id in (1, 6):
         checked_run(job_id, cfg_dir)
+        give_word(job_id, "resume", made, "approved")
     went = []
     monkeypatch.setattr(runner, "fill_form", recording_form(went))
     execution.add([1, 6, 2])                                          # two Greenhouse forms, and JazzHR's

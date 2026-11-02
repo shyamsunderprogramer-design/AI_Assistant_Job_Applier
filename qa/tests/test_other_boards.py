@@ -66,6 +66,7 @@ def test_another_boards_form_is_filled_and_left_to_the_person_even_when_it_leads
     leads[3] = ("greenhouse", "https://boards.greenhouse.io/initech/jobs/3", None)
     monkeypatch.setattr(runner, "load", lambda path: dana(stop_before_submit=False))
     desk.letters, desk.checked = False, True              # documents ready to go by themselves (29 Oct 2026)
+    desk.approved = True                                  # and approved by the person (2 Nov 2026)
     execution.add([3, 6])
     runner.run(cfg, chosen=True, browser_factory=Browser)
     pressed = {f.files["input#resume"].split("_Resume_")[1].split(".")[0]: f.clicked for f in Browser.forms}
@@ -175,6 +176,7 @@ def test_greenhouse_workday_and_jazzhr_go_as_they_always_have(db, desk, follow, 
     monkeypatch.setattr(runner, "fill_form", fill_form)
     monkeypatch.setattr(runner, "load", lambda path: dana(stop_before_submit=False))
     desk.letters, desk.checked = False, True              # documents ready to go by themselves (29 Oct 2026)
+    desk.approved = True                                  # and approved by the person (2 Nov 2026)
     execution.add([2, 5, 6, 3])
     runner.run(cfg, chosen=True, browser_factory=Browser)
     assert sorted(went) == [("greenhouse", True), ("jazzhr", False), ("jobvite", False), ("workday", False)]

@@ -417,7 +417,7 @@ def _sha256(path) -> str:
 
 
 def _artifact_dict(row: ApplyArtifact) -> dict:
-    return {"id": row.id, "kind": row.kind, "path": row.path, "name": Path(row.path).name,
+    return {"id": row.id, "job_id": row.job_id, "kind": row.kind, "path": row.path, "name": Path(row.path).name,
             "sha256": row.sha256, "size": row.size, "source": row.source or "",
             "origin": row.origin_path or "", "origin_sha256": row.origin_sha256 or "",
             "run_id": row.run_id, "attempt": row.attempt, "state": row.state, "at": _utc(row.created_at)}
@@ -464,14 +464,17 @@ def documents(item_id: int) -> list[dict]:
 
 
 def _documents_of(session, item_ids) -> dict[int, list[dict]]:
+    """Each job's documents as the page shows them, with the person's word on each (backend/apply/approval)."""
+    from backend.apply.approval import word_on
     out: dict[int, list[dict]] = {}
     ids = [i for i in item_ids if i]
     if ids:
         for row in (session.query(ApplyArtifact).filter(ApplyArtifact.item_id.in_(ids),
                                                          ApplyArtifact.state.in_(("ready", "sent")))
                     .order_by(ApplyArtifact.id)):
-            out.setdefault(row.item_id, []).append({k: v for k, v in _artifact_dict(row).items()
-                                                    if k not in _NOT_SHOWN})
+            out.setdefault(row.item_id, []).append({**{k: v for k, v in _artifact_dict(row).items()
+                                                       if k not in _NOT_SHOWN},
+                                                    **word_on(session, row.job_id, row.kind, row.sha256)})
     return out
 
 
@@ -541,8 +544,9 @@ def documents_unready(job_id: int, resume: Path, letter: Path | None) -> str | N
     """Why the documents about to go are not ready for the app to send by itself, or None (29 Oct 2026).
     A checksum shows a file is unchanged, not that it is good: the resume must be the very file a tailoring
     run made and checked -- every check passed, no problem noted in its drafting, not set to be made again --
-    and a cover letter, whose checks are not kept anywhere, leaves Submit to the person. Nothing records the
-    person's approval of a document yet (Phase 4), so this is the quality half only."""
+    and a cover letter, whose checks are not kept anywhere, leaves Submit to the person. And every document
+    must carry the person's own approval of exactly its content (backend/apply/approval, 2 Nov 2026)."""
+    from backend.apply import approval
     from ml.tailoring import pipeline as tailoring
     if _redo(job_id):
         return "its resume is set to be made again"
@@ -563,7 +567,7 @@ def documents_unready(job_id: int, resume: Path, letter: Path | None) -> str | N
         return "its resume did not pass all of its own checks"
     if result.get("draft_note"):
         return f"its tailoring noted a problem ({str(result['draft_note'])[:80]})"
-    return None
+    return approval.unapproved(job_id, "resume", resume)    # and, last, the person's own word on it
 
 
 @_when_free
@@ -607,6 +611,11 @@ def seal(item_id: int, evidence: Path):
             where = f"{origin.name}, the job's own" if moved and origin is not None else source.name
             return (f"the {what} made ready for it ({where}) has changed or is gone since it was made "
                     f"ready on {d['at'][:10]}, so it was not sent")
+        from backend.apply import approval
+        rejected = approval.refused(d["job_id"], d["kind"], target, d["source"])
+        if rejected:                                     # the person said No to it: never sent, on any run
+            _gone_stale(item_id)
+            return rejected
         sealed[d["kind"]] = target
         # Beside the run's form picture, as every run keeps it: what went out (backend/apply/tracker.py).
         plain = evidence / (f"resume{target.suffix}" if d["kind"] == "resume" else f"cover-letter{target.suffix}")

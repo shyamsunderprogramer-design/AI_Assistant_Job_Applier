@@ -831,10 +831,15 @@ def prepare_documents(cfg, job, applicant: Applicant, head: str, *, tailor: bool
     Split from filling the form (24 Oct 2026) so the chosen jobs' queue can say which it is doing."""
     evidence = greenhouse._evidence_dir(job.id)
 
+    from backend.apply import approval
     resume, resume_note = choose_resume(cfg, job, tailor=tailor)
     if resume is None:
         say(f"{head}: no resume to attach — put yours in ml/resume/. Skipped.")
         return "no resume"
+    no = approval.refused(job.id, "resume", resume, resume_note)   # one the person rejected never goes
+    if no:
+        say(f"{head}: {no}. Skipped.")
+        return no
     shutil.copy2(resume, evidence / f"resume{resume.suffix}")    # exactly what went out, for the app's pages
     # What the employer receives is named for the person and the company, never "resume.pdf".
     kept = sent_copy(resume, evidence, applicant, job.company, "Resume")
@@ -847,6 +852,10 @@ def prepare_documents(cfg, job, applicant: Applicant, head: str, *, tailor: bool
         log.warning("No application folder for job %s: %s", job.id, exc)
     write_letter_if_missing(cfg, job, head)
     letter = cover_letter(cfg, job, evidence)
+    no = approval.refused(job.id, "cover_letter", letter) if letter is not None else None
+    if no:
+        say(f"{head}: {no}. Skipped.")
+        return no
     origins: dict[str, Path | None] = {"resume": resume}
     if letter is not None:
         letter = sent_copy(letter, evidence, applicant, job.company, "Cover_Letter")

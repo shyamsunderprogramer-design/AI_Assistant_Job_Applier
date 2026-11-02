@@ -344,3 +344,22 @@ class ApplyArtifact(Base):
     origin_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     state: Mapped[str] = mapped_column(String(16), default="ready", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DocumentApproval(Base):
+    """The person's word on one document for one job (2 Nov 2026): approved or rejected, for exactly
+    the content with this checksum. A changed document has another checksum, so no word said about
+    an earlier version counts for it. Never edited: a later word on the same content is a new row,
+    and the latest stands (backend/apply/approval.py)."""
+
+    __tablename__ = "document_approvals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(16))                       # resume | cover_letter
+    sha256: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(Text, default="")                 # the file's name, for the record
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)    # where it came from: "tailored", ...
+    artifact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision: Mapped[str] = mapped_column(String(16))                   # approved | rejected
+    decided_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

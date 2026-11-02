@@ -358,6 +358,7 @@ def test_a_job_whose_questions_could_not_be_read_is_never_sent_by_the_app_itself
     monkeypatch.setattr(runner, "fill_form", fill_form)
     answers = board.get
     desk.letters, desk.checked = False, True                              # its documents ready to go by themselves
+    desk.approved = True                                  # and approved by the person (2 Nov 2026)
     monkeypatch.setattr(prepare.requests, "get", lambda url, timeout=None, **kw: (_ for _ in ()).throw(
         prepare.requests.ConnectionError("no answer")))
     execution.add([6])

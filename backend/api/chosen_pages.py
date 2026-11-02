@@ -226,3 +226,39 @@ def apply_chosen_clear():
     """Finished jobs off the page; the database keeps what happened to them."""
     from backend.apply import execution
     return jsonify(ok=True, hidden=execution.hide_finished())
+
+
+@app.post("/apply/chosen/document")
+def apply_chosen_document():
+    """The person's word on one document made ready for a chosen job (2 Nov 2026):
+    {"item": id, "document": id, "decision": "approved" or "rejected"}. Sends nothing."""
+    from backend.apply import approval
+    body = _body()
+    item, doc, word = _item(body), body.get("document"), body.get("decision")
+    if item is None or not isinstance(doc, int) or isinstance(doc, bool) or word not in approval.DECISIONS:
+        return jsonify(ok=False, error='Send "item", "document" and "decision": "approved" or "rejected".'), 400
+    try:
+        result = approval.decide(item, doc, word)
+    except approval.ApprovalError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    return jsonify(ok=True, **result)
+
+
+@app.get("/apply/chosen/document/<int:doc_id>")
+def apply_chosen_document_file(doc_id: int):
+    """A document made ready for a chosen job, to read before deciding: only one recorded as made
+    ready or sent, from where it was recorded."""
+    from pathlib import Path
+
+    from flask import abort, send_file
+
+    from data_engineering.db.models import ApplyArtifact
+    from data_engineering.db.session import get_session
+    with get_session() as session:
+        row = session.get(ApplyArtifact, doc_id)
+        state, path = (row.state, Path(row.path)) if row is not None else ("", None)
+    if path is None or state not in ("ready", "sent") or not path.is_file():
+        abort(404)
+    kinds = {".pdf": "application/pdf", ".txt": "text/plain"}
+    return send_file(path, mimetype=kinds.get(path.suffix.lower()), as_attachment=path.suffix.lower() not in kinds,
+                     download_name=path.name)
