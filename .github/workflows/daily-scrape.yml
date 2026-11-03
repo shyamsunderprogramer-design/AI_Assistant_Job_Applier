@@ -19,8 +19,22 @@
 #     repository can be downloaded by anyone.
 # The Actions cache is the one store only this repository's own workflow runs
 # can read, so that is where the database lives between runs.
+#
+# FOUR PARTS AT ONCE (2 Nov 2026)
+# One machine read every site six boards at a time, about three and a half hours,
+# mostly queueing. `plan` splits the job SITES four ways (devops/fetch_parts.py);
+# each part reads its own sites on its own machine at the same polite pace (README
+# §C5: every board of a site on one machine, 1.5 s between requests to a host);
+# `join` puts the four together and saves them as one database. The slowest single
+# host sets the floor: Greenhouse, about 2 h 15 min. The parts travel between jobs
+# encrypted, like the result, and are kept one day.
 
 name: Daily scrape
+
+# The code this fetch runs is pinned to one tested commit (fd11a5c, tag fetch-tested-fd11a5c;
+# GitHub run 41538146488), not to this branch or any moving branch: every checkout below names it.
+# To run newer code, change the three `ref:` lines on purpose. To go back to the one-machine
+# fetch, revert the commit that added this note.
 
 on:
   schedule:
@@ -32,7 +46,9 @@ on:
     # Minute 17 on purpose: every scheduled job in the world asks for :00, the
     # queue is deepest there, and a job that has to wait is a job that runs late.
     - cron: "17 6 * * *"
-  workflow_dispatch:          # and whenever you press the button
+  # And whenever the button is pressed: by you, or by the Mac at 8 pm and in the
+  # morning once `cloud.trigger_runs` is switched on (devops/cloud_results.py).
+  workflow_dispatch:
 
 concurrency:
   # Never let two scrapes touch the same cached database.
@@ -40,13 +56,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  scrape:
+  plan:
     runs-on: ubuntu-latest
-    # A full run is one to three and a half hours. The ceiling is six.
+    timeout-minutes: 15
+    outputs:
+      parts: ${{ steps.plan.outputs.parts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fd11a5cef53e43207f5829f11852178ab7423f71   # the tested four-part fetch (tag fetch-tested-fd11a5c)
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore the job database
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jobs.db
+          # The newest saved copy. Only `join` saves, so every part starts from this same one.
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
+
+      - name: Split the job sites into four parts
+        # Balanced by how long each site took last time; standard library only. Site names
+        # and counts only: this log is public.
+        id: plan
+        run: python -m devops.fetch_parts plan --db data/jobs.db --parts 4 >> "$GITHUB_OUTPUT"
+
+  scrape:
+    needs: plan
+    runs-on: ubuntu-latest
+    # A part is about two and a quarter hours at most. The ceiling is six.
     timeout-minutes: 330
+    strategy:
+      # One part failing fails the run: the Mac takes only a run that read every site,
+      # and reads the boards itself otherwise.
+      fail-fast: true
+      matrix:
+        part: ${{ fromJSON(needs.plan.outputs.parts) }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fd11a5cef53e43207f5829f11852178ab7423f71   # the tested four-part fetch (tag fetch-tested-fd11a5c)
 
       - uses: actions/setup-python@v5
         with:
@@ -57,12 +111,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore the job database
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data/jobs.db
-          # A new key every day so each run saves a fresh copy; restore-keys
-          # falls back to the most recent previous one. Without the date the
-          # cache would be written once and never updated again.
           key: jobs-db-${{ github.run_id }}
           restore-keys: |
             jobs-db-
@@ -113,19 +164,95 @@ jobs:
         # backend/config/boards.csv carries the list separately: employer names and
         # public board addresses, safe for a public repository, and nothing
         # about the person searching. The import is keyed on (source, slug),
-        # so running it against a warm cache adds nothing.
+        # so running it against a warm cache adds nothing. Every part imports
+        # all of it; the join keeps each site's boards from its own part only.
         run: python -m data_engineering.boards import
 
-      - name: Scrape
+      - name: Scrape this part's job sites
         env:
           SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
-        run: python -u main.py scrape
+          SITES: ${{ matrix.part.sites }}
+          SKIP: ${{ matrix.part.skip }}
+        run: python -u main.py scrape --sites "$SITES" --skip-sites "$SKIP"
 
       # NO SCORING HERE. Scoring compares a posting against the resume text,
       # and the resume is not on this machine -- by design, since it is the
       # one thing that should never leave the laptop. The first run failed on
       # exactly this: "No base resume found". Scoring happens locally, after
-      # devops/fetch_cloud_results.sh brings the postings down.
+      # the Mac brings the postings down (devops/cloud_results.py).
+
+      - name: Lock this part for the join
+        # Artifacts on a public repository can be downloaded by anyone: locked
+        # like the result, or not sent at all.
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          if [ -z "$PASSPHRASE" ]; then
+            echo "::error::RESULTS_PASSPHRASE is not set: the four parts cannot travel to the join unlocked."
+            exit 1
+          fi
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in data/jobs.db -out part.db.enc -pass env:PASSPHRASE
+          ls -lh part.db.enc
+
+      - name: Hand it to the join
+        uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.part.name }}
+          path: part.db.enc
+          retention-days: 1
+
+  join:
+    needs: [plan, scrape]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fd11a5cef53e43207f5829f11852178ab7423f71   # the tested four-part fetch (tag fetch-tested-fd11a5c)
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore the job database
+        # The same copy every part started from.
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
+
+      - name: Collect the parts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: parts
+
+      - name: Join the four parts
+        # Each site's rows from the part that read it, and from no other; every
+        # posting a part holds must be in the result exactly once, or nothing is
+        # saved and the run fails (the Mac then reads the boards itself).
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+          PLAN: ${{ needs.plan.outputs.parts }}
+        run: |
+          for locked in parts/part-*/part.db.enc; do
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+              -in "$locked" -out "${locked%.enc}" -pass env:PASSPHRASE
+          done
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          python -m devops.fetch_parts join --db data/jobs.db --plan "$RUNNER_TEMP/plan.json" --parts-dir parts
+
+      - name: Save the job database
+        # A new key every run so each saves a fresh copy; the restores above fall
+        # back to the most recent one.
+        uses: actions/cache/save@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}
 
       - name: Encrypt the database for collection
         # The cache cannot be downloaded to a laptop, and an artifact on a
@@ -136,17 +263,11 @@ jobs:
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
         run: |
-          if [ -z "$PASSPHRASE" ]; then
-            echo "::warning::RESULTS_PASSPHRASE is not set — skipping upload."
-            echo "The scrape still ran and the cache is updated; only collection is off."
-            exit 0
-          fi
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
             -in data/jobs.db -out jobs.db.enc -pass env:PASSPHRASE
           ls -lh jobs.db.enc
 
       - name: Upload it
-        if: hashFiles('jobs.db.enc') != ''
         uses: actions/upload-artifact@v4
         with:
           name: jobs-db-encrypted
