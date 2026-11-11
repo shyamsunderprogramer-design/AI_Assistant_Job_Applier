@@ -91,7 +91,8 @@ def test_an_unanswered_question_is_never_taken_for_a_yes_or_a_no():
 def test_a_visa_the_posting_never_mentions_is_a_warning_and_the_companys_record_is_never_proof(monkeypatch):
     needs_visa = {"authorised_to_work": False, "requires_sponsorship": True, "us_citizen": False}
     d = decide(posting(PLAIN), needs_visa)
-    assert (d.decision, d.warnings) == (WITH_WARNINGS, ["doesn't say whether it sponsors a visa, and you need one"])
+    assert (d.decision, d.warnings) == (WITH_WARNINGS, ["Sponsorship unknown: the posting doesn't say whether it "
+                                                       "sponsors a visa, and you need one"])
     monkeypatch.setattr(eligibility, "sponsor_history", lambda company, country="US": "H-1B")
     d = decide(posting(PLAIN), needs_visa)
     assert d.decision == WITH_WARNINGS and not d.sends_itself              # a record of the past, not of this role
@@ -290,8 +291,10 @@ def test_only_an_eligible_job_is_sent_by_the_app_itself_and_each_check_before_it
     assert sorted(went) == [(1, True), (2, False), (6, False)]        # the preference stands; only 1 may use it
     assert [s for s in steps(2) if s.startswith("Eligibility")] and not any(s.startswith("You press") for s in steps(2))
     assert [s for s in steps(6) if s.startswith(("Eligibility", "You press"))] == [
-        "Eligibility: Eligible, with warnings — doesn't say whether it sponsors a visa, and you need one",
-        "You press Submit on this one: it is eligible, with warnings (doesn't say whether it sponsors a visa, "
+        "Eligibility: Eligible, with warnings — Sponsorship unknown: the posting doesn't say whether it sponsors "
+        "a visa, and you need one",
+        "You press Submit on this one: it is eligible, with warnings (Sponsorship unknown: the posting doesn't say "
+        "whether it sponsors a visa, "
         "and you need one)"]
     assert [s for s in steps(1) if s.startswith("Eligibility")] == [
         "Eligibility: Eligible — no clearance, citizenship or visa requirement in the posting stands against "

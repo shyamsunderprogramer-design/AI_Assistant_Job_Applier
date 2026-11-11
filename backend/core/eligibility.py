@@ -242,8 +242,23 @@ def assess(job, authorisation: dict) -> list[tuple[str, str, str]]:
             out.append(("sponsorship", UNKNOWN, "will not sponsor a visa, and your profile doesn't say whether "
                                                 f"you need sponsorship: {_ANSWER_IT}"))
     elif stated is None and needs is True:
-        out.append(("sponsorship", WARNING, "doesn't say whether it sponsors a visa, and you need one"))
+        out.append(("sponsorship", WARNING, SPONSORSHIP_UNKNOWN))
     return out
+
+
+# A posting that says nothing about a visa, for a person who needs one: unknown, never a yes or a no, and
+# labelled so wherever it is shown (4 Nov 2026). The decision is the same as before (with warnings).
+SPONSORSHIP_UNKNOWN = "Sponsorship unknown: the posting doesn't say whether it sponsors a visa, and you need one"
+_SAID_BEFORE = "doesn't say whether it sponsors a visa, and you need one"      # its words until 4 Nov 2026
+
+
+def relabel(detail: dict | None) -> dict | None:
+    """A decision kept before 4 Nov 2026, shown with today's label for an unknown sponsorship: only its
+    words change, never its decision or its rules. The steps written then stay as they were written."""
+    if not detail:
+        return detail
+    return {**detail, **{k: [SPONSORSHIP_UNKNOWN if w == _SAID_BEFORE else w for w in detail[k]]
+                         for k in ("reasons", "warnings", "unknowns") if isinstance(detail.get(k), list)}}
 
 
 def eligible(job, authorisation: dict) -> tuple[bool, list[str]]:

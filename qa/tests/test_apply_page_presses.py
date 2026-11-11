@@ -124,7 +124,8 @@ def test_a_press_the_page_draws_again_under_still_counts(app_copy, engine, width
             with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/apply/chosen/prepare"),
                                       timeout=5000):
                 press_while_drawn_again(page, "#chosen-prepare", "() => draw()")
-            assert started == [("prepare-chosen", ["prepare-apply", "--chosen"])]   # asked for once; nothing else
+            waiting = ",".join(str(i) for i in execution.queued_ids())          # the two still waiting, at the press
+            assert started == [("prepare-chosen", ["prepare-apply", "--chosen", "--items", waiting])]   # asked once
             assert not errors
     finally:
         browser.close()

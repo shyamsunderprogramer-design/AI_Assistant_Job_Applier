@@ -31,7 +31,8 @@ def _loopback(host) -> bool:
 # went into the real application log (found, and taken out again, the same evening). Whatever a
 # test does, these files are as they were before it ran, or the test fails and names them.
 OWN_RECORDS = ("data/applications.jsonl", "data/apply/unconfirmed.json", "data/apply/chosen.json",
-               "data/apply/prepared.json", "data/watchlist.json", "data/written_answers.json")
+               "data/apply/prepared.json", "data/watchlist.json", "data/written_answers.json",
+               "data/apply/shortlist.json", "data/apply/shortlist_settings.json")
 
 
 REAL_ROOT = Path(__file__).resolve().parents[2]     # fixed here: some tests point PROJECT_ROOT elsewhere
@@ -210,11 +211,19 @@ def _no_real_redo_list(monkeypatch, tmp_path):
 def _no_real_chosen_jobs(monkeypatch, tmp_path):
     """The jobs the person ticked and added to Auto-apply, the applications waiting for their
     "Did it go?", and the prepared ones are never read or changed by tests."""
-    from backend.apply import anyform, chosen, execution, prepare
+    from backend.apply import anyform, chosen, execution, prepare, shortlist
     monkeypatch.setattr(chosen, "PATH", tmp_path / "chosen.json")
+    monkeypatch.setattr(shortlist, "REPORT", tmp_path / "shortlist.json")         # the morning's picks report
+    monkeypatch.setattr(shortlist, "SETTINGS", tmp_path / "shortlist_settings.json")   # and their settings
     monkeypatch.setattr(anyform, "UNCONFIRMED", tmp_path / "unconfirmed.json")
     monkeypatch.setattr(prepare, "PREPARED", tmp_path / "prepared.json")
     monkeypatch.setattr(execution, "AUTO_SUBMIT_HOLD", tmp_path / "auto_submit.hold")   # the live hold, never read
+    from backend.apply import listings
+    from data_engineering.companies.careers_finder import Page
+
+    def offline(cfg):                                # a listing site is never read by a test
+        return lambda url, **kw: Page(url=url, final_url=url, error="offline in tests")
+    monkeypatch.setattr(listings, "default_fetch", offline)
 
 
 @pytest.fixture(autouse=True)

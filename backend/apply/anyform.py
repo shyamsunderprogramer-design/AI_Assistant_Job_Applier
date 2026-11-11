@@ -60,7 +60,23 @@ APPLY_PATHS = (
 
 # A page that checks the browser before showing anything (Cloudflare and the like).
 CHECK_TITLES = ("just a moment", "attention required", "checking your browser", "verifying you are human",
-                "verify you are human", "security check")
+                "verify you are human", "security check", "one more step", "are you a robot",
+                "human verification", "access to this page has been denied")
+
+# Opening a page: tried this many times in all; a load the site itself moved on from (Ashby's pages
+# redirect while loading: net::ERR_ABORTED, "frame was detached") is no failure once a page shows.
+OPEN_TRIES = 2
+_MOVED_ON = ("err_aborted", "frame was detached", "interrupted by another navigation", "ns_binding_aborted",
+             "navigation interrupted")
+# A posting page whose job is gone, in the words the hiring systems use.
+CLOSED_WORDS = ("job not found", "this job is no longer available", "no longer accepting applications",
+                "this position has been filled", "this job has been closed", "the job you are looking for",
+                "this posting is no longer", "position is no longer available", "job is no longer open")
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+# Hiring systems whose posting address carries the job's own id, and which show their list of jobs
+# when that job is gone.
+ONE_JOB_HOSTS = frozenset({"jobs.ashbyhq.com", "jobs.lever.co", "jobs.eu.lever.co"})
+_ASHBY_FORM = re.compile(r"^(https://jobs\.ashbyhq\.com/[^/?#]+/[0-9a-f-]{36})/application/?(?:[?#].*)?$", re.I)
 CHECK_FRAMES = r"challenges\.cloudflare\.com|captcha-delivery\.com|perimeterx|px-cloud\.net"
 
 # What a page says once an application has gone through, on top of Greenhouse's own words.
@@ -80,6 +96,7 @@ class Reached:
     kind: str | None          # greenhouse | workday | jazzhr | form | signin | unknown
     url: str
     error: str | None = None
+    stop: str | None = None   # with an error: "check" (a browser check that did not clear), "gone", "window"
 
 
 def board_of(url: str) -> str | None:
@@ -170,20 +187,32 @@ def being_checked(page) -> bool:
     return bool(framed) and not is_form(shape(page))
 
 
+def _closed(page) -> bool:
+    try:
+        return bool(page.is_closed())
+    except Exception:
+        return True
+
+
 def wait_out_check(page, say=print, timeout_s: float = 180, poll_ms: int = 2000,
-                   clock=time.monotonic) -> bool:
-    """Wait while the site checks the browser. True once the page is through."""
+                   clock=time.monotonic, sleep=time.sleep) -> bool:
+    """Wait while the site checks the browser. True once the page is through. A check page reloads
+    itself as it works, so a wait it interrupts is waited again: only the deadline or a closed
+    window ends it."""
     if not being_checked(page):
         return True
     say("   The site is checking the browser first. If it shows a box to tick, tick it in the window.")
     deadline = clock() + timeout_s
     while clock() < deadline:
+        if _closed(page):
+            return False
         try:
-            if page.is_closed():
-                return False
             page.wait_for_timeout(poll_ms)
         except Exception:
-            return False
+            if _closed(page):
+                return False
+            sleep(poll_ms / 1000)
+            continue
         if not being_checked(page):
             try:
                 page.wait_for_timeout(1500)
@@ -257,22 +286,84 @@ def _follow(page, choice: dict):
     return page
 
 
+def open_page(page, url: str, *, tries: int = OPEN_TRIES, pause_ms: int = 2000) -> str | None:
+    """Open a page: None once it shows, else why not. A load the site moved on from itself -- a
+    redirect while loading -- counts as opened when another page is showing; anything else is tried
+    again, `tries` times in all. Never more."""
+    last = None
+    for attempt in range(max(1, tries)):
+        before = page.url if not _closed(page) else ""
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+            return None
+        except Exception as exc:
+            last = exc
+        if _closed(page):
+            return "the window was closed"
+        if any(w in str(last).lower() for w in _MOVED_ON):
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10_000)
+            except Exception:
+                pass
+            now = "" if _closed(page) else page.url
+            if now.startswith(("http://", "https://")) and now != before:
+                return None
+        if attempt + 1 < tries:
+            try:
+                page.wait_for_timeout(pause_ms)
+            except Exception:
+                return "the window was closed"
+    first = str(last).splitlines()[0][:80] if last else "no answer"
+    return f"could not open the posting ({first}; tried {max(1, tries)} times)"
+
+
+def posting_first(url: str) -> str:
+    """Where to open a posting from: an Ashby form's own posting page, whose form is then opened from
+    it -- an Ashby form opened straight from its address can move itself while loading and fail."""
+    m = _ASHBY_FORM.match(url or "")
+    return m.group(1) if m else url
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _gone(page, first: str, here: str) -> str | None:
+    """Why the posting is not there any more, or None: the hiring system showed another page than this
+    job's (its list of jobs, after a redirect), or says the job is closed. Nothing on such a page is
+    followed -- another job's Apply button is never pressed for this one."""
+    token = _UUID.search(urlparse(first).path or "") if _host(first) in ONE_JOB_HOSTS else None
+    if token and _host(here) == _host(first) and token.group(0).lower() not in here.lower():
+        return f"the posting has closed or moved: {_host(here)} showed another page instead of this job"
+    if not is_form(shape(page)):
+        text = " ".join(_body(page).lower().replace("’", "'").split())[:4000]
+        said = next((w for w in CLOSED_WORDS if w in text), None)
+        if said:
+            return f"the posting has closed: the page says “{said}”"
+    return None
+
+
 def reach(page, url: str, *, say=print, check_s: float = 180, hops: int = 5) -> Reached:
     """Open a posting and get to its application form."""
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
-    except Exception as exc:
-        return Reached(page, None, url, f"could not open the posting ({str(exc).splitlines()[0][:80]})")
+    first = posting_first(url)
+    error = open_page(page, first)
+    if error:
+        return Reached(page, None, url, error, "window" if error == "the window was closed" else None)
     tried: set[str] = set()
     for _ in range(hops):
         try:
             page.wait_for_timeout(1500)
         except Exception:
-            return Reached(page, None, url, "the window was closed")
+            return Reached(page, None, url, "the window was closed", "window")
         if sign_in_barrier(page):
             return Reached(page, "signin-handoff", page.url)
         if not wait_out_check(page, say, check_s):
-            return Reached(page, None, page.url, "the site's browser check did not clear")
+            if _closed(page):
+                return Reached(page, None, url, "the window was closed", "window")
+            return Reached(page, None, page.url, "the site's browser check did not clear", "check")
         here = page.url
         kind = board_of(here)
         if kind:
@@ -283,10 +374,16 @@ def reach(page, url: str, *, say=print, check_s: float = 180, hops: int = 5) -> 
         info = shape(page)
         if is_form(info):
             return Reached(page, "form", here)
+        gone = _gone(page, first, here)
+        if gone:
+            return Reached(page, None, here, gone, "gone")
         step = apply_path(here)
         if step and step not in tried:
             tried.add(step)
-            page.goto(step, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+            error = open_page(page, step)
+            if error:
+                return Reached(page, None, here, error.replace("the posting", "its form", 1),
+                               "window" if error == "the window was closed" else None)
             continue
         choices = [c for c in apply_controls(page) if (c["href"] or f'#{here}#{c["text"]}') not in tried]
         if not choices:

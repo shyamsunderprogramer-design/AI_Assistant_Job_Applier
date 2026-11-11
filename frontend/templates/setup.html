@@ -161,6 +161,48 @@
   <div id="out" hidden></div>
 </section>
 
+{# The morning's picks (4 Nov 2026; backend/apply/shortlist.py), saved to data/apply/shortlist_settings.json,
+   never to config.yaml. Shown only when the app answers /apply/picks/settings. #}
+<section class="card" id="picks-settings" hidden style="margin-top:14px">
+  <h2 style="margin-top:0;font-size:1.05em">Morning picks</h2>
+  <div class="sub" style="margin-bottom:10px">Each morning, up to the number below of your best matches are added to
+    <b>Your chosen jobs</b> on the <a href="/apply">Auto-apply</a> page, each with why it was picked, for you to
+    review. Nothing is tailored, prepared or sent by itself: you press Prepare these and Apply to these, and
+    Submit on every form a morning pick fills. A job you removed is never picked again.</div>
+  <form id="picks-form">
+    <fieldset class="fset">
+      <legend>Picking</legend>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pk-enabled">
+        Pick jobs each morning</label>
+      <div class="row" style="gap:12px;flex-wrap:wrap;margin-top:8px">
+        <label>At most a day <input type="number" id="pk-per-day" min="1" max="25" step="1" required></label>
+        <label>Lowest match score (%) <input type="number" id="pk-min" min="50" max="100" step="1" required></label>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="pk-confirm">
+        Also pick a job whose eligibility needs your answer</label>
+    </fieldset>
+    <fieldset class="fset">
+      <legend>Your preferences</legend>
+      <div class="sub" style="margin-bottom:8px">Each one applies only to what a posting states: one that doesn't
+        say is not left out for it.</div>
+      <label>Required skills: a posting must mention at least one (commas between)
+        <input type="text" id="pk-skills" placeholder="e.g. Kubernetes, Terraform"></label>
+      <div class="row" style="gap:12px;flex-wrap:wrap;margin-top:8px">
+        <label>Most years a posting may ask for <input type="number" id="pk-years" min="0" max="40" step="1" placeholder="No limit"></label>
+        <label>Lowest yearly pay <input type="number" id="pk-pay" min="0" max="2000000" step="1000" placeholder="No limit"></label>
+      </div>
+      <div style="margin-top:8px"><span class="sub">Workplace (none ticked: any)</span>
+        <div class="row" id="pk-workplaces" style="gap:12px;flex-wrap:wrap"></div></div>
+      <div style="margin-top:8px"><span class="sub">Job type (none ticked: any)</span>
+        <div class="row" id="pk-types" style="gap:12px;flex-wrap:wrap"></div></div>
+      <label style="margin-top:8px">Never these companies (commas between; your current employer never is)
+        <input type="text" id="pk-exclude"></label>
+    </fieldset>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn primary" type="submit" id="pk-save">Save</button></div>
+  </form>
+  <div class="sub" id="pk-out" role="status" style="margin-top:8px"></div>
+</section>
+
 <section class="card" style="margin-top:14px">
   <h2 style="margin-top:0;font-size:1.05em">The rest of your setup</h2>
   <div class="row" style="gap:12px;flex-wrap:wrap">
@@ -293,5 +335,77 @@ document.getElementById('acct-forget').onclick = async () => {
   await fetch('/account/forget', {method: 'POST'}); document.getElementById('acct-email').value = ''; loadAccount();
 };
 loadAccount();
+</script>
+
+<script>
+// -- Morning picks (4 Nov 2026) --------------------------------------------------------------------
+(() => {
+  const el = id => document.getElementById(id);
+  const words = s => s.split(',').map(w => w.trim()).filter(Boolean);
+  const WORK = {remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site'};
+  function boxes(id, values, chosen, names) {
+    el(id).replaceChildren(...values.map(v => {
+      const label = document.createElement('label');
+      label.style.cssText = 'display:flex;gap:6px;align-items:center';
+      const box = document.createElement('input');
+      box.type = 'checkbox'; box.value = v; box.checked = chosen.includes(v);
+      label.append(box, ' ' + (names[v] || v));
+      return label;
+    }));
+  }
+  const ticked = id => [...el(id).querySelectorAll('input:checked')].map(b => b.value);
+  function show(d) {
+    const s = d.settings;
+    el('pk-enabled').checked = s.enabled;
+    el('pk-per-day').value = s.per_day;
+    el('pk-min').value = Math.round(s.min_fit * 100);
+    el('pk-confirm').checked = s.allow_needs_confirmation;
+    el('pk-skills').value = s.required_skills.join(', ');
+    el('pk-years').value = s.max_years_required ?? '';
+    el('pk-pay').value = s.min_salary ?? '';
+    el('pk-exclude').value = s.exclude_companies.join(', ');
+    boxes('pk-workplaces', d.workplaces, s.workplaces, WORK);
+    boxes('pk-types', Object.keys(d.job_types), s.job_types, d.job_types);
+  }
+  async function load() {
+    let res;
+    try { res = await fetch('/apply/picks/settings'); } catch (e) { res = null; }
+    if (res && res.status === 404) return;                         // an app without picks yet: no card
+    el('picks-settings').hidden = false;
+    let d = null;
+    try { d = res && res.ok ? await res.json() : null; } catch (e) { d = null; }
+    if (!d || !d.ok) {
+      el('picks-form').hidden = true;
+      el('pk-out').className = 'out bad';
+      el('pk-out').textContent = 'The morning picks settings could not be loaded. Reload the page to try again.';
+      return;
+    }
+    el('picks-form').hidden = false;
+    show(d);
+  }
+  el('picks-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const num = v => v === '' ? null : Number(v);
+    const body = {enabled: el('pk-enabled').checked, per_day: Number(el('pk-per-day').value),
+                  min_fit: Number(el('pk-min').value) / 100, allow_needs_confirmation: el('pk-confirm').checked,
+                  required_skills: words(el('pk-skills').value), max_years_required: num(el('pk-years').value),
+                  min_salary: num(el('pk-pay').value), exclude_companies: words(el('pk-exclude').value),
+                  workplaces: ticked('pk-workplaces'), job_types: ticked('pk-types')};
+    el('pk-save').disabled = true;
+    el('pk-out').className = 'out'; el('pk-out').textContent = 'Saving…';
+    let r;
+    try {
+      const res = await fetch('/apply/picks/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                        body: JSON.stringify(body)});
+      r = await res.json().catch(() => ({ok: false, error: `The app hit an error (${res.status}).`}));
+    } catch (err) { r = {ok: false, error: 'The app did not answer. Try again.'}; }
+    el('pk-save').disabled = false;
+    el('pk-out').className = r.ok ? 'out good' : 'out bad';
+    el('pk-out').textContent = r.ok ? (r.settings.enabled ? 'Saved. Morning picks are on from the next morning run.'
+                                                          : 'Saved. Morning picks are off.') : (r.error || 'Could not save.');
+    if (r.ok) show(r);
+  });
+  load();
+})();
 </script>
 {% endblock %}

@@ -870,11 +870,16 @@ def _shape(item: ApplyItem, job: Job | None, latest: ApplyEvent | None, run_live
             "version": latest.id if latest else 0,
             "current": latest.message if latest and moving else "",
             "current_at": _utc(latest.at) if latest and moving else "",
-            "decision": json.loads(item.decision_detail) if item.decision_detail else None,
+            "decision": _relabel(json.loads(item.decision_detail)) if item.decision_detail else None,
             "documents": docs or [],
             "can": {"cancel": state in (QUEUED, VALIDATING, PREPARING, READY),
                     "retry": state in (FAILED, SKIPPED, CANCELLED),
                     "confirm": state == PENDING or (state == WAITING and not run_live)}}
+
+
+def _relabel(detail: dict) -> dict:
+    from backend.core.eligibility import relabel
+    return relabel(detail) or detail
 
 
 def item_views(item_ids, run_live: bool) -> list[dict]:
@@ -981,14 +986,29 @@ def stream(after: int = 0, *, seconds: float = 300, every: float = 0.5, heartbea
 
 # -- the run itself ------------------------------------------------------------------------------
 
+def queued_ids() -> list[int]:
+    """The entries waiting on the list now, in its order: what a press of Apply to these or Prepare
+    these covers."""
+    with get_session() as session:
+        return [i for (i,) in session.query(ApplyItem.id).filter(ApplyItem.state == QUEUED)
+                .order_by(ApplyItem.position)]
+
+
 def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: float = 900,
-         paid_ok: bool = False) -> list:
+         paid_ok: bool = False, only=None) -> list:
     """Go down the chosen jobs, one at a time, each checked again just before it goes. Returns what
     became of each, as the other runs do (runner.Outcome). A job whose documents were not made ready
     before has them made on the way, by the writer set in Settings: one that bills per use only once
-    the person has said yes (`paid_ok`)."""
+    the person has said yes (`paid_ok`).
+
+    Exactly the jobs the person pressed for (7 Nov 2026): those waiting on the list when the run starts,
+    or, given `only` (item ids, written down by the page at the press), those of them still waiting. A
+    job added meanwhile -- by the person, or the morning's picks -- waits for the next press; one
+    cancelled or taken off meanwhile is not gone to."""
     from backend.apply import runner
     run = start_run(os.getpid())
+    on_list = set(queued_ids())
+    among = on_list & {int(i) for i in only} if only is not None else on_list
     _, label, free = runner.writer(cfg)
     if not free and not paid_ok:
         why = (f"Not started: a resume or cover letter made on the way would use {label}, which bills per use. "
@@ -1009,7 +1029,7 @@ def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: f
                 why = "Paused: the rest wait until you press Resume."
                 finish_run(run.id, "paused", why)
                 break
-            item_id, why_none = _next(cfg, applicant, run.id, search)
+            item_id, why_none = _next(cfg, applicant, run.id, search, among)
             if item_id is None:
                 why = why_none
                 finish_run(run.id, "done" if why.startswith("Done") else "stopped", why)
@@ -1037,13 +1057,14 @@ def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: f
     return runner.finish(outcomes)
 
 
-def _next(cfg, applicant, run_id: int, search) -> tuple[int | None, str]:
+def _next(cfg, applicant, run_id: int, search, among=None) -> tuple[int | None, str]:
     """Take the next job to go, or say why nothing more goes now. A job that cannot go at all leaves
-    the queue here, skipped, with its reason."""
+    the queue here, skipped, with its reason. Given `among`, only those entries: the run's own."""
     from backend.apply import runner
     while True:
         with get_session() as session:
-            queued = session.query(ApplyItem).filter(ApplyItem.state == QUEUED).order_by(ApplyItem.position).all()
+            queued = [i for i in session.query(ApplyItem).filter(ApplyItem.state == QUEUED)
+                      .order_by(ApplyItem.position).all() if among is None or i.id in among]
             if not queued:
                 return None, "Done: nothing more on your list."
             left = runner.remaining_today(cfg, applicant,
@@ -1167,6 +1188,13 @@ def _one(cfg, applicant, run_id: int, item_id: int, search, browser, *, tailor: 
     auto = not applicant.stop_before_submit and verdict.sends_itself and job.source == "greenhouse"
     if runner.assisted(job):
         note(item_id, runner.assisted(job), run_id=run_id)
+    # A job the morning picked is never sent by the app itself (4 Nov 2026), whatever the person's Submit
+    # setting and whether or not the hold is on: the person presses Submit. Its own rule, not the hold's.
+    from backend.apply import shortlist
+    if auto and shortlist.morning_pick(job.id):
+        auto = False
+        note(item_id, "You press Submit on this one: the morning picked it, and the app never sends a "
+                      "morning pick by itself", run_id=run_id)
     if auto and auto_submit_held():
         auto = False
         note(item_id, "You press Submit on this one: automatic Submit is held until the latest safety fixes "
@@ -1307,15 +1335,22 @@ def _steps(item_id: int, run_id: int, head: str):
 
 # -- Prepare these (26 Oct 2026, phase 3) ----------------------------------------------------------
 
-def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False) -> int:
+def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False, only=None) -> int:
     """Each chosen job waiting on the list that can go has its resume (tailored where it can be; one
     tailored and approved before is used as it is) and cover letter made ready now, and written down --
     each file and its checksum -- with no form opened and nothing sent. Apply to these then gives each
     form exactly those files. Best fit first; a job made ready already is not made again; one whose
     posting asks what the profile leaves unanswered waits; one that cannot go leaves the list with
-    the reason, as on a run. One run at a time: never beside Apply to these. Returns how many."""
+    the reason, as on a run. One run at a time: never beside Apply to these. Returns how many.
+
+    Only the jobs on the list when the person pressed (4 Nov 2026), or the ones named (`only`, item ids:
+    a morning pick's Prepare): a job added meanwhile -- the morning's picks, at 6 AM -- is never made
+    ready by a press made before it came. Nothing is made unless the person pressed."""
     from backend.apply import runner
     run = start_run(os.getpid())
+    with get_session() as session:
+        on_list = {i for (i,) in session.query(ApplyItem.id).filter(ApplyItem.state == QUEUED)}
+    among = on_list & {int(i) for i in only} if only is not None else on_list
     _, label, free = runner.writer(cfg)
     if not free and not paid_ok:                             # cover letters use it too, tailoring or not
         why = (f"Not prepared: tailoring and cover letters would use {label}, which bills per use. Press "
@@ -1333,7 +1368,7 @@ def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False)
                 why = f"Paused: {made} made ready; the rest when you press Prepare these again."
                 finish_run(run.id, "paused", why)
                 break
-            item_id = _next_to_prepare(cfg, applicant, run.id, search, taken)
+            item_id = _next_to_prepare(cfg, applicant, run.id, search, taken, among)
             if item_id is None:
                 why = f"Done: {made} made ready, nothing sent. Apply to these gives each form exactly those files."
                 finish_run(run.id, "done", why)
@@ -1347,11 +1382,13 @@ def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False)
     return made
 
 
-def _next_to_prepare(cfg, applicant, run_id: int, search, taken: set) -> int | None:
-    """The next job to make ready -- best fit first, not made ready already -- taken (validating); or None."""
+def _next_to_prepare(cfg, applicant, run_id: int, search, taken: set, among=None) -> int | None:
+    """The next job to make ready -- best fit first, not made ready already, and one of `among` (the jobs
+    the press was for) -- taken (validating); or None."""
     from backend.apply import runner
     with get_session() as session:
-        queued = session.query(ApplyItem).filter(ApplyItem.state == QUEUED).order_by(ApplyItem.position).all()
+        queued = [i for i in session.query(ApplyItem).filter(ApplyItem.state == QUEUED).order_by(ApplyItem.position)
+                  if among is None or i.id in among]
         have = {i for (i,) in session.query(ApplyArtifact.item_id).filter(ApplyArtifact.state == "ready",
                                                                           ApplyArtifact.kind == "resume")}
         have -= {i.id for i in queued if i.id in have and _redo(i.job_id)}    # made again: see _one
@@ -1480,7 +1517,8 @@ def _settle(item_id: int, outcome, wait_s: float) -> None:
         _try(item_id, PENDING, action=f"No confirmation was seen in {wait_s / 60:g} minutes, and it may "
                                       "have gone. " + CHECK_IF_SENT, expect=FORM_OPEN)
     elif result == "handoff":
-        _try(item_id, PENDING, action="Send it from your own Chrome (its page lists every answer), then say "
+        _try(item_id, PENDING, action=(f"{outcome.detail} " if outcome.detail else "")
+             + "Send it from your own Chrome (its page lists every answer), then say "
                                       "whether it went.", expect=FORM_OPEN)
     elif result == "stopped":
         _try(item_id, QUEUED, note="Back in the queue: the app's browser was closed.", expect=FORM_OPEN)

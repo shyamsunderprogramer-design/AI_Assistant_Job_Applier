@@ -329,7 +329,7 @@ def test_a_writer_that_bills_writes_only_once_the_person_says_yes(db, desk, clie
         assert asked.status_code == 409 and asked.get_json()["paid_writer"] == "Anthropic API"
         assert len(started) == before                                # asked, not started
         assert c.post(route, json={"paid": True}).get_json()["ok"] is True
-        assert started[-1] == (task, [*runner_args(task), "--paid-ok"])
+        assert started[-1] == (task, [*runner_args(task), "--paid-ok", "--items", str(item_of(1).id)])
     assert runner.prepare_chosen(cfg, paid_ok=True) == 1 and desk.calls == [1]
 
 

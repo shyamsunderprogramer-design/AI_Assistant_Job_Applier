@@ -122,6 +122,12 @@ def _paid_args(task: str) -> list[str]:
     return TASKS[task] + (["--paid-ok"] if _body().get("paid") is True else [])
 
 
+def _pressed_for() -> list[str]:
+    from backend.apply import execution
+    ids = execution.queued_ids()
+    return ["--items", ",".join(map(str, ids))] if ids else []
+
+
 @app.post("/apply/chosen/start")
 def apply_chosen_start():
     """Apply to these, or Resume: the jobs the person chose, and no others. Refused while another
@@ -141,7 +147,8 @@ def apply_chosen_start():
     refused = _paid_refusal(state, "A resume or cover letter made on the way")
     if refused:
         return refused
-    return start_task("apply-chosen", _paid_args("apply-chosen"))
+    # The jobs waiting now, written down at the press: one added after it waits for the next press.
+    return start_task("apply-chosen", _paid_args("apply-chosen") + _pressed_for())
 
 
 @app.post("/apply/chosen/prepare")
@@ -165,7 +172,7 @@ def apply_chosen_prepare():
     refused = _paid_refusal(state, "Tailoring and cover letters")
     if refused:
         return refused
-    return start_task("prepare-chosen", _paid_args("prepare-chosen"))
+    return start_task("prepare-chosen", _paid_args("prepare-chosen") + _pressed_for())
 
 
 @app.post("/apply/chosen/pause")

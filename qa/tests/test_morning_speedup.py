@@ -580,10 +580,28 @@ def test_switched_off_the_evening_does_nothing(gh, monkeypatch):
     assert cloud_results.evening(say=[].append, now=at(20)) == "not set up"
 
 
-def test_the_switch_is_off_in_the_settings_as_shipped():
-    settings = yaml.safe_load((ROOT / "backend" / "config" / "config.yaml").read_text())
-    assert settings["cloud"]["trigger_runs"] is False
-    assert cloud_results.trigger_on() is False
+def test_the_switch_is_off_in_the_settings_as_shipped(tmp_path, monkeypatch):
+    """Off as shipped, and on only by a real `true`. Read from copies of the project's settings, never the
+    person's own file: their switch is theirs (switched on 3 Nov 2026), and this test must not depend on it."""
+    from backend.config import loader
+    shipped = yaml.safe_load((ROOT / "backend" / "config" / "config.yaml").read_text())
+    assert "trigger_runs" in (shipped.get("cloud") or {})                     # the switch is there to be found
+
+    def reads(cloud):
+        settings = {k: v for k, v in shipped.items() if k != "cloud"}
+        if cloud is not None:
+            settings["cloud"] = cloud
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(settings))
+        monkeypatch.setattr(loader, "load_config", lambda p=path: loader.Config(yaml.safe_load(path.read_text())))
+        return cloud_results.trigger_on()
+
+    assert reads(None) is False                                               # a copy that never set it: off
+    assert reads({}) is False
+    assert reads({"trigger_runs": False}) is False
+    for not_quite in ("true", "yes", 1, "on"):                                # only a real true switches it on
+        assert reads({"trigger_runs": not_quite}) is False
+    assert reads({"trigger_runs": True}) is True
 
 
 # -- the board search waits, and carries on from the same name --------------------------------------

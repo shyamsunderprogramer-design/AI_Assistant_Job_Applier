@@ -20,6 +20,26 @@
   </div>
 </header>
 
+{# The morning's picks (4 Nov 2026, step 2 of the Morning shortlist plan; backend/apply/shortlist.py):
+   the jobs the morning added to Your chosen jobs below, with why each was picked, and Remove, Not today
+   and Restore. Shown only when the app answers /apply/picks: an app started before this existed leaves
+   the card out, and the rest of the page is as it was. Nothing here prepares, opens or sends anything. #}
+<section class="card" id="picks-card" hidden aria-labelledby="picks-title">
+  <div class="card-head">
+    <h2 id="picks-title">This morning's picks</h2>
+    <div class="row"><a class="btn" href="/setup#picks-settings">Pick settings</a>
+      <button class="btn primary" id="picks-prepare" type="button" data-pk="prepare" hidden
+        title="Make each waiting pick's resume and cover letter ready now: nothing is sent">Prepare today's picks</button></div>
+  </div>
+  <div class="sub" id="picks-note"></div>
+  <div class="sub ch-say" id="picks-say" role="status"></div>
+  <div id="picks-list"><p class="sub dim">Loading…</p></div>
+  <details class="pk-more" id="picks-aside-box" hidden><summary id="picks-aside-title">Removed or put off by you</summary>
+    <div id="picks-aside"></div></details>
+  <details class="pk-more" id="picks-left-box" hidden><summary id="picks-left-title">Why the others were left out</summary>
+    <div class="hint" id="picks-left-when"></div><ol class="pk-left" id="picks-left"></ol></details>
+</section>
+
 {# The jobs the person ticked on the Jobs page and added here (24 Oct 2026): applied to only on
    Apply to these, never swapped for the app's own picks, and kept in the database, so a crash or a
    restart never loses where each one stands (backend/apply/execution.py). #}
@@ -117,6 +137,20 @@
 .nx-out{margin:4px 0 0;padding-left:18px}
 .nx-out li{margin:3px 0}
 @media (max-width:640px){.nx-hide-sm{display:none}}
+/* This morning's picks (4 Nov 2026): the chosen list's own table, states and decisions, reused. */
+.pk-why summary,.pk-more summary{cursor:pointer;font-size:.9em;color:var(--muted)}
+.pk-more{margin-top:10px}
+.pk-more summary{font-weight:600;font-size:1em;color:inherit}
+.pk-why ul{margin:4px 0 0;padding-left:1.1em;font-size:.9em}
+.pk-left{margin:6px 0 0;padding-left:1.4em;font-size:.9em;max-height:320px;overflow:auto}
+.pk-left li{margin:3px 0;overflow-wrap:anywhere}
+.pk-aside td{vertical-align:middle}
+.pk-aside .btn,.pk-why summary{white-space:nowrap}
+/* A pick's status (4 Nov 2026): the chosen list's colours -- moving, needs you, done well, went wrong, off. */
+.pk-st-preparing,.pk-st-form,.pk-st-review{background:var(--signal-soft);color:var(--signal-ink)}
+.pk-st-answers,.pk-st-approval,.pk-st-confirm,.pk-st-manual{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.pk-st-applied{color:var(--good)} .pk-st-failed{color:var(--crit)}
+.pk-st-off,.pk-st-gone{background:transparent;border-color:color-mix(in srgb,var(--muted) 55%,transparent);color:var(--muted)}
 </style>
 
 <section class="card">
@@ -646,5 +680,132 @@ loadNext();
 fetch('/run/apply/status').then(r => r.json()).then(s => {
   if (s.running) { $('next-out').textContent = s.tail || 'An apply run is going…'; follow('apply', $('apply-next'), 'next-out', afterNext); }
 }).catch(() => {});
+</script>
+
+<script>
+// -- This morning's picks (4 Nov 2026) ------------------------------------------------------------
+// The jobs the morning added to Your chosen jobs, each with why it was picked and its entry there as
+// that list shows it. Remove (never picked again) and Not today (considered again tomorrow) take a
+// pick's entry off the list while it waits; Restore brings back a job set aside. Only the morning's
+// picks have these buttons: the jobs you chose yourself are never touched from here.
+let picksTimer = null;
+const pkDay = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
+const pkLink = u => /^https?:\/\//i.test(u || '') ? u : '';
+// Prepare is the only way a pick's documents are made (4 Nov 2026): never by the morning, never by itself.
+let PK_RUNNING = false;
+function pickButtons(p) {
+  const off = title => ` disabled title="${title}"`;
+  const keep = p.can.remove ? '' : off('On its way, waiting for your answer, applied to, or removed already: it stays as it is');
+  const later = p.can.defer ? '' : off('Not today is for a pick waiting on your list');
+  const prep = p.can.prepare ? `<button class="btn small" type="button" data-pk="prepare" data-job="${p.job_id}"${
+    PK_RUNNING ? ' disabled title="A run is going: its documents are made when it is free"' : ''}>Prepare</button>` : '';
+  return `<a class="btn small" href="/job/${p.job_id}">Review</a>` + prep
+    + `<button class="btn small" type="button" data-pk="defer" data-job="${p.job_id}"${later}>Not today</button>`
+    + `<button class="btn small" type="button" data-pk="remove" data-job="${p.job_id}"${keep}>Remove</button>`;
+}
+function pickRow(p) {
+  const e = p.entry;
+  const where = [p.company, p.location, p.workplace].filter(Boolean).map(esc).join(' · ');
+  const link = pkLink(p.posting);
+  // One word for where it stands (the plan's statuses), read from its entry on Your chosen jobs.
+  const st = p.stage || {key: 'gone', label: 'Off your list', hint: ''};
+  const state = `<span class="pill pk-st-${esc(st.key)}">${esc(st.label)}</span>${e ? ` <span class="hint">${esc(e.updated)}</span>` : ''}`
+    + (st.hint ? `<div class="hint">${esc(st.hint)}</div>` : '')
+    + (st.key === 'answers' ? '<div class="hint"><a href="/apply/questions">Answer them</a></div>' : '');
+  const why = (p.reasons || []).length ? `<details class="pk-why"><summary>Why it was picked</summary><ul>${
+    p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul></details>` : '';
+  const buttons = pickButtons(p);
+  return `<tr data-pick="${p.job_id}">
+    <td class="num">${fit(p.score)}</td>
+    <td class="ch-job"><a href="/job/${p.job_id}"><b>${esc(p.title || 'Job ' + p.job_id)}</b></a>
+      <div class="hint">${where}</div>
+      ${link ? `<div class="hint"><a href="${esc(link)}" target="_blank" rel="noopener noreferrer">The employer's posting</a></div>` : ''}</td>
+    <td>${state}${e ? decisionHtml(e.decision, false) : ''}${why}
+      <div class="ch-acts ch-acts-narrow">${buttons}</div></td>
+    <td class="ch-acts-wide"><div class="ch-acts">${buttons}</div></td></tr>`;
+}
+function pickNote(d) {
+  const rep = d.report || {}, today = rep.day === d.day;
+  if (!d.enabled) return `Morning picks are off. Switched on (<a href="/setup#picks-settings">Pick settings</a>), each morning adds
+    up to ${d.per_day} of your best matches (${d.min_score}% or more) to Your chosen jobs for you to review. Nothing is
+    prepared or sent by itself: you press Prepare these, Apply to these, and Submit on every form.`;
+  if (today && rep.note && rep.note.includes('details are not complete'))
+    return `<span class="ch-need">Nothing picked this morning: ${esc(rep.note.replace(/^nothing picked: /, ''))}.</span>
+      <a href="/applicant">Finish your details</a>.`;
+  if (!d.picks.length) return today ? `None of this morning's matches passed every check${rep.note ? ': ' + esc(rep.note) : ''}. See why below.`
+                                    : 'No picks yet today: the morning run adds them.';
+  return `Up to ${d.per_day} a day, ${d.min_score}% or more. Each is on Your chosen jobs below, and goes only when you press
+    Apply to these — you press Submit on every form a morning pick fills.`;
+}
+function drawPicks(d) {
+  $('picks-card').hidden = false;
+  PK_RUNNING = !!d.running;
+  const waiting = d.picks.filter(p => p.can.prepare).length;
+  $('picks-prepare').hidden = !waiting && !d.preparing;
+  $('picks-prepare').disabled = PK_RUNNING;
+  setText($('picks-prepare'), d.preparing ? 'Preparing…' : `Prepare today's picks (${waiting})`);
+  setText($('picks-title'), d.picks.length ? `This morning's picks (${d.picks.length})` : "This morning's picks");
+  setHTML($('picks-note'), pickNote(d));
+  setHTML($('picks-list'), d.picks.length ? `<div class="t-table-wrap"><table class="nx-jobs"><thead><tr>
+      <th class="num">Fit</th><th>Job</th><th>Where it stands</th><th class="ch-acts-wide"><span class="sr-only">What you can do</span></th>
+    </tr></thead><tbody>${d.picks.map(pickRow).join('')}</tbody></table></div>` : '');
+  const aside = d.set_aside || [];
+  $('picks-aside-box').hidden = !aside.length;
+  setText($('picks-aside-title'), `Removed or put off by you (${aside.length})`);
+  setHTML($('picks-aside'), aside.length ? `<div class="t-table-wrap"><table class="nx-jobs pk-aside"><tbody>${aside.map(a => `<tr>
+      <td class="ch-job"><a href="/job/${a.job_id}"><b>${esc(a.title || 'Job ' + a.job_id)}</b></a><div class="hint">${esc(a.company)}</div></td>
+      <td><span class="hint">${a.word === 'removed' ? 'Removed: never picked again' : `Not today: considered again after ${esc(pkDay(a.until))}`}</span></td>
+      <td><button class="btn small" type="button" data-pk="restore" data-job="${a.job_id}">Restore</button></td></tr>`).join('')}</tbody></table></div>` : '');
+  const rep = d.report || {}, left = rep.left_out || [];
+  $('picks-left-box').hidden = !left.length;
+  setText($('picks-left-title'), `Why the others were left out (${left.length})`);
+  setText($('picks-left-when'), rep.at ? `Checked ${new Date(rep.at).toLocaleString()} · ${rep.considered} of your best matches looked at` : '');
+  setHTML($('picks-left'), left.slice(0, 100).map(r => `<li><b>${esc(r.score)}%</b> ${esc(r.company)} — ${esc(r.title)}:
+    <span class="hint">${esc(r.reason)}</span></li>`).join('') + (left.length > 100 ? `<li class="hint">…and ${left.length - 100} more</li>` : ''));
+}
+async function loadPicks() {
+  clearTimeout(picksTimer);
+  let res, d;
+  try { res = await fetch('/apply/picks'); } catch (e) { res = null; }
+  if (res && res.status === 404) { $('picks-card').hidden = true; return; }       // an app without picks yet
+  try { d = res && res.ok ? await res.json() : null; } catch (e) { d = null; }
+  if (!d || !d.ok) {
+    $('picks-card').hidden = false;
+    setHTML($('picks-note'), '');
+    setHTML($('picks-list'), '<p class="load-error" role="alert">This morning\'s picks could not be loaded. '
+      + '<button class="btn" id="picks-retry" type="button">Try again</button></p>');
+    $('picks-retry').onclick = () => { setHTML($('picks-list'), '<p class="sub dim">Loading…</p>'); loadPicks(); };
+    return;
+  }
+  drawPicks(d);
+  picksTimer = setTimeout(loadPicks, d.running ? 3000 : 60000);           // each step shows while a run goes
+}
+const PK_ASK = {remove: 'Remove this job from the morning\'s picks for good? Its place on Your chosen jobs is cancelled; nothing was sent.',
+                defer: 'Not today? Its place on Your chosen jobs is cancelled, and it is considered again tomorrow (not promised a place).'};
+const PK_SAID = {remove: 'Removed: it is never picked again (Restore undoes it).', defer: 'Put off until tomorrow.',
+                 restore: 'Restored: it is considered again from the next morning.',
+                 prepare: 'Making the resume and cover letter ready — nothing is sent. Each step shows on Your chosen jobs below.'};
+async function pkPost(word, body) {
+  try {
+    const res = await fetch(`/apply/picks/${word}`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                     body: JSON.stringify(body)});
+    return await res.json().catch(() => ({ok: false, error: `The app hit an error (${res.status}).`}));
+  } catch (err) { return {ok: false, error: 'The app did not answer. Try again.'}; }
+}
+$('picks-card').addEventListener('click', async e => {
+  const b = e.target.closest('[data-pk]');
+  if (!b || b.disabled) return;
+  const word = b.dataset.pk, job = +b.dataset.job || null;
+  if (PK_ASK[word] && !confirm(PK_ASK[word])) return;
+  b.disabled = true;
+  const body = job ? {job_id: job} : {};
+  let r = await pkPost(word, body);
+  // A writer that bills per use writes only after your yes, asked here as on Prepare these (26 Oct 2026).
+  if (!r.ok && r.paid_writer && confirm(`${r.error} Use it for these?`)) r = await pkPost(word, {...body, paid: true});
+  $('picks-say').textContent = r.ok ? PK_SAID[word] : (r.error || 'That could not be done.');
+  loadPicks();
+  if (typeof loadSoon === 'function') loadSoon();         // Your chosen jobs, drawn again with it
+});
+loadPicks();
 </script>
 {% endblock %}

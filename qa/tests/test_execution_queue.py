@@ -388,7 +388,7 @@ def test_the_page_shows_each_job_and_the_activity_and_takes_the_controls(client)
     assert c.post("/apply/chosen/confirm", json={"item": 1, "went": "yes"}).status_code == 400
     assert c.post("/apply/chosen/retry", json={"item": item_of(1).id}).status_code == 409   # queued: no retry
     assert c.post("/apply/chosen/start").get_json() == {"ok": True}
-    assert started == [("apply-chosen", ["apply", "--chosen"])]
+    assert started == [("apply-chosen", ["apply", "--chosen", "--items", f"{item_of(1).id},{item_of(3).id}"])]
     assert c.post("/apply/chosen/cancel", json={"item": item_of(1).id}).get_json() == {"ok": True}
     assert c.post("/apply/chosen/start").status_code == 409             # nothing left that can go
 

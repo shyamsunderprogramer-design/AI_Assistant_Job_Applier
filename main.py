@@ -697,7 +697,8 @@ def cmd_prepare_apply(cfg, args) -> int:
     if getattr(args, "chosen", False):
         from backend.apply.runner import NotReady, prepare_chosen
         try:
-            prepare_chosen(cfg, tailor=not args.no_tailor, paid_ok=args.paid_ok)
+            only = [int(i) for i in args.items.split(",") if i.strip()] if getattr(args, "items", None) else None
+            prepare_chosen(cfg, tailor=not args.no_tailor, paid_ok=args.paid_ok, only=only)
         except NotReady as exc:
             print(f"Can't prepare yet. {exc}")
             return 2
@@ -790,6 +791,11 @@ def cmd_setup_helper(cfg, args) -> int:
     return 0
 
 
+def _items(raw):
+    """--items 3,4,9: the entries a press covered, or None for all those waiting."""
+    return [int(i) for i in raw.split(",") if i.strip()] if raw else None
+
+
 def cmd_apply(cfg, args) -> int:
     """Fill application forms in a visible browser: the app's picks, the prepared ones, the
     person's chosen ones, or one job by its number."""
@@ -800,7 +806,8 @@ def cmd_apply(cfg, args) -> int:
         outcomes = run(cfg, limit=args.limit, job_id=args.job_id,
                        tailor=not args.no_tailor, wait_minutes=args.wait,
                        prepared=getattr(args, "prepared", False),
-                       chosen=getattr(args, "chosen", False), paid_ok=getattr(args, "paid_ok", False))
+                       chosen=getattr(args, "chosen", False), paid_ok=getattr(args, "paid_ok", False),
+                       only=_items(getattr(args, "items", None)))
     except NotReady as exc:
         print(f"Can't apply yet. {exc}")
         return 2
@@ -1182,6 +1189,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Apply to the jobs made ready with Prepare now (Apply page)")
     p_apply.add_argument("--chosen", action="store_true",
                          help="Apply to the jobs you chose on the Jobs page (Auto-apply page: Apply to these)")
+    p_apply.add_argument("--items", default=None,
+                         help="With --chosen: only these entries (item ids, commas between): the ones waiting "
+                              "when Apply to these was pressed")
 
     p_prep = sub.add_parser(
         "prepare-apply", help="Tailor, write letters and list questions for the day's top matches")
@@ -1189,6 +1199,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_prep.add_argument("--min-fit", type=float, default=None, help="Lowest fit, 0-1 (default apply.auto.min_fit)")
     p_prep.add_argument("--chosen", action="store_true",
                         help="Make the jobs you chose ready instead (Auto-apply page: Prepare these); nothing is sent")
+    p_prep.add_argument("--items", default=None,
+                        help="With --chosen: only these entries (item ids, commas between): a morning pick's Prepare")
     p_prep.add_argument("--no-tailor", action="store_true",
                         help="With --chosen: never tailor; use what exists or your own resume's best lines")
     for runs in (p_prep, p_apply):

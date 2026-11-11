@@ -3119,3 +3119,4 @@ from backend.api import written_pages  # noqa: E402,F401
 from backend.api import morning_pages  # noqa: E402,F401
 from backend.api import welcome_pages  # noqa: E402,F401
 from backend.api import chosen_pages  # noqa: E402,F401
+from backend.api import shortlist_pages  # noqa: E402,F401

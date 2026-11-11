@@ -298,6 +298,17 @@ def _rank_and_gather(report: DailyReport, cfg, cutoff) -> None:
 
     _run_stage(report, "digest", _collect)
 
+    # -- 5. the morning's picks for the chosen-jobs list (backend/apply/shortlist.py) ---------------
+    # Off unless switched on (shortlist.enabled). Picks only: no document made, no form opened, nothing
+    # sent. Again after the night's top-up, to the same day's limit: a job is picked once, ever.
+    from backend.apply import shortlist
+    if shortlist.enabled(cfg):
+        got = _run_stage(report, "shortlist", lambda: shortlist.pick(
+            cfg, say=lambda line: print(f"{datetime.now():%H:%M:%S}  {line}", flush=True)))
+        if isinstance(got, dict):
+            report.stages[-1].detail = (f"{len(got['picked'])} picked for your chosen jobs, "
+                                        f"{got['picked_today']} today")
+
 
 def render_digest(report: DailyReport, cfg, top: int = 10) -> str:
     """The digest, as plain text. This is what the user actually reads."""

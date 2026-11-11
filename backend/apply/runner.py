@@ -63,6 +63,11 @@ class Outcome:
 # (Lever's hCaptcha: "There was an error verifying your application"). The app fills the form to
 # learn what it asks, then hands it over: the person sends it from their own browser.
 HANDOFF = (re.compile(r"^https://jobs\.(?:eu\.)?lever\.co/", re.I),)
+# A site's "are you a person?" check: waited out this long in the app's browser (the person may tick
+# its box there), then the job goes to the person's own browser -- the app never works around one.
+CHECK_WAIT_S = 180
+CHECK_HANDOFF = ("The site asks the browser to prove it is a person, and that check did not clear in the "
+                 "app's browser in 3 minutes. Nothing was sent.")
 
 
 def hands_off(url: str) -> bool:
@@ -661,7 +666,7 @@ def _ready_applicant(cfg) -> Applicant:
 
 def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
         wait_minutes: float | None = None, browser_factory=None,
-        prepared: bool = False, chosen: bool = False, paid_ok: bool = False) -> list[Outcome]:
+        prepared: bool = False, chosen: bool = False, paid_ok: bool = False, only=None) -> list[Outcome]:
     applicant = _ready_applicant(cfg)
     wait_s = 60 * float(wait_minutes if wait_minutes is not None
                         else cfg.get("apply.wait_minutes", DEFAULT_WAIT_MINUTES))
@@ -670,7 +675,7 @@ def run(cfg, *, limit: int = 10, job_id: int | None = None, tailor: bool = True,
         # time, each checked again just before it goes (backend/apply/execution.py).
         from backend.apply import execution
         return execution.work(cfg, applicant, browser_factory=browser_factory, tailor=tailor, wait_s=wait_s,
-                              paid_ok=paid_ok)
+                              paid_ok=paid_ok, only=only)
 
     ready = {}
     if prepared:
@@ -809,11 +814,12 @@ class Prepared:
     origins: dict = field(default_factory=dict)
 
 
-def prepare_chosen(cfg, *, tailor: bool = True, paid_ok: bool = False) -> int:
+def prepare_chosen(cfg, *, tailor: bool = True, paid_ok: bool = False, only=None) -> int:
     """Prepare these: the chosen jobs' resumes and cover letters made ready and written down, each
-    file with its checksum; no form opened, nothing sent (backend/apply/execution.prepare_these)."""
+    file with its checksum; no form opened, nothing sent (backend/apply/execution.prepare_these).
+    `only`: these entries (item ids), a morning pick's Prepare."""
     from backend.apply import execution
-    return execution.prepare_these(cfg, _ready_applicant(cfg), tailor=tailor, paid_ok=paid_ok)
+    return execution.prepare_these(cfg, _ready_applicant(cfg), tailor=tailor, paid_ok=paid_ok, only=only)
 
 
 def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
@@ -978,7 +984,13 @@ def _apply_anywhere(cfg, page, job, applicant, head, outcome, kept, letter, resu
     start = apply_link(job)
     own = start != job.application_url
     say(f"{head}: opening {'the page you added' if own else f'the posting on {job.source}'} · {resume_note}")
-    reached = anyform.reach(page, start, say=say, check_s=min(wait_s, 300))
+    reached = anyform.reach(page, start, say=say, check_s=min(wait_s, CHECK_WAIT_S))
+    if reached.stop == "check":
+        # A check that wants a person, not this browser: the person's own Chrome, never Failed and
+        # never Applied -- the job waits for their word on whether it went.
+        result = anyform.FillResult(job_id=job.id, url=start)
+        return _hand_off(job, start, result, head, outcome, kept, letter, resume_note, evidence,
+                         reason=CHECK_HANDOFF)
     if reached.error:
         say(f"{head}: not filled: {reached.error}")
         outcome.detail = reached.error
@@ -1060,6 +1072,7 @@ def _hand_off(job, url, result, head, outcome, kept, letter, resume_note, eviden
         "when this window closes. The job page lists "
         "every answer with a Copy button and the files to attach; say there once it's sent.")
     outcome.result, outcome.how, outcome.handoff = "handoff", "you", url
+    outcome.detail = reason if reason == CHECK_HANDOFF else ""
     return outcome
 
 

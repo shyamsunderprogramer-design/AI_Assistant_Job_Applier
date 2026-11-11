@@ -363,3 +363,61 @@ class DocumentApproval(Base):
     artifact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision: Mapped[str] = mapped_column(String(16))                   # approved | rejected
     decided_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ShortlistBase(DeclarativeBase):
+    """The morning's picks' own tables, kept out of Base on purpose (4 Nov 2026): every process's
+    startup (init_engine: Base.metadata.create_all) would otherwise add them to the person's database
+    while the shortlist is switched off. backend/apply/shortlist.ensure_tables creates them, and only
+    once the shortlist is switched on and picks, or the person removes or puts off a job."""
+
+
+class ShortlistPick(ShortlistBase):
+    """One job the morning picked for the chosen-jobs list (backend/apply/shortlist.py, 3 Nov 2026):
+    when, on which day, by which rules and why. A job is picked at most once a day -- (job, day) is
+    unique -- so a second morning run, a top-up or two processes at once never pick it twice; and on a
+    later day only when the person brought it back (Not today, Restore). Written in the same transaction
+    as its entry on the list. Never edited."""
+
+    __tablename__ = "shortlist_picks"
+    __table_args__ = (UniqueConstraint("job_id", "day", name="uq_shortlist_pick_job_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)            # the person's own date, YYYY-MM-DD
+    picked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    rule_version: Mapped[str] = mapped_column(String(24))
+    reasons: Mapped[str] = mapped_column(Text, default="[]")            # JSON: why it was picked
+
+
+class ShortlistExclusion(ShortlistBase):
+    """The person's word that the morning should leave a job out (3 Nov 2026): "removed" for good,
+    or "deferred" (Not today) until a time, after which it is considered again like any other job --
+    not promised a place. "restored" undoes either. Never edited: the latest row for a job stands."""
+
+    __tablename__ = "shortlist_exclusions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(16))                       # removed | deferred | restored
+    until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # deferred: UTC
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+
+class ShortlistLink(ShortlistBase):
+    """A listing site's link followed to the employer's own posting, when the morning considered a job
+    found only on a listing site (backend/apply/listings.py, 7 Nov 2026). Each look: the listing link it
+    started from -- the job's own link is never changed -- where it led, and what came of it. Never
+    edited: the latest row for a job stands."""
+
+    __tablename__ = "shortlist_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    from_url: Mapped[str] = mapped_column(String(1024))                 # the listing's link, as it was
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)   # the employer's posting found
+    outcome: Mapped[str] = mapped_column(String(16))                    # found | none | blocked | error
+    detail: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

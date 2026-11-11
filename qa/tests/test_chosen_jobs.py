@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend.apply import chosen, runner
+from backend.apply import chosen, execution, runner
 from data_engineering.db import session as session_mod
 from data_engineering.db.models import Job
 from data_engineering.db.session import get_session, init_engine
@@ -267,7 +267,7 @@ def test_apply_to_these_starts_one_run_of_the_chosen_jobs_and_is_refused_when_it
     assert r.status_code == 409 and "already" in r.get_json()["error"] and started == []
     monkeypatch.setattr("backend.api.chosen_pages.task_pid", lambda task: None)
     assert c.post("/apply/chosen/start").get_json() == {"ok": True}
-    assert started == [("apply-chosen", ["apply", "--chosen"])]
+    assert started == [("apply-chosen", ["apply", "--chosen", "--items", ",".join(map(str, execution.queued_ids()))])]
 
 
 def test_no_two_apply_runs_share_the_browser_whichever_button_starts_them(client, monkeypatch):
