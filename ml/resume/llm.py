@@ -253,9 +253,27 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
     that needs fixing, and falling back would hide it.
     """
     provider = provider_name(cfg)
+    billed = not PROVIDERS.get(provider, {}).get("free", False)
+    # Only a writer verified to cost nothing per use, or a billed one inside a spending limit the person said yes
+    # to, or one they named (ml/resume/writers, A1.1.1). Refused here, before anything is sent.
+    from ml.resume import writers
+    writers.require(provider, cfg, model=model_name(cfg) if provider == "ollama" else None)
     try:
         if _resting(provider):
             raise ProviderBusy(f"{provider} said it was busy a few minutes ago")
+        if billed:
+            # A preparation's hard limit (ml/resume/cost.budget): priced before, recorded after.
+            from ml.resume import cost
+            if not cost.active_budgets():
+                return _dispatch(provider, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
+            held = cost.check_billed_call(model_name(cfg), system + "\n" + user, max_tokens, cfg)
+            answer = None
+            try:
+                answer = _dispatch(provider, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
+                return answer
+            finally:
+                cost.settle_billed_call(getattr(answer, "model", "") or model_name(cfg),
+                                        getattr(answer, "usage", None), held, cfg)
         return _dispatch(provider, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
     except ProviderBusy as exc:
         _BUSY_UNTIL[provider] = time.monotonic() + BUSY_REST_S
@@ -265,6 +283,8 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
         # Another plan the person is signed in to answers in about a minute; the
         # Ollama cloud models took five (a 15-minute tailoring run, 7 Oct 2026).
         for other in other_plans(provider, cfg):
+            if not writers.verdict(other, cfg)[0]:      # checked again where it is used (A1.1.1)
+                continue
             log.warning("Trying %s for this request", other)
             try:
                 return _dispatch(other, system, user, cfg, max_tokens=max_tokens, want_json=want_json)
@@ -275,6 +295,8 @@ def complete(system: str, user: str, cfg=None, *, max_tokens: int = 16000,
         failed = model_name(cfg) if provider == "ollama" else ""
         last = exc
         for backup in fallback_models(cfg, skip=failed):
+            if not writers.verdict("ollama", cfg, model=backup)[0]:    # a cloud model bills per token (A1.1.1)
+                continue
             log.warning("Trying %s for this request", backup)
             try:
                 return _ollama(system, user, cfg, want_json=want_json, model=backup)
@@ -299,10 +321,12 @@ def other_plans(provider: str, cfg=None) -> list[str]:
     """The other chat plans signed in on this Mac and not resting, to try before Ollama."""
     if not _setting(cfg, "resume.fallback_to_plans", True):
         return []
-    from ml.resume import plans
+    from ml.resume import plans, writers
     out = []
     for name, tool in PLAN_PROVIDERS.items():
         if name == provider or _resting(name):
+            continue
+        if not writers.verdict(name, cfg)[0]:          # not verified to cost nothing per use (A1.1.1)
             continue
         try:
             if plans.status(tool)["signed_in"]:
@@ -354,7 +378,11 @@ def fallback_models(cfg=None, skip: str = "") -> list[str]:
     listed = _setting(cfg, "resume.fallback_models", []) or []
     wanted = [*[str(m) for m in listed], str(_setting(cfg, "resume.ollama.model", "")),
               *LOCAL_PREFERENCE]
-    return [m for m in dict.fromkeys(wanted) if m and m != skip and m in installed]
+    # Only a model on this Mac: Ollama bills its cloud models per token (ml/resume/writers, A1.1.1). The list in
+    # config.yaml is kept as it is; a cloud model in it is skipped unless the person allowed "ollama-cloud".
+    from ml.resume import writers
+    return [m for m in dict.fromkeys(wanted) if m and m != skip and m in installed
+            and writers.verdict("ollama", cfg, model=m)[0]]
 
 
 def local_model(cfg=None) -> str | None:

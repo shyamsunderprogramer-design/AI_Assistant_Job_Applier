@@ -144,7 +144,7 @@ def test_the_resume_being_made_ready_is_followed_step_by_step(db, monkeypatch):
     lines reached only the run's log, and minutes of tailoring showed no step on the page."""
     cfg, _, folder = db
 
-    def prepare(cfg, job, applicant, head, *, tailor):
+    def prepare(cfg, job, applicant, head, *, tailor, **_):
         runner.say(f"{head}: tailoring the resume (round 1 of 3)")
         runner.say(f"{head}: writing the cover letter")
         (folder / "resume.pdf").write_bytes(b"%PDF-1.4 made-up resume")

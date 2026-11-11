@@ -60,7 +60,7 @@ class Desk:
         path.write_bytes(words.encode())
         return path
 
-    def prepare_documents(self, cfg, job, applicant, head, *, tailor):
+    def prepare_documents(self, cfg, job, applicant, head, *, tailor, **_):
         self.calls.append(job.id)
         for kind in ("resume", "letter"):
             if not self.own(job.id, kind).exists():
@@ -289,12 +289,18 @@ def test_documents_made_on_the_way_are_written_down_and_checked_just_before_the_
 def test_which_writers_bill_per_use(db):
     cfg, _, _ = db
     free = {name for name in llm.PROVIDERS if runner.writer({"resume.provider": name})[2]}
-    assert free == {"ollama", "claude-code", "chatgpt", "gemini", "omniroute"}
+    # Only those verified to cost nothing per use (A1.1.1, ml/resume/writers): ChatGPT, Gemini and OmniRoute
+    # count as free only once the person names them in resume.allow_writers.
+    assert free == {"ollama", "claude-code"}
+    named = {name for name in llm.PROVIDERS
+             if runner.writer({"resume.provider": name, "resume.allow_writers": ["chatgpt", "gemini", "omniroute"]})[2]}
+    assert named == {"ollama", "claude-code", "chatgpt", "gemini", "omniroute"}
     assert runner.writer({"resume.provider": "anthropic"}) == ("anthropic", "Anthropic API", False)
 
 
 def test_a_busy_writer_falls_back_only_to_free_ones_never_to_one_that_bills(monkeypatch):
     tried = []
+    llm._BUSY_UNTIL.clear()                 # no "busy" left from another test (A1.1.1 review: it failed once so)
 
     def dispatch(provider, system, user, cfg, *, max_tokens, want_json):
         tried.append(provider)
@@ -310,6 +316,12 @@ def test_a_busy_writer_falls_back_only_to_free_ones_never_to_one_that_bills(monk
     monkeypatch.setenv("RESUME_PROVIDER", "claude-code")
     with pytest.raises(llm.ProviderBusy):
         llm.complete("system", "user", {})
+    # A1.1.1: only writers verified to cost nothing per use -- ChatGPT and Gemini are not, unless named.
+    assert tried == ["claude-code", "ollama:gemma4:e4b"]
+    tried.clear()
+    llm._BUSY_UNTIL.clear()
+    with pytest.raises(llm.ProviderBusy):
+        llm.complete("system", "user", {"resume.allow_writers": ["chatgpt", "gemini"]})
     assert tried == ["claude-code", "chatgpt", "gemini", "ollama:gemma4:e4b"]
     assert all(llm.PROVIDERS[name.split(":")[0]]["free"] for name in tried)
 

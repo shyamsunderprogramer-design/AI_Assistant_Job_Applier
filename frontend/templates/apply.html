@@ -402,6 +402,9 @@ function chosenRow(i) {
   const acts = [
     i.can.cancel ? `<button class="btn small" type="button" data-ch="cancel" data-item="${i.id}">Cancel</button>` : '',
     i.can.retry ? `<button class="btn small" type="button" data-ch="retry" data-item="${i.id}">Retry</button>` : '',
+    i.can.again ? `<button class="btn small" type="button" data-ch="again" data-item="${i.id}" title="A new tailored resume for this job (about 9 minutes); the earlier one is kept">Tailor it again</button>` : '',
+    i.can.earlier ? `<button class="btn small" type="button" data-ch="earlier" data-item="${i.id}" title="Send the earlier tailored resume as it is">Use the earlier one</button>` : '',
+    i.can.own ? `<button class="btn small" type="button" data-ch="own" data-item="${i.id}" title="Your own lines, selected for this job, nothing reworded">Use my own resume</button>` : '',
     i.can.confirm ? `<button class="btn primary small" type="button" data-ch="yes" data-item="${i.id}">Yes, it went</button>
                      <button class="btn small" type="button" data-ch="no" data-item="${i.id}">No, it wasn't sent</button>` : '',
     `<button class="btn small" type="button" data-steps="${i.id}" aria-expanded="${open}">${open ? 'Hide steps' : 'Steps'}</button>`];
@@ -645,6 +648,15 @@ $('chosen-list').addEventListener('click', e => {
   b.disabled = true;
   if (b.dataset.ch === 'cancel') chosenPost('/apply/chosen/cancel', {item}, 'Cancelled: it will not be opened.');
   if (b.dataset.ch === 'retry') chosenPost('/apply/chosen/retry', {item}, 'Back in the queue.');
+  if (b.dataset.ch === 'again') chosenPost('/apply/chosen/tailor-again', {item}, 'A new tailored resume is made for it when its turn comes.');
+  if (b.dataset.ch === 'earlier') {
+    if (!confirm('Send its earlier tailored resume as it is? It was made from other inputs (an earlier version of your resume or of the posting). You can still check it before it goes.')) { b.disabled = false; return; }
+    chosenPost('/apply/chosen/use-earlier', {item}, 'Its earlier tailored resume is chosen: back in the queue.');
+  }
+  if (b.dataset.ch === 'own') {
+    if (!confirm('Send your own resume for this job instead of a tailored one? Your own lines are selected for it; nothing is reworded. You can still check it before it goes.')) { b.disabled = false; return; }
+    chosenPost('/apply/chosen/own-resume', {item}, 'Your own resume is chosen for it: back in the queue.');
+  }
   if (b.dataset.ch === 'yes') chosenPost('/apply/chosen/confirm', {item, went: true}, 'Recorded as applied.');
   if (b.dataset.ch === 'no') chosenPost('/apply/chosen/confirm', {item, went: false}, 'Recorded as not sent: Retry puts it back in the queue.');
 });

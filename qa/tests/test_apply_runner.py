@@ -67,7 +67,7 @@ class Element:
 
 class Page:
     def __init__(self, *, fields=(), dropdowns=None, labels=(), required=(),
-                 captcha=False, confirm_on_submit=True):
+                 captcha=False, confirm_on_submit=True, before_submit=lambda: None):
         self.elements = {}
         for field_id in ["first_name", "last_name", "email", "phone", *fields]:
             self.elements[field_id] = Element(self, field_id, required=field_id in required)
@@ -188,7 +188,7 @@ def test_current_company_and_title_come_from_the_profile():
 
 def test_a_blank_required_question_stops_an_automatic_submit():
     page = Page(fields=["q9"], labels=[("Why do you want to work here?*", "q9")])
-    result = fill(page, 1, "u", person(), submit=True)
+    result = fill(page, 1, "u", person(), submit=True, before_submit=lambda: None)
     assert result.required_blank and not page.submitted
 
 
@@ -197,7 +197,7 @@ def test_a_resume_that_did_not_attach_stops_an_automatic_submit(tmp_path):
     del page.elements["resume"]
     resume = tmp_path / "r.pdf"
     resume.write_text("x")
-    result = fill(page, 1, "u", person(), resume, submit=True)
+    result = fill(page, 1, "u", person(), resume, submit=True, before_submit=lambda: None)
     assert "resume" in result.required_blank and not page.submitted
 
 
@@ -205,7 +205,7 @@ def test_everything_answered_and_no_captcha_submits(tmp_path):
     resume = tmp_path / "r.pdf"
     resume.write_text("x")
     page = Page()
-    result = fill(page, 1, "u", person(), resume, submit=True)
+    result = fill(page, 1, "u", person(), resume, submit=True, before_submit=lambda: None)
     assert result.submitted and page.submitted
 
 
@@ -284,9 +284,11 @@ def ready(monkeypatch, tmp_path):
     resume = tmp_path / "base_resume.pdf"
     resume.write_text("my resume")
     monkeypatch.setattr(runner, "load", lambda path: person())
-    monkeypatch.setattr(runner, "choose_resume", lambda cfg, job, tailor=True: (resume, "base resume"))
+    monkeypatch.setattr(runner, "choose_resume", lambda cfg, job, tailor=True, **_: (resume, "base resume"))
     monkeypatch.setattr(runner, "cover_letter", lambda cfg, job, evidence: None)
-    return Cfg({"limits.max_applications_per_day": 15, "resume.min_score": 0.5})
+    # Its job folders in its own place, never the project's output folder (found 8 Nov 2026).
+    return Cfg({"limits.max_applications_per_day": 15, "resume.min_score": 0.5,
+                "resume.output_dir": str(tmp_path / "output")})
 
 
 def test_a_submitted_application_is_recorded(db, ready, capsys, monkeypatch):

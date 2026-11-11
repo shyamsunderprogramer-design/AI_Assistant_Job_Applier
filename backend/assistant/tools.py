@@ -96,8 +96,8 @@ def job_detail(job_id: int) -> dict:
             "description": (job.description or "")[:DESCRIPTION_CHARS],
             "description_truncated": len(job.description or "") > DESCRIPTION_CHARS,
         })
-        company, title, external = job.company, job.title, job.external_id or ""
-    out["documents"] = _documents(company, title, external)
+        company, title, external, job_key = job.company, job.title, job.external_id or "", job.id
+    out["documents"] = _documents(company, title, external, job_key)
     return out
 
 
@@ -330,13 +330,16 @@ def _years(job) -> str:
     return f"{job.experience_min_years}+"
 
 
-def _documents(company: str, title: str, external: str) -> dict:
+def _documents(company: str, title: str, external: str, job_id: int | None = None) -> dict:
     from ml.resume.packet import packet_root
     from ml.resume.writer import output_filename
     from backend.config.loader import load_config
+    from ml.tailoring import coordination
 
     stem = output_filename(company, title, external)[:-5]
     root = packet_root(load_config())
-    return {"tailored_resume": (root / f"{stem}.pdf").exists(),
+    published = coordination.current(job_id) if job_id is not None else None    # the job's resume (Track A1)
+    return {"tailored_resume": published is not None or (root / f"{stem}.pdf").exists(),
+            "resume_version": published.version if published is not None else None,
             "review_note": (root / f"{stem}_review.txt").exists(),
             "selected_resume": (root / f"{stem}_selected.pdf").exists()}

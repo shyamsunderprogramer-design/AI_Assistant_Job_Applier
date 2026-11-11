@@ -110,6 +110,8 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
     if pending_review is not None:
         try:
             recruiter = pending_review.result(timeout=600)
+        except __import__('ml.resume.cost', fromlist=['SpendCapReached']).SpendCapReached:
+            raise                      # the recruiter's read hit the hard limit: the run stops (A1.1)
         except Exception as exc:
             review_note = f"The recruiter review could not be made ({str(exc)[:100]})."
     pool.shutdown(wait=False)
@@ -176,6 +178,7 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         "versions": versions.as_dicts(version_checks),
         "changes": draft.changes,
         "draft_note": draft.problem,
+        "draft_state": getattr(draft, "state", "tailored"),
         "gaps": [asdict(m) for m in report.gaps],
         "review": {"recruiter": recruiter, "skim": skim,
                    "needs_numbers": reviewing.needs_numbers(_bullets(rendered.docx)),
@@ -191,7 +194,7 @@ def run(folder: Path, resume_file: Path, jd_text: str = "", jd_file: Path | None
         "draft": _draft_json(draft),
         "title": draft.title,
     }
-    (folder / "result.json").write_text(json.dumps(result, indent=1, default=str))
+    _write_json(folder / "result.json", result, indent=1, default=str)
     return result
 
 
@@ -491,7 +494,7 @@ def restore_line(folder: Path, line: str) -> dict:
     data["draft"] = _draft_json(draft)
     data.setdefault("restored", []).append(line.strip())
     _rescore(folder, data)
-    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    _write_json(folder / "result.json", data, indent=1, default=str)
     _place_if_job(folder, data)
     return data
 
@@ -517,20 +520,17 @@ def roadmap_for(folder: Path, cfg=None) -> dict:
         cfg = load_config()
     skills = roadmap.build(master, jd, gaps, cfg)
     data["roadmap"] = {"skills": skills, "made": datetime.now().isoformat(timespec="minutes")}
-    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    _write_json(folder / "result.json", data, indent=1, default=str)
     return data["roadmap"]
 
 
 def _place_if_job(folder: Path, data: dict) -> None:
-    """A job's run, once the person changes it, is what that job's application attaches."""
+    """A job's run, once the person changes it, is what that job's application attaches: published as a
+    new version of its resume (Track A1), so the edited files are what goes -- and, being different files,
+    they wait for the person's approval again."""
     job = job_of_run(folder)
     if job and job.get("docx"):
-        packet = Path(job["packet"]) if job.get("packet") else None
-        place_for_job(folder, Path(job["docx"]), packet)
-        record = _job_record(job["job_id"])
-        record.update(best=folder.name, run=folder.name, edited=True)
-        JOBS.mkdir(parents=True, exist_ok=True)
-        (JOBS / f"{job['job_id']}.json").write_text(json.dumps(record))
+        publish_edit(int(job["job_id"]), folder, note="edited by you")
         data["placed_for_job"] = True
 
 
@@ -560,7 +560,7 @@ def change_template(folder: Path, template: str, look: dict | None = None) -> di
     data["template_note"] = (f"In this template the resume runs to {pages} pages, past the {most} it was "
                              f"made for. Choose a shorter length or the Compact template."
                              if most and pages > most else "")
-    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    _write_json(folder / "result.json", data, indent=1, default=str)
     _place_if_job(folder, data)
     return data
 
@@ -589,7 +589,7 @@ def apply_edits(folder: Path, edits: dict[str, str]) -> dict:
         _rescore(folder, data)
     except Exception as exc:
         log.info("Rescore after edit, %s: %s", folder.name, exc)
-    (folder / "result.json").write_text(json.dumps(data, indent=1, default=str))
+    _write_json(folder / "result.json", data, indent=1, default=str)
     # The person's edits are the resume they mean to send: a job's run, once
     # edited, becomes what the application attaches, whatever its score.
     # Without this the edits stayed in the run and an older file went out.
@@ -659,6 +659,14 @@ def place_for_job(folder: Path, target_docx: Path, packet: Path | None = None) -
         put_resume(packet, folder / "tailored-resume.docx", folder / "tailored-resume.pdf")
 
 
+def _write_json(path: Path, data, indent=None, default=None) -> None:
+    """Write a record whole or not at all: a reader never finds half of one (Track A1)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:6]}.tmp")
+    temp.write_text(json.dumps(data, indent=indent, default=default))
+    os.replace(temp, path)
+
+
 def _job_record(job_id: int) -> dict:
     try:
         return json.loads((JOBS / f"{job_id}.json").read_text())
@@ -670,7 +678,7 @@ def remember_job_run(job_id: int, folder: Path, target_docx: Path, packet: Path 
     JOBS.mkdir(parents=True, exist_ok=True)
     record = _job_record(job_id)
     record["run"] = folder.name                      # the latest, which the page follows
-    (JOBS / f"{job_id}.json").write_text(json.dumps(record))
+    _write_json(JOBS / f"{job_id}.json", record)
     (folder / "job.json").write_text(json.dumps({"job_id": job_id, "docx": str(target_docx),
                                                  "packet": str(packet) if packet else None}))
 
@@ -718,7 +726,7 @@ def finish_job_run(job_id: int, folder: Path, target_docx: Path, score: float,
         redo_done(job_id)
     record["run"] = folder.name
     JOBS.mkdir(parents=True, exist_ok=True)
-    (JOBS / f"{job_id}.json").write_text(json.dumps(record))
+    _write_json(JOBS / f"{job_id}.json", record)
     return better
 
 
@@ -744,7 +752,7 @@ def mark_redo(job_ids, reason: str) -> None:
         marked = {}
     marked.update({str(j): reason for j in job_ids})
     REDO.parent.mkdir(parents=True, exist_ok=True)
-    REDO.write_text(json.dumps(marked, indent=1))
+    _write_json(REDO, marked, indent=1)
 
 
 def redo_done(job_id: int) -> None:
@@ -753,7 +761,7 @@ def redo_done(job_id: int) -> None:
     except (OSError, ValueError):
         return
     if marked.pop(str(job_id), None) is not None:
-        REDO.write_text(json.dumps(marked, indent=1))
+        _write_json(REDO, marked, indent=1)
 
 
 def job_run(job_id: int) -> str | None:
@@ -761,8 +769,15 @@ def job_run(job_id: int) -> str | None:
 
 
 def job_best(job_id: int) -> tuple[str | None, float | None]:
+    """The job's best FINISHED run and its score, or (None, None). Until Nov 2026 a job with no best yet
+    answered with its latest run -- one still running, crashed or failed -- and Prepare now took that
+    for done (Track A1). The latest run, finished or not, is `job_run`."""
     record = _job_record(job_id)
-    return record.get("best") or record.get("run"), record.get("best_score")
+    best = record.get("best")
+    folder = folder_of(best) if best else None
+    if folder is None or not (folder / "result.json").is_file():
+        return None, None
+    return best, record.get("best_score")
 
 
 def job_of_run(folder: Path) -> dict | None:
@@ -770,3 +785,472 @@ def job_of_run(folder: Path) -> dict | None:
         return json.loads((folder / "job.json").read_text())
     except (OSError, ValueError):
         return None
+
+
+# -- one canonical preparation for a job's resume (Track A1, Nov 2026) --------------------------------------
+#
+# Every normal way a job gets its resume -- Prepare now, Prepare these, Apply to these, a morning pick's
+# Prepare, the job page's Tailor, the assistant -- comes here. Here, and only here:
+#
+#   * one preparation per job at a time (ml/tailoring/coordination: a claim, kept alive, fenced);
+#   * the same inputs are not tailored twice (`repeat_key`): the resume and the lines added to it, the
+#     titles kept for each job, the posting, the template and length, the writer, and these rules;
+#   * only a TAILORED draft is published. A draft the writer could not write, or whose rewrite the
+#     fabrication guard rejected, is the resume's own words: never published as if tailored. The job
+#     fails with that reason, and the person may choose their own resume instead (`use_own_resume`);
+#   * the DOCX and the PDF are published together, as a new version, and only while the claim is held;
+#   * cancelling stops it at the next stage; nothing made after a cancel is published;
+#   * a writer that bills is used only with the person's yes and a spending limit, which every call of
+#     the preparation counts against (ml/resume/cost.budget).
+#
+# The older engine (ml/resume/pipeline.tailor_jobs) is reached only by `main.py tailor --legacy`.
+
+RULES_VERSION = "a1.1-2026-11-08"
+OWN = PROJECT_ROOT / "data" / "tailoring" / "own"          # the person's own resume, as chosen for a job
+
+
+class TailoringFailed(Exception):
+    """Why a job's resume was not made, as {kind, message}: shown to the person, never hidden behind a
+    substitute. Kinds: no_resume, no_posting, paid_not_allowed, no_spend_limit, busy, claim_unreadable,
+    claim_lost, cancelled, spend_limit, stage, not_tailored, not_published, error, earlier_outdated, no_earlier,
+    writer_not_approved, choice_not_saved (A1.1.1)."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind, self.message = kind, message
+
+
+class JobBusy(ValueError):
+    """The job's resume is being made or changed elsewhere right now: try again when it is done."""
+
+
+class TailoringCancelled(TailoringFailed):
+    def __init__(self):
+        super().__init__("cancelled", "Cancelled by you: nothing was made for it.")
+
+
+from dataclasses import dataclass as _dataclass   # noqa: E402 -- kept beside what uses it
+
+
+@_dataclass
+class PreparedResume:
+    publication: object               # coordination.Publication
+    reused: bool
+    note: str
+    run_id: str | None
+    score: float | None = None
+
+    @property
+    def pdf(self) -> Path:
+        return self.publication.pdf
+
+    @property
+    def docx(self) -> Path:
+        return self.publication.docx
+
+
+def _sha_file(path: Path | None) -> str:
+    import hashlib
+    if path is None or not Path(path).is_file():
+        return ""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _contact_fingerprint() -> str:
+    """The contact line the profile puts on every tailored resume (ml/resume/writer.applicant_contact_line)."""
+    import hashlib
+    try:
+        from ml.resume.writer import applicant_contact_line
+        line = applicant_contact_line()
+        text = "" if line is None else f"{line(False)}|{line(True)}"
+    except Exception:                         # noqa: BLE001 -- no profile: the resume's own line is used
+        text = ""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def repeat_key(cfg, job, resume_file: Path, *, source: str = "tailored", template: str | None = None,
+               look: dict | None = None) -> str:
+    """What makes two preparations of a job the same: the same inputs, the same rules, the same writer.
+    A change to any of them is a new preparation, and its new files wait for approval again. The inputs:
+    the resume, the lines added to it, the titles kept, the profile's contact line, the posting and its
+    requirements, the company, the template (chosen, or the configured default) and its look, the length
+    and page limits, the writer and its model, and these rules (A1.1 added the template default, the look,
+    the contact line and the requirements)."""
+    import hashlib
+    from ml.resume import llm
+    from ml.resume.additions import ADDITIONS_PATH
+    from ml.resume.titles import TITLES_PATH as titles
+    get = (lambda k, d=None: cfg.get(k, d)) if cfg is not None else (lambda k, d=None: d)
+    parts = {
+        "rules": RULES_VERSION, "source": source, "job": int(job.id),
+        "resume": _sha_file(resume_file), "additions": _sha_file(ADDITIONS_PATH), "titles": _sha_file(titles),
+        "posting": hashlib.sha256(f"{job.title}\n\n{job.description or ''}".encode()).hexdigest(),
+        "company": job.company or "",
+        "requirements": hashlib.sha256((job.requirements or "").encode()).hexdigest(),
+        "template": template or str(get("resume.template", "") or ""),
+        "look": json.dumps(look or {}, sort_keys=True), "contact": _contact_fingerprint(),
+        "length": str(get("resume.length", "auto")), "max_pages": str(get("resume.max_pages", "")),
+        "writer": llm.provider_name(cfg), "model": llm.model_name(cfg) if source == "tailored" else "",
+    }
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
+
+
+def job_template(cfg, job) -> str:
+    """The template a job's resume is made in unless the person chooses another: the one picked for the job
+    (ml/resume/style.for_job), the job page's own default -- every entry point the same (A1.1 review)."""
+    from ml.resume.style import DEFAULT, for_job
+    default = ((cfg.get("resume.template", DEFAULT) if cfg is not None else DEFAULT) or DEFAULT)
+    try:
+        return for_job(job.source or "", job.company or "", job.title or "", job.description or "",
+                       default=default, clearance=getattr(job, "clearance", None) or "")[0]
+    except Exception:                          # noqa: BLE001 -- the configured default, as the run would use
+        return default
+
+
+def _posting_problem(job) -> str | None:
+    from ml.resume.scorer import score_basis
+    text = (job.description or "").strip()
+    if not text:
+        return "the job has no posting text to tailor to"
+    if score_basis(text) != "full":
+        return (f"the posting is only a {len(text.split())}-word teaser from the job board; paste the full posting "
+                "on the job's page first")
+    return None
+
+
+def _writer_allowed(cfg, paid_ok: bool):
+    """(budget or None). A writer that bills needs the person's yes AND a spending limit above zero."""
+    from backend.apply import runner
+    from ml.resume import writers
+    from ml.resume.cost import Ledger
+    problem = writers.primary_problem(cfg)          # not verified to cost nothing per use (A1.1.1): fail closed
+    if problem:
+        raise TailoringFailed("writer_not_approved", problem)
+    _, label, free = runner.writer(cfg)
+    if free:
+        return None
+    if not paid_ok:
+        raise TailoringFailed("paid_not_allowed", f"Tailoring would use {label}, which bills per use, and you have "
+                                                  "not said yes to that for this run.")
+    cap = float((cfg.get("resume.max_spend_per_run_usd", 0) if cfg is not None else 0) or 0)
+    if cap <= 0:
+        raise TailoringFailed("no_spend_limit", f"Tailoring would use {label}, which bills per use, and no spending "
+                                                "limit is set (resume.max_spend_per_run_usd): it is not used without one.")
+    return Ledger(cap_usd=cap)
+
+
+def _better(job_id: int, folder: Path, score: float | None) -> bool:
+    """Should this run replace the job's current tailored version? As finish_job_run decided it: a rewrite
+    that does worse never replaces a better one, unless it was made from a newer resume."""
+    from ml.tailoring import coordination
+    current = coordination.current(job_id)
+    if current is None or current.source != "tailored":
+        return True
+    record = _job_record(job_id)
+    best = record.get("best_score") if record.get("measure") == "ats" else None
+    source, best_source = source_of(folder), record.get("best_source")
+    newer_resume = bool(source and best_source and source != best_source)
+    return best is None or (score or 0) >= best or newer_resume
+
+
+def _settle(cfg, job, folder: Path, lease, *, key: str, score: float | None, note: str,
+            export: tuple[Path, Path | None] | None = None) -> object:
+    """Publish a finished run as the job's newest version, then keep the job's record and its folder
+    copies (exports, never read to send) in step."""
+    from ml.resume.packet import packet_dir, packet_root
+    from ml.resume.writer import output_filename
+    from ml.tailoring import coordination
+    published = coordination.publish(lease, docx=folder / "tailored-resume.docx", pdf=folder / "tailored-resume.pdf",
+                                     source="tailored", repeat_key=key, run_id=folder.name, note=note)
+    record = _job_record(job.id)
+    record.update(best=folder.name, best_score=score, best_source=source_of(folder), measure="ats", run=folder.name)
+    _write_json(JOBS / f"{job.id}.json", record)
+    redo_done(job.id)
+    try:                                    # the job page's and the folder's copies: shown, never sent
+        if export is not None:              # where the run itself says its job's copies go (job.json)
+            target, packet = export
+        else:
+            target = packet_root(cfg) / output_filename(job.company, job.title, job.external_id or "")
+            packet = packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id)
+        place_for_job(folder, target, packet)
+    except Exception as exc:                # noqa: BLE001 -- a copy for show never fails a preparation
+        log.warning("Could not refresh the job folder's copy for job %s: %s", job.id, exc)
+    return published
+
+
+def earlier_resume(job, resume_file: Path) -> tuple[Path | None, str | None]:
+    """The job's resume tailored before Track A1 -- its best finished, really tailored run with both files --
+    and why it cannot be used as it is (None when it can: made from the resume as it reads now, for the
+    posting as it reads now). (None, None) when there is none. Never changed or deleted here (A1.1: the
+    person's 141 earlier resumes are kept; one made from other inputs is used only on their word)."""
+    best, _ = job_best(job.id)
+    folder = folder_of(best) if best else None
+    if folder is None:
+        return None, None
+    try:
+        result = json.loads((folder / "result.json").read_text())
+    except (OSError, ValueError):
+        return None, None
+    if result.get("draft_note") or result.get("draft_state", "tailored") != "tailored":
+        return None, None
+    if not (folder / "tailored-resume.docx").is_file() or not (folder / "tailored-resume.pdf").is_file():
+        return None, None
+    posting = folder / "inputs" / "job.txt"
+    if not posting.is_file() or posting.read_text() != f"{job.title}\n\n{job.description or ''}":
+        return folder, "was made for an earlier version of this posting"
+    probe = new_run()
+    try:
+        save_saved_resume(probe, resume_file)
+        if source_of(probe) != source_of(folder):
+            return folder, "was made from an earlier version of your resume"
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    return folder, None
+
+
+EARLIER_CHOICE = ("It is kept as it was. Press Tailor it again for a new one (about 9 minutes), or Use the earlier "
+                  "one to send it as it is.")
+
+
+def use_earlier_resume(cfg, job) -> object:
+    """The person's word: send the job's earlier tailored resume as it is, though made from other inputs. Published
+    as the job's current version, with that said; never chosen by the app (A1.1)."""
+    from ml.resume.pipeline import base_resume_path
+    from ml.tailoring import coordination
+    folder, why = earlier_resume(job, base_resume_path(cfg))
+    if folder is None:
+        raise TailoringFailed("no_earlier", "This job has no earlier tailored resume to use.")
+    try:
+        lease = coordination.acquire(job.id, "Use the earlier one")
+    except coordination.CoordinationError as exc:
+        raise TailoringFailed("busy", str(exc)) from None
+    try:
+        # The key as every Prepare computes it -- the job's own template, not the configured default (A1.1.1:
+        # without it a startup or government posting's next Prepare made a new one over the person's choice).
+        published = _settle(cfg, job, folder, lease,
+                            key=repeat_key(cfg, job, base_resume_path(cfg), template=job_template(cfg, job)),
+                            score=_job_record(job.id).get("best_score"),
+                            note=CHOSEN_NOTE + (f" ({why})" if why else ""))
+        # And the choice itself, by its version: kept by every Prepare until the person asks for a new one
+        # (Tailor it again, Re-tailor), whatever changed meanwhile -- the template, the look, the resume.
+        try:
+            record = _job_record(job.id)
+            record["chosen_version"] = published.version
+            _write_json(JOBS / f"{job.id}.json", record)
+        except OSError as exc:              # published, but the choice not kept: said so, never "not published"
+            raise TailoringFailed("choice_not_saved", f"Your earlier resume is now the job's version "
+                                  f"{published.version}, but your choice could not be written down ({exc}). Press "
+                                  "Use the earlier one again so that a later Prepare keeps it.") from None
+        return published
+    except coordination.CoordinationError as exc:
+        raise TailoringFailed("not_published", str(exc)) from None
+    except OSError as exc:
+        raise TailoringFailed("not_published", f"The earlier resume could not be published: {exc}") from None
+    finally:
+        coordination.release(lease)
+
+
+CHOSEN_NOTE = "your earlier tailored resume, chosen by you"
+
+
+def chosen_by_person(job_id: int, current) -> bool:
+    """Is the job's current version the earlier one the person chose (Use the earlier one)? By version, so a
+    newer version -- tailored again, edited, their own resume -- ends the choice by itself (A1.1.1)."""
+    return current is not None and _job_record(job_id).get("chosen_version") == current.version
+
+
+def prepare_for_job(cfg, job, *, purpose: str, again: bool = False, paid_ok: bool = False,
+                    cancelled=None, lease=None, folder: Path | None = None, template: str | None = None,
+                    look: dict | None = None) -> PreparedResume:
+    """The job's resume, tailored and published -- or TailoringFailed with why. `again` makes it anew even
+    when nothing changed; `cancelled()` is asked at every stage; a caller that took the job's claim itself
+    (to answer at once that it is busy) passes it as `lease`, and its own run folder as `folder`."""
+    from ml.resume import cost
+    from ml.resume.pipeline import base_resume_path
+    from ml.tailoring import coordination
+
+    cancelled = cancelled or (lambda: False)
+    try:
+        resume_file = base_resume_path(cfg)
+    except FileNotFoundError as exc:
+        raise TailoringFailed("no_resume", str(exc)) from None
+    problem = _posting_problem(job)
+    if problem:
+        raise TailoringFailed("no_posting", problem[0].upper() + problem[1:] + ".")
+    ledger = _writer_allowed(cfg, paid_ok)
+    template = template or job_template(cfg, job)       # the same template, so the same key, from every entry point
+    own_lease = lease is None
+    if own_lease:
+        try:
+            lease = coordination.acquire(job.id, purpose)
+        except coordination.LeaseBusy as exc:
+            raise TailoringFailed("busy", str(exc)) from None
+        except coordination.LeaseUnreadable as exc:
+            raise TailoringFailed("claim_unreadable", str(exc)) from None
+    beating = coordination.keep_alive(lease)
+    try:
+        key = repeat_key(cfg, job, resume_file, template=template, look=look)
+        redo = bool(needs_redo(job.id))
+        current = coordination.current(job.id)
+        if not again and not redo and current is not None:
+            if current.source == "own_resume":
+                return PreparedResume(current, True, "your own resume, chosen by you", current.run_id)
+            if chosen_by_person(job.id, current):        # never made again over the person's own choice
+                return PreparedResume(current, True, CHOSEN_NOTE, current.run_id,
+                                      _job_record(job.id).get("best_score"))
+            if current.repeat_key == key:
+                return PreparedResume(current, True, "tailored before for this posting, unchanged since",
+                                      current.run_id, _job_record(job.id).get("best_score"))
+        if not again and not redo and current is None:
+            earlier, why = earlier_resume(job, resume_file)
+            if earlier is not None and why is None:       # the very same inputs: published as it is
+                try:
+                    adopted = _settle(cfg, job, earlier, lease, key=key, score=_job_record(job.id).get("best_score"),
+                                      note="tailored before Nov 2026 from the same resume and posting")
+                except coordination.LeaseLost as exc:
+                    raise TailoringFailed("claim_lost", str(exc)) from None
+                except (coordination.CoordinationError, OSError) as exc:
+                    raise TailoringFailed("not_published", str(exc)) from None
+                return PreparedResume(adopted, True, "tailored before for this posting", adopted.run_id,
+                                      _job_record(job.id).get("best_score"))
+            if earlier is not None:                       # other inputs: kept, and the person chooses
+                raise TailoringFailed("earlier_outdated", f"its earlier tailored resume {why}. {EARLIER_CHOICE}")
+        if cancelled():
+            raise TailoringCancelled()
+        from ml.resume.packet import packet_dir, packet_root
+        from ml.resume.writer import output_filename
+        folder = folder or new_run()
+        resume = save_saved_resume(folder, resume_file)
+        target = packet_root(cfg) / output_filename(job.company, job.title, job.external_id or "")
+        remember_job_run(job.id, folder, target,
+                         packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id))
+        _progress(folder, stage=0, done=False, error=None, note="")
+
+        def follow(stage, note=""):
+            if lease.lost:
+                raise TailoringFailed("claim_lost", "Another preparation took this job over; this one stopped.")
+            if cancelled():
+                raise TailoringCancelled()
+            _progress(folder, stage=STAGES.index(stage), note=note)
+
+        try:
+            if ledger is not None and not cost.active_budgets():   # a run's own budget, when it has one, counts it
+                with cost.budget(ledger):
+                    result = run(folder, resume, f"{job.title}\n\n{job.description or ''}", None, cfg,
+                                 progress=follow, company=job.company, template=template, look=look)
+            else:
+                result = run(folder, resume, f"{job.title}\n\n{job.description or ''}", None, cfg,
+                             progress=follow, company=job.company, template=template, look=look)
+        except TailoringFailed as exc:
+            _progress(folder, done=True, error={"stage": "", "file": None, "message": exc.message})
+            raise
+        except cost.SpendCapReached as exc:
+            _progress(folder, done=True, error={"stage": "", "file": None, "message": str(exc)})
+            raise TailoringFailed("spend_limit", str(exc)) from None
+        except StageError as exc:
+            _progress(folder, done=True, error={"stage": exc.stage, "file": exc.file, "message": str(exc)})
+            raise TailoringFailed("stage", f"{exc.stage}: {exc}") from None
+        except Exception as exc:              # noqa: BLE001 -- reported, never swallowed into a substitute
+            message = f"{type(exc).__name__}: {str(exc)[:200]}"
+            _progress(folder, done=True, error={"stage": "", "file": None, "message": message})
+            raise TailoringFailed("error", f"Tailoring stopped: {message}") from None
+        if cancelled():
+            _progress(folder, done=True, error={"stage": "", "file": None, "message": "cancelled"})
+            raise TailoringCancelled()
+        state = result.get("draft_state", "tailored")
+        if state != "tailored" or result.get("draft_note"):
+            _progress(folder, done=True, error=None, note="not tailored")
+            raise TailoringFailed("not_tailored", (result.get("draft_note") or "The draft was not tailored.")
+                                  + " Nothing was published: retry, or choose your own resume for this job.")
+        score = (result.get("before_after") or {}).get("ats", [None, result.get("score")])[1]
+        if not redo and not _better(job.id, folder, score):     # one set to be made again is replaced
+            _progress(folder, stage=len(STAGES), done=True, error=None, note="kept the earlier, better one")
+            return PreparedResume(current, True, "tailored again, but the earlier one matches better: kept",
+                                  current.run_id, _job_record(job.id).get("best_score"))
+        try:
+            published = _settle(cfg, job, folder, lease, key=key, score=score, note=purpose)
+        except coordination.LeaseLost as exc:
+            raise TailoringFailed("claim_lost", str(exc)) from None
+        except coordination.CoordinationError as exc:
+            raise TailoringFailed("not_published", str(exc)) from None
+        except OSError as exc:              # a full disk, a file gone: its version is marked failed, none shown
+            raise TailoringFailed("not_published", f"The new resume could not be published: {exc}") from None
+        _progress(folder, stage=len(STAGES), done=True, error=None, note="")
+        return PreparedResume(published, False, "tailored just now", folder.name, score)
+    finally:
+        if own_lease:
+            coordination.release(lease)
+        else:
+            lease._stop.set()
+        beating.join(timeout=1)
+
+
+def publish_edit(job_id: int, folder: Path, *, note: str) -> object:
+    """A job's run, edited by the person: its files published as a new version, under the job's claim. Its
+    copies for show go where the run itself recorded (job.json), as they always did."""
+    from data_engineering.db.models import Job
+    from data_engineering.db.session import get_session
+    from ml.tailoring import coordination
+    with get_session() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError("That run's job is no longer in your jobs list.")
+        session.expunge(job)
+    try:
+        lease = coordination.acquire(job_id, "your edit")
+    except coordination.CoordinationError as exc:
+        raise JobBusy(str(exc)) from None
+    try:
+        owner = job_of_run(folder) or {}
+        export = ((Path(owner["docx"]), Path(owner["packet"]) if owner.get("packet") else None)
+                  if owner.get("docx") else None)
+        if export is None:
+            raise ValueError("This run does not say where its job's files go.")
+        # The key of the version this run was published under: an edit is the person's improvement of that
+        # preparation, so it stays the job's resume -- Prepare now reuses it -- until an input changes (A1.1).
+        made_as = coordination.latest_for_run(job_id, folder.name)
+        key = made_as.repeat_key if made_as is not None else f"edit:{folder.name}:{_sha_file(folder / 'tailored-resume.pdf')}"
+        return _settle(None, job, folder, lease, key=key, score=_job_record(job_id).get("best_score"), note=note,
+                       export=export)
+    finally:
+        coordination.release(lease)
+
+
+def use_own_resume(cfg, job) -> object:
+    """The person's own resume for this job, chosen by them: their own lines, selected for the posting
+    and laid out to its pages -- nothing reworded, no model -- published as the job's newest version.
+    Only ever on the person's press (Track A1): a failed tailoring never falls back to it by itself."""
+    from ml.resume.fit import fit_to_pages
+    from ml.resume.pdf import write_pdf
+    from ml.resume.pipeline import base_resume_path, load_base_resume
+    from ml.resume.tailor import TailorResult
+    from ml.resume.writer import write_tailored_resume
+    from ml.tailoring import coordination
+    try:
+        resume_file = base_resume_path(cfg)
+        base = load_base_resume(cfg)
+    except FileNotFoundError as exc:
+        raise TailoringFailed("no_resume", str(exc)) from None
+    try:
+        lease = coordination.acquire(job.id, "Use my own resume")
+    except coordination.LeaseBusy as exc:
+        raise TailoringFailed("busy", str(exc)) from None
+    except coordination.LeaseUnreadable as exc:
+        raise TailoringFailed("claim_unreadable", str(exc)) from None
+    try:
+        result = TailorResult(summary=None)
+        limit = int((cfg.get("resume.max_pages", 4) if cfg is not None else 4) or 0)
+        if limit > 0:
+            fit_to_pages(base, result, job.description or job.title, requirements=job.requirements,
+                         company=job.company, max_pages=limit)
+        folder = OWN / str(job.id) / (time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6])
+        folder.mkdir(parents=True, exist_ok=False)
+        write_tailored_resume(base, result, folder / "resume.docx")
+        write_pdf(base, result, folder / "resume.pdf")
+        return coordination.publish(lease, docx=folder / "resume.docx", pdf=folder / "resume.pdf",
+                                    source="own_resume", repeat_key=repeat_key(cfg, job, resume_file, source="own_resume"),
+                                    run_id=None, note="your own resume, chosen by you")
+    except coordination.CoordinationError as exc:
+        raise TailoringFailed("not_published", str(exc)) from None
+    finally:
+        coordination.release(lease)

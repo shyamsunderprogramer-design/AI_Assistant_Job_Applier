@@ -148,3 +148,89 @@ def record_usage(ledger: Ledger, model: str, usage, cfg=None) -> CallCost:
 
 class SpendCapReached(Exception):
     """Raised before a call that would breach the configured cap."""
+
+
+# -- a hard limit for a whole preparation (Track A1, Nov 2026) -----------------------------------------
+#
+# A preparation calls the writer in several places -- the posting's requirements, the evidence match,
+# the rewrite, the recruiter's read -- and only the rewrite was ever costed. While a preparation holds a
+# budget, every call to a writer that bills (ml/resume/llm.complete) is priced before it is made and
+# refused if it would pass the cap, and its real usage is recorded after. Process-wide, not per thread:
+# some of those calls run in threads of their own, and a limit a thread could step around is no limit.
+# With two budgets open in one process every billed call counts against both, which can only stop a run
+# early, never let one through.
+
+import threading as _threading
+from contextlib import contextmanager as _contextmanager
+
+_ACTIVE: list[Ledger] = []
+_ACTIVE_LOCK = _threading.Lock()
+
+
+@_contextmanager
+def budget(ledger: Ledger):
+    with _ACTIVE_LOCK:
+        _ACTIVE.append(ledger)
+    try:
+        yield ledger
+    finally:
+        with _ACTIVE_LOCK:
+            if ledger in _ACTIVE:
+                _ACTIVE.remove(ledger)
+            _RESERVED.pop(id(ledger), None)
+
+
+def active_budgets() -> list[Ledger]:
+    with _ACTIVE_LOCK:
+        return list(_ACTIVE)
+
+
+_RESERVED: dict[int, float] = {}        # id(ledger) -> the price of billed calls under way, held against its cap
+
+
+def check_billed_call(model: str, prompt_text: str, expected_output_tokens: int, cfg=None) -> float:
+    """Before a billed call: refuse it if any open budget would pass its cap counting what is spent AND what calls
+    under way may still spend; else hold its price against every open budget until `settle_billed_call`.
+    Priced at the call's full allowed output (A1.1: priced at half of it in A1). Returns the price held."""
+    projected = estimate_call(model, prompt_text, expected_output_tokens, cfg)
+    with _ACTIVE_LOCK:
+        for ledger in _ACTIVE:
+            held = _RESERVED.get(id(ledger), 0.0)
+            if ledger.cap_usd <= 0 or ledger.spent + held + projected > ledger.cap_usd:
+                raise SpendCapReached(
+                    f"The spending limit (${ledger.cap_usd:.2f}) would be passed by the next call (up to "
+                    f"${projected:.3f}; ${ledger.spent:.3f} spent and ${held:.3f} under way), so it was not made.")
+        holders = list(_ACTIVE)
+        for ledger in holders:
+            _RESERVED[id(ledger)] = _RESERVED.get(id(ledger), 0.0) + projected
+    return _Hold(projected, holders)
+
+
+class _Hold(float):
+    """A held price, and the budgets that hold it -- settled against those, not whichever are open later."""
+
+    def __new__(cls, value: float, holders: list):
+        made = super().__new__(cls, value)
+        made.holders = holders
+        return made
+
+
+def settle_billed_call(model: str, usage, held: float, cfg=None) -> None:
+    """After a billed call: its held price is let go by the budgets that held it, and its real cost recorded --
+    or, when no usage came back (it failed after it may have been billed), its full price, so failures still
+    count towards the limit (A1.1 review)."""
+    holders = getattr(held, "holders", None)
+    with _ACTIVE_LOCK:
+        ledgers = list(holders) if holders is not None else list(_ACTIVE)
+        for ledger in ledgers:
+            _RESERVED[id(ledger)] = max(0.0, _RESERVED.get(id(ledger), 0.0) - float(held))
+    for ledger in ledgers:
+        if usage is not None:
+            record_usage(ledger, model, usage, cfg)
+        else:
+            ledger.record(CallCost(model=model, input_tokens=0, output_tokens=0, usd=float(held)))
+
+
+def record_billed_call(model: str, usage, cfg=None) -> None:
+    for ledger in active_budgets():
+        record_usage(ledger, model, usage, cfg)

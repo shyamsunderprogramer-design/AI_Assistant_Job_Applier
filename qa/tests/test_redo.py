@@ -32,36 +32,46 @@ def test_a_marked_job_says_why_until_a_new_version_takes_its_place(redo_file, mo
 
 
 def test_auto_apply_never_attaches_the_old_file(redo_file, monkeypatch):
+    """A marked job's old file is never attached: it is made again first, by the one canonical
+    preparation; and when that fails, nothing takes its place by itself (Track A1, Nov 2026: until then
+    the person's own lines went instead, silently)."""
     old = redo_file / "old.pdf"
     old.write_text("made from the damaged master")
+    new = redo_file / "new.pdf"
+    new.write_text("made again")
     monkeypatch.setattr(runner, "tailored_resume", lambda cfg, job: old)
-    monkeypatch.setattr(runner, "selected_master", lambda cfg, job: redo_file / "selected.pdf")
+    monkeypatch.setattr(runner, "selected_master", lambda cfg, job: (_ for _ in ()).throw(AssertionError("never")))
     pipeline.mark_redo([JOB.id], WHY)
-
     asked = []
 
-    def tailor_again(cfg, job, again=False):
-        asked.append(again)
-        pipeline.redo_done(job.id)              # what finish_job_run does when the new one is placed
-    monkeypatch.setattr(prepare, "_tailor", tailor_again)
-    assert runner.choose_resume(None, JOB) == (old, "tailored just now") and asked == [True]
+    def made_again(cfg, job, **kw):
+        asked.append(kw["again"])
+        pipeline.redo_done(job.id)
+        return SimpleNamespace(pdf=new, note="tailored just now")
+    monkeypatch.setattr(pipeline, "prepare_for_job", made_again)
+    assert runner.choose_resume(None, JOB) == (new, "tailored just now") and asked == [True]
 
-    # Tailoring fails: the person's own lines go, not the damaged file.
+    # Tailoring fails: the reason comes back, and no resume goes -- not the damaged file, not a substitute.
     pipeline.mark_redo([JOB.id], WHY)
-    monkeypatch.setattr(prepare, "_tailor", lambda cfg, job, again=False: 1 / 0)
+
+    def fails(cfg, job, **kw):
+        raise pipeline.TailoringFailed("error", "the writer did not answer")
+    monkeypatch.setattr(pipeline, "prepare_for_job", fails)
     resume, note = runner.choose_resume(None, JOB)
-    assert resume == redo_file / "selected.pdf" and "unavailable" in note
-    assert runner.choose_resume(None, JOB, tailor=False)[0] == redo_file / "selected.pdf"
+    assert resume is None and "the writer did not answer" in note
+    resume, note = runner.choose_resume(None, JOB, tailor=False)
+    assert resume is None and "does not tailor" in note
 
 
 def test_the_morning_preparation_tailors_a_marked_job_again(monkeypatch):
-    monkeypatch.setattr(pipeline, "job_best", lambda job_id: ("old-run", 87.0))
+    """Prepare now goes through the one canonical preparation, which reuses a resume made for unchanged
+    inputs and makes a marked one again (its own tests: qa/tests/test_canonical_preparation.py)."""
+    calls = []
 
-    class Started(Exception):
-        pass
-    monkeypatch.setattr(pipeline, "new_run", lambda: (_ for _ in ()).throw(Started()))
-    monkeypatch.setattr("ml.resume.pipeline.base_resume_path", lambda cfg: Path("base.docx"))
-    assert prepare._tailor(None, JOB) == {"run": "old-run", "ats": 87.0}      # done already: kept
-    pipeline.mark_redo([JOB.id], WHY)
-    with pytest.raises(Started):
-        prepare._tailor(None, JOB)                                            # marked: made again
+    def prepared(cfg, job, **kw):
+        calls.append(kw)
+        return SimpleNamespace(run_id="old-run", score=87.0)
+    monkeypatch.setattr(pipeline, "prepare_for_job", prepared)
+    assert prepare._tailor(None, JOB) == {"run": "old-run", "ats": 87.0}
+    assert prepare._tailor(None, JOB, again=True) == {"run": "old-run", "ats": 87.0}
+    assert [c["again"] for c in calls] == [False, True] and calls[0]["purpose"] == "Prepare now"

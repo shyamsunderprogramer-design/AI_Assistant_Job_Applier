@@ -121,6 +121,7 @@ class FillResult:
     attachments: list[str] = field(default_factory=list)
     captcha: bool = False
     submitted: bool = False
+    held_back: str | None = None    # why the app did not press Submit itself at the last check (A1.1.1)
     screenshot: str | None = None
     error: str | None = None
     given: dict[str, str] = field(default_factory=dict)   # the person's own answers, by question
@@ -275,7 +276,7 @@ def _choose(page, element, answer: str, *, settle_ms: int = 700, label: str = ""
 
 def fill(page, job_id: int, url: str, applicant: Applicant,
          resume_path: Path | None = None, letter_path: Path | None = None,
-         *, submit: bool = False, evidence: Path | None = None) -> FillResult:
+         *, submit: bool = False, evidence: Path | None = None, before_submit=None) -> FillResult:
     """Fill one Greenhouse form. Does not submit unless explicitly told to.
 
     `evidence` is the folder the caller already keeps the resume in; the
@@ -418,6 +419,20 @@ def fill(page, job_id: int, url: str, applicant: Applicant,
         result.screenshot = str(shot)
     except Exception as exc:
         log.debug("Greenhouse %s: no screenshot (%s)", job_id, exc)
+
+    # -- the last check, a moment before the app presses Submit (A1.1.1) ---
+    # Is the attached resume still the job's current, approved version? Asked here, after the form was filled,
+    # because a version can be published while the form is open. Any answer but None -- and a check that
+    # cannot be made -- leaves Submit to the person, told why.
+    if submit and not result.needs_person:
+        try:
+            held = before_submit() if before_submit is not None else "no last check was given"
+        except Exception as exc:                       # noqa: BLE001 -- fail closed
+            held = f"its resume could not be checked again ({type(exc).__name__})"
+        if held:
+            result.held_back = str(held)
+            submit = False
+            log.info("Greenhouse %s: filled, not submitted by the app: %s", job_id, held)
 
     # -- the person presses Submit: show them where it is ----------------
     if not (submit and not result.needs_person):

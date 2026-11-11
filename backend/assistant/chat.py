@@ -169,6 +169,12 @@ def start(message: str, model: str | None = None, runner=subprocess.Popen) -> Tu
     if claude_path() is None:
         turn.error, turn.done = "Claude Code is not installed (the `claude` command was not found).", True
         return turn
+    # Only while it is signed in with a Claude plan -- no bill per use (ml/resume/writers, A1.1.1).
+    from ml.resume import writers
+    ok, why = writers.verdict("claude-code", None)
+    if not ok:
+        turn.error, turn.done = f"Not started: {why}. Nothing was sent.", True
+        return turn
     threading.Thread(target=_run, args=(turn, message, model, runner), daemon=True).start()
     return turn
 

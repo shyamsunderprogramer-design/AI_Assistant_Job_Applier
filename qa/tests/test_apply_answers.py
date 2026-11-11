@@ -41,7 +41,7 @@ def test_an_invisible_captcha_does_not_stop_the_submit(tmp_path):
     resume = tmp_path / "r.pdf"
     resume.write_text("x")
     page = InvisiblePage()
-    result = fill(page, 1, "u", person(), resume, submit=True)
+    result = fill(page, 1, "u", person(), resume, submit=True, before_submit=lambda: None)
     assert not result.captcha and result.submitted and page.submitted
 
 
@@ -49,7 +49,7 @@ def test_it_still_never_submits_with_a_question_unanswered(tmp_path):
     resume = tmp_path / "r.pdf"
     resume.write_text("x")
     page = InvisiblePage(fields=["q9"], labels=[("Desired Salary*", "q9")])
-    result = fill(page, 1, "u", person(), resume, submit=True)
+    result = fill(page, 1, "u", person(), resume, submit=True, before_submit=lambda: None)
     assert not page.submitted and "Desired Salary*" in result.required_blank
 
 

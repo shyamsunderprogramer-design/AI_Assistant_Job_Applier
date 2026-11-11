@@ -204,7 +204,9 @@ def add_stage(job_id: int, stage: str, on: str | None = None, note: str = "") ->
         if job is None:
             raise ValueError("No such job.")
         applied = _when(job.applied_at)
-        if applied and day < applied.date():
+        # The day it was here, as the page shows it -- not in UTC, where an evening application is already
+        # tomorrow and that same evening's step was refused as "before you applied" (A1.1.1).
+        if applied and day < applied.astimezone().date():
             raise ValueError("That is before you applied.")
         data = _stages()
         events = data.setdefault(str(job_id), [])

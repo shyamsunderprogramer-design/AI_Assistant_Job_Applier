@@ -146,7 +146,7 @@ try:
         own = folder / f"documents-{os.getpid()}"          # each process its own: they run at once
         own.mkdir()
         (own / "resume.pdf").write_bytes(b"%PDF-1.4 made-up resume")
-        runner.prepare_documents = lambda cfg, job, applicant, head, *, tailor: runner.Prepared(
+        runner.prepare_documents = lambda cfg, job, applicant, head, *, tailor, **_: runner.Prepared(
             own / "resume.pdf", None, "kept", own)
 
         def fill_form(cfg, page, job, applicant, head, ready, *, auto, wait_s):
@@ -685,7 +685,7 @@ def test_cancel_while_its_documents_are_made_means_its_form_is_never_opened(db, 
     cfg, _, folder = db
     pressed = []
 
-    def cancel_meanwhile(cfg, job, applicant, head, *, tailor):
+    def cancel_meanwhile(cfg, job, applicant, head, *, tailor, **_):
         if job.id == 1 and not pressed:
             pressed.append(execution.cancel(item_of(1).id).state)    # pressed on the page while it tailors
         return made(folder)
@@ -741,7 +741,7 @@ def test_pause_while_its_documents_are_made_stops_before_its_form_opens(db, monk
     cfg, _, folder = db
     asked = []
 
-    def pause_meanwhile(cfg, job, applicant, head, *, tailor):
+    def pause_meanwhile(cfg, job, applicant, head, *, tailor, **_):
         if not asked:
             asked.append(execution.request_pause())
         return made(folder)
@@ -761,7 +761,7 @@ def test_pause_while_its_documents_are_made_stops_before_its_form_opens(db, monk
 def test_a_job_applied_to_another_way_during_a_run_is_applied_not_skipped(db, monkeypatch):
     cfg, _, folder = db
 
-    def an_email_says_it_went(cfg, job, applicant, head, *, tailor):
+    def an_email_says_it_went(cfg, job, applicant, head, *, tailor, **_):
         if job.id == 1:
             runner.record_application(1, {"how": "an employer's email"})
         return made(folder)

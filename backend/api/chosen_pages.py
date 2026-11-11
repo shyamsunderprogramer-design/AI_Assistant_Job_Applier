@@ -135,7 +135,7 @@ def apply_chosen_start():
     are filled in, and when none can go."""
     from backend.api.auto_apply import APPLY_TASKS
     from backend.apply import execution
-    if next((t for t in (*APPLY_TASKS, "prepare-chosen") if task_pid(t)), None) or execution.run_alive():
+    if next((t for t in (*APPLY_TASKS, "prepare", "prepare-chosen") if task_pid(t)), None) or execution.run_alive():
         return jsonify(ok=False, error=BUSY), 409
     state = execution.view(cfg())
     if state["details_missing"]:
@@ -159,7 +159,7 @@ def apply_chosen_prepare():
     when every one that can go is ready already."""
     from backend.api.auto_apply import APPLY_TASKS
     from backend.apply import execution
-    if next((t for t in (*APPLY_TASKS, "prepare-chosen") if task_pid(t)), None) or execution.run_alive():
+    if next((t for t in (*APPLY_TASKS, "prepare", "prepare-chosen") if task_pid(t)), None) or execution.run_alive():
         return jsonify(ok=False, error="A run is going already (applying, or making documents ready). "
                                        "Let it finish or pause it, then press this again."), 409
     state = execution.view(cfg())
@@ -215,6 +215,49 @@ def apply_chosen_retry():
     from backend.apply import execution
     item = _item(_body())
     return _change(execution.retry, item) if item else (jsonify(ok=False, error='Send "item".'), 400)
+
+
+@app.post("/apply/chosen/own-resume")
+def apply_chosen_own_resume():
+    """Use my own resume, for a job whose tailored resume could not be made ({"item": id}): the person's
+    own lines selected for the posting go instead -- only on this press, never by themselves."""
+    from backend.apply import execution
+    item = _item(_body())
+    if not item:
+        return jsonify(ok=False, error='Send "item".'), 400
+    try:
+        return jsonify(ok=True, **execution.use_own_resume(cfg(), item))
+    except execution.Conflict as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    except execution.QueueError as exc:
+        return jsonify(ok=False, error=str(exc)), 404
+
+
+def _choice(fn, *args):
+    from backend.apply import execution
+    item = _item(_body())
+    if not item:
+        return jsonify(ok=False, error='Send "item".'), 400
+    try:
+        return jsonify(ok=True, **fn(*args, item))
+    except execution.Conflict as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    except execution.QueueError as exc:
+        return jsonify(ok=False, error=str(exc)), 404
+
+
+@app.post("/apply/chosen/tailor-again")
+def apply_chosen_tailor_again():
+    """Tailor it again ({"item": id}): a new tailored resume for a job whose earlier one was made from other inputs."""
+    from backend.apply import execution
+    return _choice(execution.tailor_again)
+
+
+@app.post("/apply/chosen/use-earlier")
+def apply_chosen_use_earlier():
+    """Use the earlier one ({"item": id}): that job's earlier tailored resume goes as it is, on this press only."""
+    from backend.apply import execution
+    return _choice(execution.use_earlier, cfg())
 
 
 @app.post("/apply/chosen/confirm")

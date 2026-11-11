@@ -149,7 +149,7 @@ def real_prepare(db, monkeypatch, tmp_path):
     resume.write_bytes(b"%PDF-1.4 the tailored resume")
     letter.write_bytes(b"%PDF-1.4 the letter")
     chosen = {"resume": (resume, "tailored")}
-    monkeypatch.setattr(runner, "choose_resume", lambda cfg, job, tailor=True: chosen["resume"])
+    monkeypatch.setattr(runner, "choose_resume", lambda cfg, job, tailor=True, **_: chosen["resume"])
     monkeypatch.setattr(runner, "cover_letter", lambda cfg, job, evidence: letter)
     monkeypatch.setattr(runner, "_letter_origin", lambda cfg, job: letter)
     return chosen, resume, letter

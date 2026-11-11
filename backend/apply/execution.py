@@ -77,7 +77,7 @@ MOVES = {
     QUEUED: {VALIDATING, CANCELLED, APPLIED},
     VALIDATING: {PREPARING, QUEUED, SKIPPED, FAILED, CANCELLED, APPLIED},
     PREPARING: {READY, QUEUED, FAILED, SKIPPED, CANCELLED, APPLIED},
-    READY: {RUNNING, QUEUED, SKIPPED, CANCELLED, APPLIED},
+    READY: {RUNNING, QUEUED, SKIPPED, CANCELLED, APPLIED, FAILED},     # FAILED: an error before its form (A1.1.1)
     RUNNING: {WAITING, PENDING, APPLIED, FAILED, SKIPPED, QUEUED},
     WAITING: {PENDING, APPLIED, FAILED, SKIPPED},
     PENDING: {APPLIED, FAILED},
@@ -426,10 +426,99 @@ def _artifact_dict(row: ApplyArtifact) -> dict:
 _NOT_SHOWN = ("path", "origin", "origin_sha256")           # this Mac's folders: the page needs only names
 
 
+RETRY_OR_OWN = "Retry puts it back in the queue, or choose your own resume for it."
+
+
+def _run_budget(cfg, free: bool, paid_ok: bool):
+    """One spending limit for the whole run (A1.1): resume.max_spend_per_run_usd covers every job a run makes
+    ready, not each job afresh. Open while the run goes; nothing is opened for a writer that does not bill."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    if not free and paid_ok:
+        from ml.resume import cost
+        cap = float((cfg.get("resume.max_spend_per_run_usd", 0) if cfg is not None else 0) or 0)
+        stack.enter_context(cost.budget(cost.Ledger(cap_usd=cap)))
+    return stack
+
+
+def use_own_resume(cfg, item_id: int) -> dict:
+    """The person chose their own resume for an entry whose tailored one could not be made: their own
+    lines, selected for the posting, published as the job's resume (ml/tailoring/pipeline.use_own_resume),
+    and the entry back in the queue. Documents made ready for it before are not sent."""
+    from ml.tailoring.pipeline import TailoringFailed
+    from ml.tailoring.pipeline import use_own_resume as publish_own
+    with get_session() as session:
+        item = session.get(ApplyItem, item_id)
+        if item is None:
+            raise QueueError("No such entry on your chosen jobs.")
+        state, job_id = item.state, item.job_id
+    if state != FAILED:
+        raise Conflict("Your own resume can be chosen here only for a job whose resume could not be made.")
+    job = _job(job_id)
+    if job is None:
+        raise QueueError("This job is no longer in your jobs list.")
+    try:
+        published = publish_own(cfg, job)
+    except TailoringFailed as exc:
+        raise Conflict(exc.message) from None
+    _gone_stale(item_id)
+    note(item_id, f"You chose your own resume for this job: your own lines, selected for it, nothing reworded "
+                  f"(version {published.version}, checksum {published.pdf_sha256[:12]})")
+    retry(item_id)
+    return {"version": published.version}
+
+
+def _failed_job(item_id: int):
+    with get_session() as session:
+        item = session.get(ApplyItem, item_id)
+        if item is None:
+            raise QueueError("No such entry on your chosen jobs.")
+        state, job_id, outcome = item.state, item.job_id, item.outcome or ""
+    if state != FAILED or "earlier tailored resume" not in outcome:
+        raise Conflict("This is for a job whose earlier tailored resume was made from other inputs.")
+    job = _job(job_id)
+    if job is None:
+        raise QueueError("This job is no longer in your jobs list.")
+    return job
+
+
+def tailor_again(item_id: int) -> dict:
+    """The person's word: make this job a new tailored resume (its earlier one is kept, as every version is)."""
+    from ml.tailoring.pipeline import mark_redo
+    job = _failed_job(item_id)
+    mark_redo([job.id], "you asked for a new one")
+    note(item_id, "You asked for a new tailored resume for this job: it is made when its turn comes (about 9 minutes)")
+    retry(item_id)
+    return {"job_id": job.id}
+
+
+def use_earlier(cfg, item_id: int) -> dict:
+    """The person's word: send this job's earlier tailored resume as it is, though made from other inputs."""
+    from ml.tailoring.pipeline import TailoringFailed, use_earlier_resume
+    job = _failed_job(item_id)
+    try:
+        published = use_earlier_resume(cfg, job)
+    except TailoringFailed as exc:
+        raise Conflict(exc.message) from None
+    _gone_stale(item_id)
+    note(item_id, f"You chose its earlier tailored resume, as it is (version {published.version}, checksum "
+                  f"{published.pdf_sha256[:12]})")
+    retry(item_id)
+    return {"version": published.version}
+
+
+def _cancelled(item_id: int) -> bool:
+    """Has the person cancelled this entry meanwhile? Asked between a preparation's stages."""
+    with get_session() as session:
+        item = session.get(ApplyItem, item_id)
+        return item is None or item.state == CANCELLED
+
+
 @_when_free
-def record_documents(item_id: int, ready, *, run_id: int | None = None) -> list[dict]:
+def record_documents(item_id: int, ready, *, run_id: int | None = None, expect: str | None = None) -> list[dict]:
     """Write down exactly which resume and cover letter this job sends (a runner.Prepared), and say so
-    as a step. What it was made ready with before is replaced."""
+    as a step. What it was made ready with before is replaced. With `expect`, only while the entry is
+    still in that state: one cancelled while its documents were made gets none recorded (Track A1)."""
     origins = getattr(ready, "origins", None) or {}
     files = [("resume", ready.kept)] + ([("cover_letter", ready.letter)] if ready.letter else [])
     found = []
@@ -440,7 +529,7 @@ def record_documents(item_id: int, ready, *, run_id: int | None = None) -> list[
                       str(origin) if origin_sum else None, origin_sum))
     with get_session() as session:
         item = session.get(ApplyItem, item_id)
-        if item is None:
+        if item is None or (expect is not None and item.state != expect):
             return []
         (session.query(ApplyArtifact).filter(ApplyArtifact.item_id == item_id, ApplyArtifact.state == "ready")
          .update({"state": "replaced"}, synchronize_session=False))
@@ -552,8 +641,19 @@ def documents_unready(job_id: int, resume: Path, letter: Path | None) -> str | N
         return "its resume is set to be made again"
     if letter is not None:
         return "a cover letter goes with it, and a letter's checks are not kept"
-    run, _ = tailoring.job_best(job_id)
-    folder = tailoring.RUNS / run if run else None
+    # The job's published version (Track A1) vouches for it when there is one; before one exists (documents
+    # made ready before Nov 2026) its best checked run does, exactly as before.
+    from ml.tailoring import coordination
+    published = coordination.current(job_id)
+    if published is not None:
+        if published.source != "tailored":
+            return "its resume is your own, chosen by you, not a checked tailoring"
+        if _sha256(resume) not in (published.pdf_sha256, published.docx_sha256):
+            return "the resume about to go is not its published version"
+        run = published.run_id
+    else:
+        run, _ = tailoring.job_best(job_id)
+    folder = tailoring.folder_of(run) if run else None
     try:
         result = json.loads((folder / "result.json").read_text()) if folder else None
     except (OSError, ValueError):
@@ -584,6 +684,65 @@ def _gone_stale(item_id: int) -> None:
          .update({"state": "stale"}, synchronize_session=False))
 
 
+def superseded(job_id: int, artifact: dict) -> str | None:
+    """Why a resume made ready earlier is no longer the one to send, or None (A1.1, Nov 2026). Once a job has a
+    published resume, only its CURRENT version goes: a version made ready before a newer one was published --
+    the person edited it, or it was tailored again, or they chose their own -- is never sent because an older
+    record still points at it. Published versions never change, so an unchanged file proves nothing here; the
+    question is which version is current. A job with no published version keeps the earlier rules."""
+    if artifact.get("kind") != "resume":
+        return None
+    from ml.tailoring import coordination
+    # Judged by the record of the newest version, verified or not (A1.1 review): a newest version whose files were
+    # damaged must not let an older one through, nor may a job whose versions were all withdrawn.
+    current = coordination.current(job_id, verify=False)
+    if current is None:
+        return ("its resume versions were withdrawn, so none is sent until a new one is made"
+                if coordination.has_versions(job_id) else None)
+    made_from = {artifact.get("origin_sha256"), artifact.get("sha256")} - {None, ""}
+    if not made_from & {current.pdf_sha256, current.docx_sha256}:
+        return (f"a newer version of its resume (version {current.version}) was published after these documents "
+                "were made ready")
+    if coordination.current(job_id) is None:
+        return f"the files of its current resume (version {current.version}) no longer match their fingerprints"
+    return None
+
+
+def _still_current(job_id: int, recorded: list, resume: Path, letter: Path | None) -> str | None:
+    """Asked again a moment before the app itself presses Submit (A1.1.1): why the resume attached when the form
+    opened must not go by itself -- a newer version published, its versions withdrawn or damaged, the attached copy
+    changed, the person's approval missing -- or None. Any doubt is a reason: the check failing is never a yes."""
+    try:
+        for d in recorded:
+            newer = superseded(job_id, d)
+            if newer:
+                return newer
+            if _sha256(resume) != d["sha256"]:
+                return "the resume attached is no longer the one checked when its form opened"
+        return documents_unready(job_id, resume, letter)
+    except Exception as exc:                 # noqa: BLE001 -- fail closed
+        return f"its resume could not be checked again just before Submit ({type(exc).__name__})"
+
+
+def _not_sent_after_error(item_id: int, exc: BaseException):
+    """An unexpected error while a job was being checked or made ready, before any form of it opened (A1.1.1):
+    it ends Failed with the reason -- nothing was sent -- and the run goes on to the next, so no job is left on
+    its way with no run. The Outcome; or None when it got further (its form opened, or about to): then it is
+    never guessed sent or unsent, and recover() makes it wait for the person's word (CHECK_IF_SENT)."""
+    from backend.apply import runner
+    with get_session() as session:
+        item = session.get(ApplyItem, item_id)
+        state = item.state if item is not None else None
+        job = session.get(Job, item.job_id) if item is not None else None
+        company, title, job_id = (job.company, job.title, job.id) if job is not None else ("", "", 0)
+    if state not in (VALIDATING, PREPARING, READY):
+        return None
+    log.exception("Job %s: an unexpected error while it was made ready", job_id)
+    _try(item_id, FAILED, outcome=f"Not sent: something went wrong while it was made ready ({type(exc).__name__}: "
+                                  f"{str(exc)[:160]}). Nothing was sent: Retry tries it again.", expect=state)
+    return runner.Outcome(job_id, company, title, "not-filled", detail=str(exc)[:200])
+
+
 def seal(item_id: int, evidence: Path):
     """This job's documents for its form: each copied into this attempt's own folder (`evidence`,
     send/ under the name the employer sees) and checked there against its checksum, and the file it
@@ -599,8 +758,8 @@ def seal(item_id: int, evidence: Path):
         target = evidence / "send" / source.name
         try:
             if source.resolve() != target.resolve():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
+                from backend.apply.runner import run_copy
+                run_copy(source, target)
             same = _sha256(target) == d["sha256"]
         except OSError:
             same = False
@@ -611,6 +770,10 @@ def seal(item_id: int, evidence: Path):
             where = f"{origin.name}, the job's own" if moved and origin is not None else source.name
             return (f"the {what} made ready for it ({where}) has changed or is gone since it was made "
                     f"ready on {d['at'][:10]}, so it was not sent")
+        newer = superseded(d["job_id"], d)                # only the job's current version is ever sent
+        if newer:
+            _gone_stale(item_id)
+            return f"{newer}, so the older one was not sent: Retry makes the current one ready"
         from backend.apply import approval
         rejected = approval.refused(d["job_id"], d["kind"], target, d["source"])
         if rejected:                                     # the person said No to it: never sent, on any run
@@ -620,7 +783,8 @@ def seal(item_id: int, evidence: Path):
         # Beside the run's form picture, as every run keeps it: what went out (backend/apply/tracker.py).
         plain = evidence / (f"resume{target.suffix}" if d["kind"] == "resume" else f"cover-letter{target.suffix}")
         if plain.resolve() != target.resolve():
-            shutil.copy2(target, plain)
+            from backend.apply.runner import run_copy
+            run_copy(target, plain)
     return sealed["resume"], sealed.get("cover_letter"), resume["source"]
 
 
@@ -762,6 +926,13 @@ def recover() -> dict:
     from backend.apply.history_outbox import export_pending
     export_pending()
     fixed = {"runs": 0, "requeued": 0, "to_confirm": 0}
+    try:                                      # resume versions a crash left half-made: never shown (Track A1)
+        from ml.tailoring import coordination
+        settled = coordination.recover()["failed"]
+        if settled:
+            fixed["versions_failed"] = settled
+    except Exception as exc:                  # noqa: BLE001 -- recovery of the list goes on regardless
+        log.warning("Could not settle interrupted resume versions: %s", exc)
     with get_session() as session:
         runs = session.query(ApplyRun).filter(ApplyRun.state.in_(("running", "pausing"))).all()
         for run in runs:
@@ -874,6 +1045,11 @@ def _shape(item: ApplyItem, job: Job | None, latest: ApplyEvent | None, run_live
             "documents": docs or [],
             "can": {"cancel": state in (QUEUED, VALIDATING, PREPARING, READY),
                     "retry": state in (FAILED, SKIPPED, CANCELLED),
+                    # Its resume could not be made: the person may choose their own instead (Track A1).
+                    "own": state == FAILED and "resume was not made" in (item.outcome or ""),
+                    # Its earlier tailored resume was made from other inputs (A1.1): the person chooses.
+                    "again": state == FAILED and "earlier tailored resume" in (item.outcome or ""),
+                    "earlier": state == FAILED and "earlier tailored resume" in (item.outcome or ""),
                     "confirm": state == PENDING or (state == WAITING and not run_live)}}
 
 
@@ -1009,6 +1185,12 @@ def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: f
     run = start_run(os.getpid())
     on_list = set(queued_ids())
     among = on_list & {int(i) for i in only} if only is not None else on_list
+    from ml.resume import writers
+    problem = writers.primary_problem(cfg)                   # not verified to cost nothing per use (A1.1.1)
+    if problem:
+        finish_run(run.id, "stopped", f"Not started. {problem}")
+        runner.say(f"Not started. {problem}")
+        return []
     _, label, free = runner.writer(cfg)
     if not free and not paid_ok:
         why = (f"Not started: a resume or cover letter made on the way would use {label}, which bills per use. "
@@ -1022,6 +1204,7 @@ def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: f
     search = runner.searched_places(cfg)
     browser = {"context": None, "close": lambda: None, "factory": browser_factory}   # opened at the first form
     outcomes, why, taken = [], "Done: nothing more on your list.", set()
+    spend = _run_budget(cfg, free, paid_ok)
     try:
         while True:
             heartbeat(run.id)
@@ -1041,7 +1224,13 @@ def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: f
                 finish_run(run.id, "stopped", why)
                 break
             taken.add(item_id)
-            outcome = _one(cfg, applicant, run.id, item_id, search, browser, tailor=tailor, wait_s=wait_s)
+            try:
+                outcome = _one(cfg, applicant, run.id, item_id, search, browser, tailor=tailor, wait_s=wait_s,
+                               paid_ok=paid_ok)
+            except Exception as exc:                         # noqa: BLE001 -- judged by how far it got
+                outcome = _not_sent_after_error(item_id, exc)
+                if outcome is None:                          # its form may have opened: never guessed
+                    raise
             if outcome is not None:
                 outcomes.append(outcome)
                 if outcome.result == "stopped":
@@ -1053,6 +1242,7 @@ def work(cfg, applicant, *, browser_factory=None, tailor: bool = True, wait_s: f
         raise
     finally:
         browser["close"]()
+        spend.close()
     runner.say(why)
     return runner.finish(outcomes)
 
@@ -1115,7 +1305,8 @@ def _next(cfg, applicant, run_id: int, search, among=None) -> tuple[int | None, 
             continue                                         # taken or cancelled meanwhile: look again
 
 
-def _one(cfg, applicant, run_id: int, item_id: int, search, browser, *, tailor: bool, wait_s: float):
+def _one(cfg, applicant, run_id: int, item_id: int, search, browser, *, tailor: bool, wait_s: float,
+         paid_ok: bool = False):
     """One job, from validating to how it ended."""
     from backend.apply import runner
     with get_session() as session:
@@ -1144,6 +1335,11 @@ def _one(cfg, applicant, run_id: int, item_id: int, search, browser, *, tailor: 
     # its form opens; else they are made now. Either way each file is written down first.
     made = None
     earlier = documents(item_id)
+    newer = next((superseded(job.id, d) for d in earlier if superseded(job.id, d)), None) if earlier else None
+    if newer:                                                # made ready with a version since replaced
+        _gone_stale(item_id)
+        note(item_id, f"Made ready before, but {newer}: the current version is made ready instead", run_id=run_id)
+        earlier = []
     redo = _redo(job.id) if earlier else None
     if redo:                                                 # never sent as it is (runner.choose_resume)
         _gone_stale(item_id)
@@ -1157,13 +1353,15 @@ def _one(cfg, applicant, run_id: int, item_id: int, search, browser, *, tailor: 
     else:
         runner.say = say
         try:
-            made = runner.prepare_documents(cfg, job, applicant, head, tailor=tailor)
+            made = runner.prepare_documents(cfg, job, applicant, head, tailor=tailor, paid_ok=paid_ok,
+                                            cancelled=lambda: _cancelled(item_id))
         finally:
             runner.say = told
         if isinstance(made, str):
-            _try(item_id, FAILED, outcome=f"Not sent: {made}. Retry puts it back in the queue.", expect=PREPARING)
+            _try(item_id, FAILED, outcome=f"Not sent: {made}. {RETRY_OR_OWN}", expect=PREPARING)
             return runner.Outcome(job.id, job.company, job.title, "not-filled", detail=made)
-        record_documents(item_id, made, run_id=run_id)
+        if not record_documents(item_id, made, run_id=run_id, expect=PREPARING):
+            return None                                      # cancelled while it was being made: nothing recorded
         resume_note = made.resume_note
         waiting = _questions(applicant, item_id, job, run_id)
         if waiting:                                      # answered first, then its form: the rest go on
@@ -1225,15 +1423,25 @@ def _one(cfg, applicant, run_id: int, item_id: int, search, browser, *, tailor: 
     # against their checksums, before the form is given them.
     from backend.apply.greenhouse import _evidence_dir
     evidence = made.evidence if made is not None else _evidence_dir(job.id)
-    sealed = seal(item_id, evidence)
-    if isinstance(sealed, str):
-        _try(item_id, FAILED, outcome=f"Not sent: {sealed}. Retry makes its documents ready again.", expect=RUNNING)
-        return runner.Outcome(job.id, job.company, job.title, "not-filled", detail=sealed)
-    ready = runner.Prepared(sealed[0], sealed[1], sealed[2], evidence)
-    link = _link(item_id, sent={"resume": sealed[0], "cover_letter": sealed[1]})
-    note(item_id, "Checked before the form opens: " + ", ".join(
-        f"{p.name} (checksum {_sha256(p)[:12]})" for p in sealed[:2] if p is not None), run_id=run_id)
-    unready = documents_unready(job.id, sealed[0], sealed[1]) if auto else None
+    try:                                     # no page is open for it yet: an error here means nothing was sent
+        sealed = seal(item_id, evidence)
+        if isinstance(sealed, str):
+            _try(item_id, FAILED, outcome=f"Not sent: {sealed}. Retry makes its documents ready again.",
+                 expect=RUNNING)
+            return runner.Outcome(job.id, job.company, job.title, "not-filled", detail=sealed)
+        recorded = [d for d in documents(item_id) if d["kind"] == "resume"]
+        ready = runner.Prepared(sealed[0], sealed[1], sealed[2], evidence,
+                                last_check=lambda: _still_current(job.id, recorded, sealed[0], sealed[1]))
+        link = _link(item_id, sent={"resume": sealed[0], "cover_letter": sealed[1]})
+        note(item_id, "Checked before the form opens: " + ", ".join(
+            f"{p.name} (checksum {_sha256(p)[:12]})" for p in sealed[:2] if p is not None), run_id=run_id)
+        unready = documents_unready(job.id, sealed[0], sealed[1]) if auto else None
+    except Exception as exc:                 # noqa: BLE001 -- said, and the run goes on
+        log.exception("Job %s: its documents could not be checked before its form opened", job.id)
+        _try(item_id, FAILED, outcome=f"Not sent: its documents could not be checked before its form opened "
+                                      f"({type(exc).__name__}: {str(exc)[:160]}). Nothing was sent: Retry makes "
+                                      "them ready again.", expect=RUNNING)
+        return runner.Outcome(job.id, job.company, job.title, "not-filled", detail=str(exc)[:200])
     if unready:
         auto = False
         note(item_id, f"You press Submit on this one: {unready}", run_id=run_id)
@@ -1351,6 +1559,12 @@ def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False,
     with get_session() as session:
         on_list = {i for (i,) in session.query(ApplyItem.id).filter(ApplyItem.state == QUEUED)}
     among = on_list & {int(i) for i in only} if only is not None else on_list
+    from ml.resume import writers
+    problem = writers.primary_problem(cfg)                   # not verified to cost nothing per use (A1.1.1)
+    if problem:
+        finish_run(run.id, "stopped", f"Not prepared. {problem}")
+        runner.say(f"Not prepared. {problem}")
+        return 0
     _, label, free = runner.writer(cfg)
     if not free and not paid_ok:                             # cover letters use it too, tailoring or not
         why = (f"Not prepared: tailoring and cover letters would use {label}, which bills per use. Press "
@@ -1361,6 +1575,7 @@ def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False,
     runner.say(f"Making your chosen jobs ready: resume and cover letter for each, nothing sent · writer: {label}")
     search = runner.searched_places(cfg)
     made, taken = 0, set()
+    spend = _run_budget(cfg, free, paid_ok)
     try:
         while True:
             heartbeat(run.id)
@@ -1374,10 +1589,16 @@ def prepare_these(cfg, applicant, *, tailor: bool = True, paid_ok: bool = False,
                 finish_run(run.id, "done", why)
                 break
             taken.add(item_id)
-            made += _prepare(cfg, applicant, run.id, item_id, search, tailor=tailor)
+            try:
+                made += _prepare(cfg, applicant, run.id, item_id, search, tailor=tailor, paid_ok=paid_ok)
+            except Exception as exc:                         # noqa: BLE001 -- no form is opened here
+                if _not_sent_after_error(item_id, exc) is None:
+                    raise
     except BaseException as exc:
         finish_run(run.id, "stopped", f"Stopped by an error: {type(exc).__name__}: {str(exc)[:200]}")
         raise
+    finally:
+        spend.close()
     runner.say(why)
     return made
 
@@ -1426,7 +1647,7 @@ def _gone_from_jobs(item_id: int, run_id: int) -> None:
         pass
 
 
-def _prepare(cfg, applicant, run_id: int, item_id: int, search, *, tailor: bool) -> int:
+def _prepare(cfg, applicant, run_id: int, item_id: int, search, *, tailor: bool, paid_ok: bool = False) -> int:
     """One job made ready, from validating back to waiting its turn with its documents written down: 1,
     or 0 when it cannot go, waits for an answer, or its documents could not be made."""
     from backend.apply import runner
@@ -1449,13 +1670,15 @@ def _prepare(cfg, applicant, run_id: int, item_id: int, search, *, tailor: bool)
     told = runner.say
     runner.say = _steps(item_id, run_id, head)
     try:
-        made = runner.prepare_documents(cfg, job, applicant, head, tailor=tailor)
+        made = runner.prepare_documents(cfg, job, applicant, head, tailor=tailor, paid_ok=paid_ok,
+                                        cancelled=lambda: _cancelled(item_id))
     finally:
         runner.say = told
     if isinstance(made, str):
-        _try(item_id, FAILED, outcome=f"Not made ready: {made}. Retry puts it back in the queue.", expect=PREPARING)
+        _try(item_id, FAILED, outcome=f"Not made ready: {made}. {RETRY_OR_OWN}", expect=PREPARING)
         return 0
-    record_documents(item_id, made, run_id=run_id)
+    if not record_documents(item_id, made, run_id=run_id, expect=PREPARING):
+        return 0                                             # cancelled while it was being made: nothing recorded
     _questions(applicant, item_id, job, run_id)        # when it goes, its turn says (answers awaited, ...)
     _try(item_id, QUEUED, note=f"Made ready ({made.resume_note}): exactly these files go with its form",
          expect=PREPARING)

@@ -50,6 +50,10 @@ class Draft:
     changes: list[dict] = field(default_factory=list)
     accepted: bool = True
     problem: str = ""
+    # Was it really tailored? "tailored", or why not: "writer_unavailable", "rewrite_rejected", "model_off".
+    # A job's preparation publishes only a tailored draft (Track A1): the other two are the resume's own
+    # words, which go out only when the person chooses their own resume.
+    state: str = "tailored"
     # What the model itself left out, before any line was cut for space: a refit starts here.
     model_omitted: list = field(default_factory=list)
     max_pages: int = 4
@@ -142,22 +146,29 @@ def create(resume_path, jd_text: str, report, cfg=None, max_pages: int | None = 
     chosen = titles.apply(base, title, jd_text)     # before the model, the header or the pages read them
     header = header_of(base)
     problem = ""
+    state = "tailored"
+    from ml.resume.cost import SpendCapReached
     try:
         if not use_model:
+            state = "model_off"
             raise RuntimeError("the writing model is switched off")
         result = tailor_resume(base, title, "the employer", jd_text, cfg=cfg,
                                guidance=guidance(report) + ("\n\n" + extra if extra else ""))
+    except SpendCapReached:
+        raise                          # a hard limit is never turned into an untailored draft
     except Exception as exc:
+        state = state if state == "model_off" else "writer_unavailable"
         # No model, or none answering: the draft is still made, from the
         # resume's own words, selected and laid out for the posting.
         result = TailorResult(summary=None)
         problem = (f"The writing model could not be used ({str(exc)[:80]}), so this draft uses the "
                    f"resume's own wording, selected and ordered for the posting.")
-    draft = Draft(base, result, header, title, problem=problem, titles=chosen)
+    draft = Draft(base, result, header, title, problem=problem, titles=chosen, state=state)
     if not result.accepted:
         # A rejected rewrite is never used; the draft is the resume's own words,
         # selected and laid out for the posting.
         draft.accepted = False
+        draft.state = "rewrite_rejected"
         draft.problem = ("The rewrite claimed something the resume does not show, so it was not used. "
                          "This draft uses the resume's own wording, selected for the posting.")
         result = TailorResult(summary=None)

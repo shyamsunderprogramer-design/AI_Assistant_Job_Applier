@@ -64,10 +64,14 @@ def test_a_plan_limit_is_busy_so_the_backups_take_over(claude, monkeypatch):
     answer({"result": "Claude usage limit reached", "is_error": True}, code=1)
     with pytest.raises(ProviderBusy):
         llm._claude_code("s", "u", Cfg())
-    monkeypatch.setattr(llm, "fallback_models", lambda cfg=None, skip="": ["glm-5.3-flash:cloud"])
+    # The backups that cost nothing per use take over (A1.1.1): a model on this Mac; an Ollama cloud model,
+    # which Ollama bills per token, only once the person names "ollama-cloud" in resume.allow_writers.
+    monkeypatch.setattr(llm, "fallback_models", lambda cfg=None, skip="": ["glm-5.3-flash:cloud", "gemma4:e4b"])
     monkeypatch.setattr(llm, "_ollama", lambda s, u, cfg=None, want_json=True, model=None:
                         llm.Completion(text="{}", model=model, provider="ollama"))
-    assert llm.complete("s", "u", Cfg()).model == "glm-5.3-flash:cloud"
+    assert llm.complete("s", "u", Cfg()).model == "gemma4:e4b"
+    llm._BUSY_UNTIL.clear()
+    assert llm.complete("s", "u", Cfg({"resume.allow_writers": ["ollama-cloud"]})).model == "glm-5.3-flash:cloud"
 
 
 def test_not_signed_in_is_said_plainly_and_not_hidden(claude):

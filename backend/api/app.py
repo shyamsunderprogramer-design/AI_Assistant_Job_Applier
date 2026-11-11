@@ -515,7 +515,8 @@ def writer_state() -> dict:
     # key -- a local model, a self-hosted gateway -- always can.
     ready = bool(spec) and (not env_key or spec.get("key_optional")
                             or bool(os.getenv(env_key)))
-    free = bool(spec.get("free"))
+    from ml.resume import writers
+    free = writers.free_writer(provider, cfg())     # verified to cost nothing per use (A1.1.1)
 
     # A service on this machine also has to be running, not merely chosen.
     local_url = spec.get("base_url") or (
@@ -1311,6 +1312,13 @@ def job_documents(job_id: int) -> dict[str, Path | None]:
     config = cfg()
     flat = packet_root(config) / output_filename(company, title, external)
     folder = packet_dir(config, company, title, external, job_id=job_id)
+    # Its published resume (Track A1) is the job's resume: the very files an application attaches.
+    from ml.tailoring import coordination
+    published = coordination.current(job_id)
+    if published is not None:
+        letter = folder / LETTER_FILE
+        return {"resume_pdf": published.pdf, "resume_docx": published.docx,
+                "letter": letter if letter.exists() else None}
     for key, candidates in (
         ("resume_pdf", [flat.with_suffix(".pdf")]),
         ("resume_docx", [flat, resume_in(folder) or folder / RESUME_FILE]),
@@ -1484,12 +1492,40 @@ def job_tailor_full(job_id: int):
     from ml.resume.style import TEMPLATES
     picked = str((request.get_json(silent=True) or {}).get("template") or "")
     template = picked if picked in TEMPLATES else template
-    folder = new_run()
-    resume = save_saved_resume(folder, saved)
-    remember_job_run(job_id, folder, target, packet)
-    start(folder, resume, jd, None, cfg(), company=company, template=template,
-          after=lambda result: finish_job_run(
-              job_id, folder, target, (result.get("before_after") or {}).get("ats", [0, result["score"]])[1], packet))
+    del jd, company, target, packet, saved                  # the canonical preparation reads them itself
+    # The one canonical preparation (Track A1), under the job's claim: taken here, so a job already being
+    # prepared is said at once, then held by the background run until it publishes or stops.
+    from ml.tailoring import coordination
+    from ml.tailoring.pipeline import TailoringFailed, _progress, prepare_for_job
+    with get_session() as session:
+        job_obj = session.get(Job, job_id)
+        session.expunge(job_obj)
+    try:
+        lease = coordination.acquire(job_id, "the job page's Tailor")
+    except coordination.CoordinationError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    try:                                              # the claim is given back if the run cannot even start
+        folder = new_run()
+        _progress(folder, stage=0, done=False, error=None, note="")
+        config = cfg()
+    except Exception:
+        coordination.release(lease)
+        raise
+
+    def work():
+        try:
+            # The template chosen on the page (or the one picked for this job) -- A1.1: it was dropped in A1.
+            prepare_for_job(config, job_obj, purpose="the job page's Tailor", again=True, lease=lease, folder=folder,
+                            template=template)
+        except TailoringFailed as exc:
+            _progress(folder, done=True, error={"stage": "", "file": None, "message": exc.message})
+        except Exception as exc:            # noqa: BLE001 -- never leave the page waiting
+            _progress(folder, done=True, error={"stage": "", "file": None,
+                                                "message": f"Something went wrong: {type(exc).__name__}: {exc}"})
+        finally:
+            coordination.release(lease)
+    import threading
+    threading.Thread(target=work, daemon=True, name=f"tailor-{job_id}").start()
     return jsonify(ok=True, run=folder.name)
 
 
@@ -2220,6 +2256,12 @@ def run_task(task: str):
     if task in APPLY_TASKS and any(t != task and task_pid(t) for t in APPLY_TASKS):
         return jsonify(ok=False, error="An apply run is going already, and its browser window is "
                                        "open. Finish it or close that window, then press this again."), 409
+    # Prepare now makes resumes too: never beside a chosen-jobs run or Prepare these (Track A1). The
+    # per-job claim stops any job being made twice; this keeps two runs from going down one list.
+    making = (*APPLY_TASKS, "prepare", "prepare-chosen")
+    if task in making and any(t != task and task_pid(t) for t in making):
+        return jsonify(ok=False, error="A run is going already (applying, or making documents ready). "
+                                       "Let it finish or pause it, then press this again."), 409
     return start_task(task, TASKS[task])
 
 
@@ -3035,6 +3077,8 @@ def tailor_template(run_id):
         body = request.get_json(silent=True) or {}
         data = change_template(folder, str(body.get("template") or ""),
                                body.get("look") if isinstance(body.get("look"), dict) else None)
+    except __import__("ml.tailoring.pipeline", fromlist=["JobBusy"]).JobBusy as exc:
+        return jsonify(ok=False, busy=True, error=f"Saved in this run, but not yet the job's resume: {exc}"), 409
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 400
     except Exception as exc:
@@ -3055,6 +3099,8 @@ def tailor_restore(run_id):
         return jsonify(ok=False, error="No line given."), 400
     try:
         data = restore_line(folder, line)
+    except __import__("ml.tailoring.pipeline", fromlist=["JobBusy"]).JobBusy as exc:
+        return jsonify(ok=False, busy=True, error=f"Saved in this run, but not yet the job's resume: {exc}"), 409
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 400
     except Exception as exc:
@@ -3073,15 +3119,15 @@ def tailor_edit(run_id):
     edits = {str(k): str(v) for k, v in edits.items() if isinstance(k, str)}
     if not edits:
         return jsonify(ok=False, error="Nothing was changed."), 400
+    # A run made for a saved job: its edited files become that job's resume as a new published version, once,
+    # inside apply_edits (A1.1: published twice in A1); a job busy elsewhere is said so, not a server error.
+    from ml.tailoring.pipeline import JobBusy
     try:
         data = apply_edits(folder, edits)
+    except JobBusy as exc:
+        return jsonify(ok=False, busy=True, error=f"Saved in this run, but not yet the job's resume: {exc}"), 409
     except Exception as exc:
         return jsonify(ok=False, error=f"{type(exc).__name__}: {exc}"), 500
-    # A run made for a saved job: its edited files are that job's resume too.
-    from ml.tailoring.pipeline import job_of_run, place_for_job
-    owner = job_of_run(folder)
-    if owner:
-        place_for_job(folder, Path(owner["docx"]), Path(owner["packet"]) if owner.get("packet") else None)
     data.pop("folder", None)
     return jsonify(ok=True, **data)
 

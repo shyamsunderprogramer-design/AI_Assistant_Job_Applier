@@ -121,22 +121,24 @@ def _last_applied_by_company(session) -> dict[str, datetime]:
 # -- documents ------------------------------------------------------------
 
 def tailored_resume(cfg, job) -> Path | None:
-    """The guard-approved tailored resume for this job, PDF first, if any.
-
-    One longer than the page limit was made before the limit existed and is
-    skipped: attaching a nine-page resume is worse than tailoring again.
-    """
-    from ml.resume.packet import packet_root
-    from ml.resume.pipeline import over_page_limit
-    from ml.resume.writer import output_filename
-
-    docx = packet_root(cfg) / output_filename(job.company, job.title, job.external_id or "")
-    if over_page_limit(cfg, docx):
+    """The job's published resume (its PDF), if any: the newest version, both files in place and matching
+    their fingerprints (ml/tailoring/coordination.current, Track A1). Never the copies in the job's folder,
+    which anything could have changed; never one set to be made again."""
+    from ml.tailoring import coordination
+    from ml.tailoring.pipeline import needs_redo
+    if needs_redo(job.id):
         return None
-    for candidate in (docx.with_suffix(".pdf"), docx):
-        if candidate.exists():
-            return candidate
-    return None
+    published = coordination.current(job.id)
+    return published.pdf if published is not None else None
+
+
+def published_note(job) -> str:
+    """Where the job's published resume came from, in the person's words."""
+    from ml.tailoring import coordination
+    published = coordination.current(job.id, verify=False)
+    if published is None:
+        return ""
+    return "your own resume, chosen by you" if published.source == "own_resume" else "tailored"
 
 
 def base_resume() -> Path | None:
@@ -173,36 +175,29 @@ def selected_master(cfg, job) -> Path | None:
     return target
 
 
-def choose_resume(cfg, job, *, tailor: bool = True) -> tuple[Path | None, str]:
-    """(file to attach, where it came from).
+def choose_resume(cfg, job, *, tailor: bool = True, paid_ok: bool = False, cancelled=None,
+                  purpose: str = "Prepare these") -> tuple[Path | None, str]:
+    """(file to attach, where it came from) -- or (None, why not).
 
-    A tailored resume set to be made again (one made from a master since repaired) is never
-    sent as it is: it is tailored again first, or the person's own lines go instead."""
-    from ml.tailoring.pipeline import needs_redo
+    The job's published resume when it has one (tailored, or the person's own, chosen by them); else it
+    is made by the one canonical preparation (ml/tailoring/pipeline.prepare_for_job, Track A1). When that
+    fails, nothing takes its place: the reason is returned, and the person may Retry, Cancel, or choose
+    their own resume for the job. A tailored resume set to be made again is tailored again first."""
+    from ml.tailoring.pipeline import TailoringFailed, needs_redo, prepare_for_job
     redo = needs_redo(job.id)
     found = None if redo else tailored_resume(cfg, job)
     if found:
-        return found, "tailored"
-    note = "tailoring off"
-    if tailor:
-        try:
-            if redo:
-                say(f"Tailoring the resume again first: the one made for this job was {redo} "
-                    "(about 8 minutes)…")
-                from backend.apply.prepare import _tailor
-                _tailor(cfg, job, again=True)
-                status = "did not replace the old one"
-            else:
-                from ml.resume.pipeline import tailor_jobs
-                outcomes = tailor_jobs(cfg, [job.id])
-                status = outcomes[0].status if outcomes else "not tailored"
-            found = None if needs_redo(job.id) else tailored_resume(cfg, job)
-            if found:
-                return found, "tailored just now"
-            note = f"tailoring {status}"
-        except Exception as exc:              # no model running, no key, ...
-            note = f"tailoring unavailable ({type(exc).__name__})"
-    return selected_master(cfg, job), f"your resume selected for this job — {note}"
+        return found, published_note(job) or "tailored"
+    if not tailor:
+        return None, ("its resume is not made yet, and this run does not tailor: prepare it, or choose your own "
+                      "resume for it")
+    if redo:
+        say(f"Tailoring the resume again first: the one made for this job was {redo} (about 9 minutes)…")
+    try:
+        done = prepare_for_job(cfg, job, purpose=purpose, again=bool(redo), paid_ok=paid_ok, cancelled=cancelled)
+    except TailoringFailed as exc:
+        return None, f"its resume was not made ({exc.message})"
+    return done.pdf, done.note
 
 
 def file_name(applicant, company: str, kind: str, suffix: str) -> str:
@@ -215,13 +210,31 @@ def file_name(applicant, company: str, kind: str, suffix: str) -> str:
     return named(getattr(applicant, "full_name", ""), company, kind, suffix)
 
 
+def run_copy(source: Path, target: Path) -> Path:
+    """A copy for a run's own folder: the bytes only, writable, put in place whole (A1.1, Nov 2026). Never the
+    source's own mode: a published resume is read-only (ml/tailoring/coordination), and copying that mode into
+    the run's folder made its next copy there fail -- Apply to these stopped with PermissionError. The published
+    file itself is only ever read."""
+    import os
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    import uuid
+    temp = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        shutil.copyfile(source, temp)
+        os.chmod(temp, 0o644)
+        os.replace(temp, target)          # replaces a read-only copy too: the folder is the run's own
+    finally:
+        if temp.exists():
+            temp.unlink()
+    return target
+
+
 def sent_copy(path: Path, evidence: Path, applicant, company: str, kind: str) -> Path:
     """A copy of `path` named for the employer, in the run's send/ folder."""
     folder = evidence / "send"
     folder.mkdir(parents=True, exist_ok=True)
-    target = folder / file_name(applicant, company, kind, Path(path).suffix)
-    shutil.copy2(path, target)
-    return target
+    return run_copy(path, folder / file_name(applicant, company, kind, Path(path).suffix))
 
 
 def write_letter_if_missing(cfg, job, head: str = "") -> bool:
@@ -281,9 +294,7 @@ def cover_letter(cfg, job, evidence: Path) -> Path | None:
         letter_edit._documents(folder, letter.read_text(encoding="utf-8"), *letter_edit.look_for_job(cfg, job.id))
         pdf = letter_edit.document(folder, "pdf")
     if pdf is not None:
-        target = evidence / "cover-letter.pdf"
-        shutil.copy2(pdf, target)
-        return target
+        return run_copy(pdf, evidence / "cover-letter.pdf")
     target = evidence / "cover-letter.txt"
     target.write_text(letter.read_text(encoding="utf-8"), encoding="utf-8")
     return target
@@ -812,6 +823,9 @@ class Prepared:
     resume_note: str
     evidence: Path
     origins: dict = field(default_factory=dict)
+    # Asked a moment before the app itself presses Submit: why the attached resume must not go by itself (a newer
+    # version published while the form was open, ...), or None (A1.1.1, backend/apply/execution._still_current).
+    last_check: object = None
 
 
 def prepare_chosen(cfg, *, tailor: bool = True, paid_ok: bool = False, only=None) -> int:
@@ -832,21 +846,22 @@ def apply_one(cfg, page, job, applicant: Applicant, head: str, *,
     return fill_form(cfg, page, job, applicant, head, ready, auto=False, wait_s=wait_s)
 
 
-def prepare_documents(cfg, job, applicant: Applicant, head: str, *, tailor: bool) -> Prepared | str:
+def prepare_documents(cfg, job, applicant: Applicant, head: str, *, tailor: bool, paid_ok: bool = False,
+                      cancelled=None) -> Prepared | str:
     """The resume (tailored now if need be) and the cover letter, ready to attach; or why not.
     Split from filling the form (24 Oct 2026) so the chosen jobs' queue can say which it is doing."""
     evidence = greenhouse._evidence_dir(job.id)
 
     from backend.apply import approval
-    resume, resume_note = choose_resume(cfg, job, tailor=tailor)
+    resume, resume_note = choose_resume(cfg, job, tailor=tailor, paid_ok=paid_ok, cancelled=cancelled)
     if resume is None:
-        say(f"{head}: no resume to attach — put yours in ml/resume/. Skipped.")
-        return "no resume"
+        say(f"{head}: {resume_note}.")
+        return resume_note
     no = approval.refused(job.id, "resume", resume, resume_note)   # one the person rejected never goes
     if no:
         say(f"{head}: {no}. Skipped.")
         return no
-    shutil.copy2(resume, evidence / f"resume{resume.suffix}")    # exactly what went out, for the app's pages
+    run_copy(resume, evidence / f"resume{resume.suffix}")        # exactly what went out, for the app's pages
     # What the employer receives is named for the person and the company, never "resume.pdf".
     kept = sent_copy(resume, evidence, applicant, job.company, "Resume")
     try:
@@ -882,10 +897,11 @@ def writer(cfg) -> tuple[str, str, bool]:
     Free is the person's own plan or this Mac's model -- no bill per use. Its fallbacks are only ever
     free ones (ml/resume/llm.complete); a writer that bills is used only when the person chose it,
     and a run asks before using one (26 Oct 2026)."""
-    from ml.resume import llm
+    from ml.resume import llm, writers
     name = llm.provider_name(cfg)
     spec = llm.PROVIDERS.get(name, {})
-    return name, str(spec.get("label", name)), bool(spec.get("free", False))
+    # Free only when verified to cost nothing per use (ml/resume/writers, A1.1.1) -- not because the table says so.
+    return name, str(spec.get("label", name)), writers.free_writer(name, cfg)
 
 
 def fill_form(cfg, page, job, applicant: Applicant, head: str, ready: Prepared, *,
@@ -902,14 +918,19 @@ def fill_form(cfg, page, job, applicant: Applicant, head: str, ready: Prepared, 
         return _apply_anywhere(cfg, page, job, applicant, head, outcome, kept, letter, resume_note,
                                evidence, wait_s, auto=auto)
     return _apply_greenhouse(page, job, applicant, head, outcome, kept, letter, resume_note, evidence,
-                             wait_s, greenhouse.form_url(job.company_slug, job.external_id), auto=auto)
+                             wait_s, greenhouse.form_url(job.company_slug, job.external_id), auto=auto,
+                             last_check=ready.last_check)
 
 
 def _apply_greenhouse(page, job, applicant, head, outcome, kept, letter, resume_note, evidence, wait_s,
-                      url, *, auto: bool) -> Outcome:
-    """Greenhouse: filled, and sent by itself only when nothing on it needs the person."""
+                      url, *, auto: bool, last_check=None) -> Outcome:
+    """Greenhouse: filled, and sent by itself only when nothing on it needs the person -- and only if its resume
+    is still the job's current, approved version a moment before Submit (`last_check`, A1.1.1). Without one,
+    the app never presses Submit: the person does."""
+    auto = bool(auto and last_check is not None)
+    extra = {"before_submit": last_check} if auto else {}
     result = greenhouse.fill(page, job.id, url, applicant, kept, letter,
-                             submit=auto, evidence=evidence)
+                             submit=auto, evidence=evidence, **extra)
     if not result.ok:
         say(f"{head}: {result.summary()}")
         outcome.detail = result.error or ""
@@ -921,6 +942,9 @@ def _apply_greenhouse(page, job, applicant, head, outcome, kept, letter, resume_
         how, verdict = "auto", "submitted"
     else:
         waiting = []
+        if getattr(result, "held_back", None):
+            waiting.append(f"a decision: the app did not press Submit, because {result.held_back} -- close "
+                           "this tab and press Retry on the job for its current resume")
         if result.submitted and greenhouse.challenge_shown(page):
             waiting.append("the CAPTCHA puzzle that appeared")
         elif result.submitted:
@@ -985,7 +1009,7 @@ def _apply_anywhere(cfg, page, job, applicant, head, outcome, kept, letter, resu
     own = start != job.application_url
     say(f"{head}: opening {'the page you added' if own else f'the posting on {job.source}'} · {resume_note}")
     reached = anyform.reach(page, start, say=say, check_s=min(wait_s, CHECK_WAIT_S))
-    if reached.stop == "check":
+    if getattr(reached, "stop", None) == "check":
         # A check that wants a person, not this browser: the person's own Chrome, never Failed and
         # never Applied -- the job waits for their word on whether it went.
         result = anyform.FillResult(job_id=job.id, url=start)

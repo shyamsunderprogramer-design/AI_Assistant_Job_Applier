@@ -224,8 +224,17 @@ def compare(base_text: str, tailored_text: str | None, jd_text: str,
 
 
 def tailored_pdf(cfg, job) -> Path:
+    """The job's resume as it would be sent: its published version (Track A1); before one exists, the
+    file in the job's output folder, as before."""
     from ml.resume.packet import packet_root
     from ml.resume.writer import output_filename
+    from ml.tailoring import coordination
+    try:
+        published = coordination.current(job.id)
+    except RuntimeError:                       # no database here (a test of the scorer alone)
+        published = None
+    if published is not None:
+        return published.pdf
     return (packet_root(cfg) / output_filename(job.company, job.title, job.external_id or "")).with_suffix(".pdf")
 
 

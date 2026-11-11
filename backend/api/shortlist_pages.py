@@ -99,7 +99,7 @@ def apply_picks_prepare():
     job_id = body.get("job_id")
     if job_id is not None and (not isinstance(job_id, int) or isinstance(job_id, bool) or job_id <= 0):
         return jsonify(ok=False, error='Send "job_id", or nothing for all of today\'s picks.'), 400
-    if next((t for t in (*APPLY_TASKS, "prepare-chosen") if task_pid(t)), None) or execution.run_alive():
+    if next((t for t in (*APPLY_TASKS, "prepare", "prepare-chosen") if task_pid(t)), None) or execution.run_alive():
         return jsonify(ok=False, error="A run is going already (applying, or making documents ready). "
                                        "Let it finish or pause it, then press this again."), 409
     state = execution.view(cfg())

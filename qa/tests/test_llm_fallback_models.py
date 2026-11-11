@@ -8,6 +8,18 @@ import pytest
 from ml.resume import llm, plans
 
 
+@pytest.fixture(autouse=True)
+def _the_person_said_yes(monkeypatch):
+    """These test how each writer is reached and falls back, not whether it may be used (A1.1.1: that is
+    test_writer_approval.py). So, as when the person said yes to a run: a spending limit is open for the writers
+    that bill, and the unverified ones are named in resume.allow_writers."""
+    from ml.resume import cost, writers
+    monkeypatch.setattr(writers, "_allowed", lambda cfg: {"chatgpt", "gemini", "omniroute", "ollama-cloud"})
+    with cost.budget(cost.Ledger(cap_usd=1000.0)):
+        yield
+
+
+
 @pytest.mark.parametrize("target", ["chatgpt", "gemini"])
 @pytest.mark.parametrize("configured", [False, True])
 def test_claude_fallback_uses_target_model(monkeypatch, target, configured):

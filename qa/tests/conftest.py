@@ -32,7 +32,14 @@ def _loopback(host) -> bool:
 # test does, these files are as they were before it ran, or the test fails and names them.
 OWN_RECORDS = ("data/applications.jsonl", "data/apply/unconfirmed.json", "data/apply/chosen.json",
                "data/apply/prepared.json", "data/watchlist.json", "data/written_answers.json",
-               "data/apply/shortlist.json", "data/apply/shortlist_settings.json")
+               "data/apply/shortlist.json", "data/apply/shortlist_settings.json",
+               # and the tailoring records, the lines and titles the person keeps, where their job folders go and
+               # their profile (A1.1, 8 Nov 2026)
+               "data/tailoring/redo.json", "ml/resume/additions.yaml", "ml/resume/titles.yaml",
+               "ml/resume/output/.folder-places.json", "backend/config/applicant.yaml")
+# Folders of the person's own whose contents no test may change: listed (names, sizes, times) before and after.
+OWN_FOLDERS = ("data/tailoring/jobs", "data/tailoring/runs", "data/tailoring/published", "data/tailoring/own",
+               "data/tailoring/scores")
 
 
 REAL_ROOT = Path(__file__).resolve().parents[2]     # fixed here: some tests point PROJECT_ROOT elsewhere
@@ -49,12 +56,57 @@ def _stamp() -> dict:
     return stamps
 
 
+def _listing(folder: Path, deep: bool) -> tuple:
+    """Names, and each file's size: what a test could add, remove or change. Not times: the live app or a schedule
+    touching a folder during a run is not a test's doing (A1.1 review)."""
+    try:
+        entries = folder.rglob("*") if deep else folder.iterdir()
+        return tuple(sorted((str(p.relative_to(folder)), p.stat().st_size if p.is_file() else -1) for p in entries))
+    except OSError:
+        return ()
+
+
+def _folders() -> dict:
+    return {name: _listing(REAL_ROOT / name, deep=name.endswith(("published", "own"))) for name in OWN_FOLDERS}
+
+
 @pytest.fixture(autouse=True)
 def _own_records_untouched():
-    before = _stamp()
+    before, folders = _stamp(), _folders()
     yield
     changed = [name for name, stamp in _stamp().items() if stamp != before[name]]
+    changed += [name for name, listing in _folders().items() if listing != folders[name]]
     assert not changed, f"this test changed the person's own records: {changed}"
+
+
+def _job_folders_root() -> Path | None:
+    """Where the person's job folders go (their own "Applied Jobs info"), from their saved places, if set."""
+    import json
+    try:
+        default = json.loads((REAL_ROOT / "ml/resume/output/.folder-places.json").read_text()).get("default")
+    except (OSError, ValueError):
+        return None
+    return Path(default) if default else None
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _own_job_folders_untouched():
+    """The person's job folders (A1.1): once for the whole run, since a test once made one there."""
+    root = _job_folders_root()
+    before = _listing(root, deep=False) if root else ()
+    yield
+    after = _listing(root, deep=False) if root else ()
+    assert after == before, f"the test run changed the person's job folders in {root}"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_lines_titles_or_scores(monkeypatch, tmp_path):
+    """The person's added lines, kept titles and saved scores are never read or written by tests (A1.1)."""
+    from ml.resume import additions, titles
+    from ml.tailoring import pipeline
+    monkeypatch.setattr(additions, "ADDITIONS_PATH", tmp_path / "additions.yaml")
+    monkeypatch.setattr(titles, "TITLES_PATH", tmp_path / "titles.yaml")
+    monkeypatch.setattr(pipeline, "SCORES", tmp_path / "tailoring-scores")
 
 
 # -- and never the person's own database (25 Oct 2026) ------------------------------------------
@@ -205,6 +257,10 @@ def _no_real_redo_list(monkeypatch, tmp_path):
     # (execution.documents_unready, 29 Oct 2026). Tests that need runs make their own.
     monkeypatch.setattr(pipeline, "RUNS", tmp_path / "tailoring-runs")
     monkeypatch.setattr(pipeline, "JOBS", tmp_path / "tailoring-jobs")
+    # Nor its published resume versions or the person's own chosen resumes (Track A1).
+    from ml.tailoring import coordination
+    monkeypatch.setattr(coordination, "PUBLISHED", tmp_path / "tailoring-published")
+    monkeypatch.setattr(pipeline, "OWN", tmp_path / "tailoring-own")
 
 
 @pytest.fixture(autouse=True)
@@ -241,3 +297,62 @@ def _no_real_fetch_bookkeeping(monkeypatch, tmp_path):
     monkeypatch.setattr(probe_runner, "PAUSEFILE", tmp_path / "probe_runner.pause")
     monkeypatch.setattr(cloud_results, "COLLECTED", tmp_path / "cloud_collected.json")
     monkeypatch.setattr(cloud_results, "TOPUP", tmp_path / "cloud_topup.json")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_job_folders(monkeypatch, tmp_path):
+    """The person's saved places for job folders (ml/resume/output/.folder-places.json, whose default is their
+    own "Applied Jobs info" folder) are never read by tests: a test's job folder would be written there.
+    Found 8 Nov 2026 -- test_apply_runner had made acme_sre_123 among the person's real folders."""
+    from ml.resume import packet
+    monkeypatch.setattr(packet, "_places_file", lambda cfg: tmp_path / "folder-places.json")
+
+
+@pytest.fixture(autouse=True)
+def _claude_plan_status_stood_in(monkeypatch):
+    """`claude auth status` is never run by a test (A1.1.1, ml/resume/writers): Claude Code stands signed in with
+    a Claude plan unless a test says otherwise -- the writer-approval tests do."""
+    from ml.resume import writers
+    monkeypatch.setattr(writers, "_claude_plan",
+                        lambda: {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"})
+
+
+@pytest.fixture
+def local_clock(monkeypatch):
+    """A controlled clock for the application history (A1.1.1): `set(utc_instant, tz)` makes it that moment, in
+    that time zone, for backend.apply.tracker -- its "today" and "now" -- however late the test is run."""
+    import time as _time
+    from datetime import date as _date, datetime as _datetime
+    from backend.apply import tracker
+    before = os.environ.get("TZ")
+
+    def set_to(instant, tz="America/Chicago"):
+        os.environ["TZ"] = tz
+        _time.tzset()
+
+        class Today(_date):
+            @classmethod
+            def today(cls):
+                return instant.astimezone().date()
+
+        class Now(_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz else instant.astimezone().replace(tzinfo=None)
+        monkeypatch.setattr(tracker, "date", Today)
+        monkeypatch.setattr(tracker, "datetime", Now)
+        return instant.astimezone().date()
+    yield set_to
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    _time.tzset()
+
+
+@pytest.fixture(autouse=True)
+def _progress_bars_in_the_tests_own_folder(tmp_path, monkeypatch):
+    """A job page's progress bar (ml/resume/progress) is the test's own (A1.1.1: one test wrote
+    data/progress/tailor-1.json in the project on every full run)."""
+    from ml.resume import progress
+    monkeypatch.setattr(progress, "FOLDER", tmp_path / "progress")

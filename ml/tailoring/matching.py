@@ -307,6 +307,8 @@ def match(reqs: list[Requirement], model: ResumeModel, cfg=None, use_model: bool
             alignment = re.sub(r"\s*\((?:f\d+(?:,\s*)?)+\)", "",
                                str(reply.get("alignment") or "")).strip()
             judged = {str(j.get("id")): j for j in reply.get("matches") or [] if isinstance(j, dict)}
+        except __import__('ml.resume.cost', fromlist=['SpendCapReached']).SpendCapReached:
+            raise                  # a hard limit stops the run; it is never turned into a rules-only answer (A1.1)
         except Exception as exc:
             notes.append(f"The model could not judge the remaining requirements "
                          f"({type(exc).__name__}); they were matched by rules only.")
@@ -368,6 +370,8 @@ def _recheck_contradictions(reqs, results, model, cfg, notes) -> None:
     try:
         from ml.resume.llm import complete, extract_json
         reply = extract_json(complete(JUDGE, prompt, cfg, max_tokens=3000).text)
+    except __import__('ml.resume.cost', fromlist=['SpendCapReached']).SpendCapReached:
+        raise
     except Exception:
         return
     for j in reply.get("matches") or []:

@@ -145,7 +145,7 @@ def test_a_captcha_stops_submission_even_when_submit_was_asked_for():
     part and is still done; the last click belongs to a person."""
     page = FakePage(captcha=True)
 
-    result = fill(page, 1, "https://example.com/apply", person(), submit=True)
+    result = fill(page, 1, "https://example.com/apply", person(), submit=True, before_submit=lambda: None)
 
     assert result.captcha is True
     assert result.submitted is False
@@ -156,7 +156,7 @@ def test_a_captcha_stops_submission_even_when_submit_was_asked_for():
 def test_without_a_captcha_submit_is_honoured_when_explicitly_asked():
     page = FakePage(captcha=False)
 
-    result = fill(page, 1, "https://example.com/apply", person(), submit=True)
+    result = fill(page, 1, "https://example.com/apply", person(), submit=True, before_submit=lambda: None)
 
     assert result.submitted is True and page.clicked is True
 
@@ -175,7 +175,7 @@ def test_an_outstanding_declaration_blocks_submit_on_its_own():
     unknown = person(authorisation={"authorised_to_work": None,
                                     "requires_sponsorship": None})
 
-    result = fill(page, 1, "https://example.com/apply", unknown, submit=True)
+    result = fill(page, 1, "https://example.com/apply", unknown, submit=True, before_submit=lambda: None)
 
     assert result.submitted is False and page.clicked is False
 
@@ -244,7 +244,7 @@ def test_a_check_that_fails_leaves_submit_to_the_person(broken, what):
     page = Breaks(broken, labels=[{"text": "Years of experience", "id": "q7"}], fields=["first_name", "email", "q7"])
     years = person(answers={"years of experience": "11"})
 
-    result = fill(page, 1, "https://example.com/apply", years, submit=True)
+    result = fill(page, 1, "https://example.com/apply", years, submit=True, before_submit=lambda: None)
 
     assert result.submitted is False and page.clicked is False
     assert what in result.unchecked and result.needs_person
@@ -256,7 +256,7 @@ def test_a_field_whose_marking_cannot_be_read_counts_as_required():
     """A blank question whose "required" marking cannot be read is taken as required, not as optional."""
     page = FakePage(labels=[{"text": "Portfolio link", "id": "q8"}], fields=["first_name", "q8"], captcha=False)
 
-    result = fill(page, 1, "https://example.com/apply", person(), submit=True)   # FakeElement cannot answer
+    result = fill(page, 1, "https://example.com/apply", person(), submit=True, before_submit=lambda: None)   # FakeElement cannot answer
 
     assert "Portfolio link" in result.required_blank and page.clicked is False
 
@@ -276,7 +276,7 @@ def test_a_cover_letter_that_cannot_be_attached_leaves_submit_to_the_person(tmp_
     letter.write_bytes(b"%PDF-1.4 l")
     page = NoLetter(fields=["first_name", "input#resume", "input#cover_letter"], captcha=False)
 
-    result = fill(page, 1, "https://example.com/apply", person(), resume, letter, submit=True)
+    result = fill(page, 1, "https://example.com/apply", person(), resume, letter, submit=True, before_submit=lambda: None)
 
     assert result.attachments == ["resume=r.pdf"] and "the cover letter could not be attached" in result.unchecked
     assert result.submitted is False and page.clicked is False

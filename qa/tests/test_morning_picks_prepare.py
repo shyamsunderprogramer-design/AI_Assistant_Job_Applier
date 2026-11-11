@@ -29,7 +29,7 @@ class Writer:
 def writer(monkeypatch, tmp_path):
     w = Writer()
 
-    def prepare_documents(cfg, job, applicant, head, *, tailor):
+    def prepare_documents(cfg, job, applicant, head, *, tailor, **_):
         w.made.append(job.id)
         if job.id in w.fails:
             return "the writer gave up"
@@ -247,7 +247,7 @@ def test_a_press_made_before_the_morning_never_prepares_the_mornings_picks(clien
     added = []
     real = runner.prepare_documents
 
-    def meanwhile(cfg, job, applicant, head, *, tailor):
+    def meanwhile(cfg, job, applicant, head, *, tailor, **_):
         if not added:
             added.append(shortlist.pick(ON, now=now()))                           # 6 AM comes during the run
         return real(cfg, job, applicant, head, tailor=tailor)

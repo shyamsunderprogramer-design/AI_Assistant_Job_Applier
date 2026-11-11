@@ -77,17 +77,19 @@ def test_a_worse_rerun_never_replaces_a_better_resume(tmp_path, monkeypatch):
     from ml.tailoring import pipeline
     monkeypatch.setattr("ml.resume.packet.person_name", lambda: "Jordan Example")
     monkeypatch.setattr(pipeline, "JOBS", tmp_path / "jobs")
-    def run(name, text):
-        folder = tmp_path / name; folder.mkdir()
+    monkeypatch.setattr(pipeline, "RUNS", tmp_path / "runs")
+    def run(name, text):                    # a finished run: only those can be a job's best (Track A1)
+        folder = tmp_path / "runs" / name; folder.mkdir(parents=True)
         (folder / "tailored-resume.docx").write_text(text); (folder / "tailored-resume.pdf").write_text(text)
+        (folder / "result.json").write_text("{}")
         return folder
     target, packet = tmp_path / "out" / "acme.docx", tmp_path / "Applied" / "acme"
     packet.mkdir(parents=True)
-    assert pipeline.finish_job_run(7, run("r1", "good"), target, 82.0, packet)
-    assert not pipeline.finish_job_run(7, run("r2", "worse"), target, 60.0, packet)
+    assert pipeline.finish_job_run(7, run("run-r1", "good"), target, 82.0, packet)
+    assert not pipeline.finish_job_run(7, run("run-r2", "worse"), target, 60.0, packet)
     from ml.resume.packet import resume_in
     assert target.read_text() == "good" and resume_in(packet).read_text() == "good"
-    assert pipeline.job_best(7) == ("r1", 82.0) and pipeline.job_run(7) == "r2"
+    assert pipeline.job_best(7) == ("run-r1", 82.0) and pipeline.job_run(7) == "run-r2"
 
 
 def test_a_rewrite_of_a_corrected_resume_replaces_the_best_whatever_it_scored(tmp_path, monkeypatch):
@@ -102,6 +104,7 @@ def test_a_rewrite_of_a_corrected_resume_replaces_the_best_whatever_it_scored(tm
         (folder / "inputs").mkdir(parents=True)
         doc = Document(); doc.add_paragraph(made_from); doc.save(folder / "inputs" / "resume.docx")
         (folder / "tailored-resume.docx").write_text(text); (folder / "tailored-resume.pdf").write_text(text)
+        (folder / "result.json").write_text("{}")         # finished: only those can be a job's best (Track A1)
         return folder
     target, packet = tmp_path / "out" / "acme.docx", tmp_path / "Applied" / "acme"
     packet.mkdir(parents=True)

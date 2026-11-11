@@ -71,9 +71,14 @@ def test_a_status_that_is_not_an_application_adds_no_line(client):
     assert lines() == [] and job(3).status == "Skipped"
 
 
-def test_the_assistant_and_a_stage_on_the_applied_page_say_where_they_were_marked(db):
+@pytest.mark.parametrize("utc_hour", [15, 1])      # 9 am and 7 pm Central: the UTC date was already tomorrow at 7 pm
+def test_the_assistant_and_a_stage_on_the_applied_page_say_where_they_were_marked(db, local_clock, utc_hour):
     from backend.assistant import tools
+    # A controlled clock, the day as the page sends it -- where you are (A1.1.1: this test sent the UTC date,
+    # a day ahead every evening, and failed after 6 pm Central as "in the future").
+    today = local_clock(datetime(2026, 11, 10 if utc_hour == 15 else 11, utc_hour, 30, tzinfo=timezone.utc))
+    assert today.isoformat() == "2026-11-10"
     assert tools.run_direct({"kind": "status", "params": {"job_id": 1, "status": "Applied"}}) == "Marked Applied."
-    tracker.add_stage(3, "recruiter_screen", on=NOW.date().isoformat())
+    tracker.add_stage(3, "recruiter_screen", on=today.isoformat())
     assert {l["job_id"]: l["marked_on"] for l in lines()} == {1: "the assistant", 3: "a stage on the Applied page"}
     assert tracker.application(1)["record"]["how"] == "marked"

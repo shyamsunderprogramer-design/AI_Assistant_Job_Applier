@@ -296,7 +296,7 @@ def test_an_applied_job_is_applied_on_the_list_and_a_closed_form_can_be_tried_ag
 
     results = {1: "submitted", 2: "skipped"}
     (tmp_path / "r.pdf").write_bytes(b"%PDF-1.4 made-up resume")
-    monkeypatch.setattr(runner, "prepare_documents", lambda cfg, job, applicant, head, *, tailor:
+    monkeypatch.setattr(runner, "prepare_documents", lambda cfg, job, applicant, head, *, tailor, **_:
                         runner.Prepared(tmp_path / "r.pdf", None, "tailored", tmp_path))
     monkeypatch.setattr(runner, "fill_form", lambda cfg, page, job, applicant, head, ready, **kw:
                         runner.Outcome(job.id, job.company, job.title, results[job.id]))

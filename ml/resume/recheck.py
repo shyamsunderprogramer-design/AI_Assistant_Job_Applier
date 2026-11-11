@@ -28,8 +28,17 @@ HEADINGS = ("summary", "profile", "skills", "experience", "education", "certific
 
 
 def _files(cfg, job) -> tuple[Path, Path]:
+    """The job's resume as it would be sent: its published PDF and DOCX (Track A1); before one exists,
+    the files in the job's output folder, as before."""
     from ml.resume.packet import packet_root
     from ml.resume.writer import output_filename
+    from ml.tailoring import coordination
+    try:
+        published = coordination.current(job.id)
+    except RuntimeError:
+        published = None
+    if published is not None:
+        return published.pdf, published.docx
     docx = packet_root(cfg) / output_filename(job.company, job.title, job.external_id or "")
     return docx.with_suffix(".pdf"), docx
 

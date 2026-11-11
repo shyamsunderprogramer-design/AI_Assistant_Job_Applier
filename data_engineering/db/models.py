@@ -421,3 +421,55 @@ class ShortlistLink(ShortlistBase):
     outcome: Mapped[str] = mapped_column(String(16))                    # found | none | blocked | error
     detail: Mapped[str] = mapped_column(Text, default="")
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PreparationBase(DeclarativeBase):
+    """One resume preparation per job at a time, and the documents it published (Track A1, Nov 2026).
+    Kept out of Base, like ShortlistBase: these tables are created when a preparation first runs
+    (ml/tailoring/coordination.ensure_tables), never by a process merely starting."""
+
+
+class PreparationLease(PreparationBase):
+    """Who is preparing this job's resume now. One row per job, never deleted: `token` only ever goes
+    up, by one each time the claim changes hands, so a worker that lost its claim is recognised at
+    once (its token is no longer the row's). The owner is a machine, a process id and that process's
+    start time -- a process id the system reused for another program is a different owner."""
+
+    __tablename__ = "preparation_leases"
+
+    job_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[int] = mapped_column(Integer)
+    purpose: Mapped[str] = mapped_column(String(64), default="")
+    owner_host: Mapped[str] = mapped_column(String(255), default="")
+    owner_pid: Mapped[int] = mapped_column(Integer)
+    owner_started: Mapped[str] = mapped_column(String(64), default="")     # the process's own start time
+    acquired_at: Mapped[datetime] = mapped_column(DateTime)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DocumentPublication(PreparationBase):
+    """One version of a job's resume: a DOCX and a PDF made together, copied into a folder of their own
+    and never written again. Readers see a version only once it is `published`: both files are in
+    place and match the fingerprints written here, and the claim that made them was still held. The
+    newest published version is the job's resume; older ones stay, to go back to. `source` says where
+    it came from: a tailoring run, or the person's own resume, chosen by them."""
+
+    __tablename__ = "document_publications"
+    __table_args__ = (UniqueConstraint("job_id", "version", name="uq_publication_job_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(Integer, index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16))               # pending | published | failed | withdrawn
+    source: Mapped[str] = mapped_column(String(16))              # tailored | own_resume
+    repeat_key: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    token: Mapped[int] = mapped_column(Integer)                  # the claim it was made under
+    docx_path: Mapped[str] = mapped_column(String(1024))
+    pdf_path: Mapped[str] = mapped_column(String(1024))
+    docx_sha256: Mapped[str] = mapped_column(String(64))
+    pdf_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")

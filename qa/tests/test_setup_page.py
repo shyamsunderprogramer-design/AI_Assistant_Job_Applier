@@ -258,7 +258,8 @@ def test_a_keyless_gateway_is_ready_only_while_it_is_running(site, monkeypatch):
 
     monkeypatch.setattr(webapp, "service_up", lambda url, timeout=0.4: True)
     up = webapp.writer_state()
-    assert up["ready"] is True and up["free"] is True
+    # Ready, but not counted free (A1.1.1): a gateway routes to services that may bill, unless the person names it.
+    assert up["ready"] is True and up["free"] is False
     assert up["needs_starting"] is False
 
     monkeypatch.setattr(webapp, "service_up", lambda url, timeout=0.4: False)

@@ -112,7 +112,7 @@ def fake_form(results, *, opened=None, before=None):
 def documents(monkeypatch, tmp_path):
     made = []
 
-    def prepare_documents(cfg, job, applicant, head, *, tailor):
+    def prepare_documents(cfg, job, applicant, head, *, tailor, **_):
         made.append(job.id)
         (tmp_path / "resume.pdf").write_bytes(b"%PDF-1.4 made-up resume")   # a real file: its checksum is kept
         return runner.Prepared(tmp_path / "resume.pdf", None, "tailored", tmp_path)
@@ -250,7 +250,7 @@ def test_eligibility_is_checked_again_just_before_each_job(db, documents, monkey
     cfg, _, tmp_path = db
     opened = []
 
-    def close_acme_while_tailoring(cfg, job, applicant, head, *, tailor):
+    def close_acme_while_tailoring(cfg, job, applicant, head, *, tailor, **_):
         if job.id == 2:
             with get_session() as s:
                 s.get(Job, 2).is_open = False                # the posting closes meanwhile

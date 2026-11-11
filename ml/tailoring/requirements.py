@@ -119,6 +119,8 @@ def extract(jd: str, cfg=None, use_model: bool = True) -> tuple[list[Requirement
             from ml.resume.llm import complete, extract_json
             reply = complete(SYSTEM, "JOB POSTING:\n\n" + text, cfg, max_tokens=6000)
             items = extract_json(reply.text).get("requirements") or []
+        except __import__('ml.resume.cost', fromlist=['SpendCapReached']).SpendCapReached:
+            raise                  # a hard limit stops the run; it is never turned into a rules-only answer (A1.1)
         except Exception as exc:
             notes.append(f"The model could not read the posting ({type(exc).__name__}); "
                          f"requirements were found by rules instead.")

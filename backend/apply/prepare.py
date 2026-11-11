@@ -272,33 +272,14 @@ def open_questions(job, applicant) -> list[dict]:
 
 # -- getting one job ready ----------------------------------------------------------
 
-def _tailor(cfg, job, again: bool = False) -> dict | None:
+def _tailor(cfg, job, again: bool = False, purpose: str = "Prepare now") -> dict | None:
     """Resume Tailoring for this job with the saved resume, unless it is done already -- or done
-    from a resume since repaired (ml.tailoring.pipeline.needs_redo), or `again` is asked."""
-    from ml.resume.packet import packet_dir, packet_root
-    from ml.resume.pipeline import base_resume_path
-    from ml.resume.writer import output_filename
+    from a resume since repaired (ml.tailoring.pipeline.needs_redo), or `again` is asked.
+    The one canonical preparation (ml.tailoring.pipeline.prepare_for_job, Track A1): it raises
+    TailoringFailed with the reason, and nothing takes the tailored resume's place by itself."""
     from ml.tailoring import pipeline as tailoring
-
-    best, score = tailoring.job_best(job.id)
-    if best and not again and not tailoring.needs_redo(job.id):
-        return {"run": best, "ats": score}
-    folder = tailoring.new_run()
-    resume = tailoring.save_saved_resume(folder, base_resume_path(cfg))
-    target = packet_root(cfg) / output_filename(job.company, job.title, job.external_id or "")
-    packet = packet_dir(cfg, job.company, job.title, job.external_id or "", job_id=job.id)
-    tailoring.remember_job_run(job.id, folder, target, packet)
-    tailoring._progress(folder, stage=0, done=False, error=None, note="")
-    try:
-        result = tailoring.run(folder, resume, f"{job.title}\n\n{job.description or ''}", None, cfg,
-                               company=job.company)
-    except Exception as exc:
-        tailoring._progress(folder, done=True, error={"stage": "", "file": None, "message": str(exc)[:300]})
-        raise
-    ats = (result.get("before_after") or {}).get("ats", [None, result["score"]])[1]
-    tailoring.finish_job_run(job.id, folder, target, ats, packet)
-    tailoring._progress(folder, stage=len(tailoring.STAGES), done=True, error=None, note="")
-    return {"run": folder.name, "ats": ats}
+    done = tailoring.prepare_for_job(cfg, job, purpose=purpose, again=again)
+    return {"run": done.run_id, "ats": done.score}
 
 
 def prepare_one(cfg, job, applicant, say=print) -> dict:
@@ -312,7 +293,8 @@ def prepare_one(cfg, job, applicant, say=print) -> dict:
         entry["tailored"] = _tailor(cfg, job)
         build_packet(cfg, job)                        # adopt the tailored resume into the folder
     except Exception as exc:
-        entry["notes"].append(f"Tailoring did not finish ({str(exc)[:120]}); your own resume will be sent.")
+        entry["notes"].append(f"Tailoring did not finish ({str(exc)[:160]}). Nothing goes for it until its resume "
+                              "is made, or you choose your own resume for it on Your chosen jobs.")
     if not (packet.path / LETTER_FILE).exists():
         try:
             from ml.resume.pipeline import write_letter

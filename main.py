@@ -564,6 +564,31 @@ def cmd_score(cfg, args) -> int:
     return 0
 
 
+def _tailor_canonical(cfg, job_ids, *, again: bool, paid_ok: bool) -> int:
+    """`tailor --job-id N`: the one canonical preparation (Track A1), the same as every application path."""
+    from data_engineering.db.models import Job
+    from data_engineering.db.session import get_session
+    from ml.tailoring.pipeline import TailoringFailed, prepare_for_job
+    if not job_ids or len(job_ids) != 1:
+        print("Tailor one job at a time: --job-id N. Batch tailoring is the older engine's, under --legacy.")
+        return 2
+    with get_session() as session:
+        job = session.get(Job, job_ids[0])
+        if job is None:
+            print(f"No job {job_ids[0]}.")
+            return 1
+        session.expunge(job)
+    try:
+        done = prepare_for_job(cfg, job, purpose="tailor (command line)", again=again, paid_ok=paid_ok)
+    except TailoringFailed as exc:
+        print(f"[not tailored    ] {job.company} — {job.title[:44]}\n                    {exc.message}")
+        return 1
+    print(f"[{'unchanged' if done.reused else 'tailored':<16}] {job.company} — {job.title[:44]}")
+    print(f"                    {done.note} · version {done.publication.version}")
+    print(f"                    -> {done.pdf}")
+    return 0
+
+
 def cmd_tailor(cfg, args) -> int:
     init_engine(cfg.database_url)
     from ml.resume.pipeline import estimate_tailoring, tailor_jobs
@@ -588,6 +613,10 @@ def cmd_tailor(cfg, args) -> int:
             print("Run cap        : none (resume.max_spend_per_run_usd is 0)")
         print("\nEstimates assume a full-length response; real cost is usually lower.")
         return 0
+    if not getattr(args, "legacy", False):
+        return _tailor_canonical(cfg, job_ids, again=getattr(args, "align", False),
+                                 paid_ok=getattr(args, "paid_ok", False))
+    print("Using the older tailoring engine (--legacy): no application path uses it.")
     ats_line = ""
     if job_ids and len(job_ids) == 1:
         # One job, asked for by a person: aim for the ATS target, not one shot.
@@ -1148,6 +1177,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_tailor = sub.add_parser("tailor", help="Tailor the resume per job via the Claude API")
     p_tailor.add_argument("--job-id", action="append", help="Tailor specific job id(s)")
+    p_tailor.add_argument("--legacy", action="store_true",
+                          help="The older tailoring engine (kept for a while; no application path uses it)")
+    p_tailor.add_argument("--paid-ok", action="store_true",
+                          help="Let a writer that bills per use (set in Settings) write, within the spending limit")
     p_tailor.add_argument("--align", action="store_true",
                           help="Rewrite again, bringing back posting terms your resume has "
                                "that the last version lost")
