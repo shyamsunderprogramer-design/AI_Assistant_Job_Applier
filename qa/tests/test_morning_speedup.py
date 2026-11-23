@@ -689,24 +689,29 @@ def test_the_top_up_command_says_when_there_is_nothing_to_add(monkeypatch, capsy
 
 # -- the workflow: four parts, each site once, locked between jobs ------------------------------------
 
-def test_the_workflow_plans_four_parts_and_joins_them():
+def test_the_workflow_plans_partitions_and_joins_them():
+    # Since the discovery partitions (Nov 2026): every board in one partition of its own job site
+    # (devops/discovery_plan.py), read on its own machine (discovery_worker), merged on its own (discovery_merge).
+    # The four-part version this replaced is in git history (fetch_parts). Detail: test_discovery_partitions.py.
     flow = yaml.safe_load((ROOT / ".github" / "workflows" / "daily-scrape.yml").read_text())
     jobs = flow["jobs"]
     assert list(jobs) == ["plan", "scrape", "join"]
-    assert "fetch_parts plan" in " ".join(s.get("run", "") for s in jobs["plan"]["steps"])
+    plan_steps = {s.get("name"): s for s in jobs["plan"]["steps"]}
+    give = plan_steps["Give every board to exactly one partition"]
+    assert "devops.discovery_plan plan" in give["run"]
+    assert '--target-total "$PARTITIONS"' in give["run"] and "inputs" not in give["run"]   # through env, never inline
     assert jobs["scrape"]["needs"] == "plan"
-    assert jobs["scrape"]["strategy"]["matrix"]["part"] == "${{ fromJSON(needs.plan.outputs.parts) }}"
+    assert jobs["scrape"]["strategy"]["matrix"]["part"] == "${{ fromJSON(needs.plan.outputs.matrix) }}"
     steps = {s.get("name"): s for s in jobs["scrape"]["steps"]}
-    read = steps["Scrape this part's job sites"]
-    assert '--sites "$SITES" --skip-sites "$SKIP"' in read["run"]       # names through env, never inline
-    assert "-salt" in steps["Lock this part for the join"]["run"]
+    assert "devops.discovery_worker" in steps["Read this partition's boards"]["run"]
+    assert "-salt" in steps["Lock this partition's result"]["run"]
     assert steps["Hand it to the join"]["with"]["retention-days"] == 1
-    # Only the join saves the database; every part starts from the same saved copy.
+    # Only the join saves the database; every partition starts from the same saved copy.
     uses = [s.get("uses", "") for job in jobs.values() for s in job["steps"]]
     assert uses.count("actions/cache/save@v4") == 1 and "actions/cache@v4" not in uses
     assert jobs["join"]["needs"] == ["plan", "scrape"]
     join = " ".join(s.get("run", "") for s in jobs["join"]["steps"])
-    assert "fetch_parts join" in join and "jobs.db.enc" in join
+    assert "devops.discovery_merge" in join and "jobs.db.enc" in join
     # The schedule stays as the backup, and the button the Mac presses is there.
     on = flow.get("on", flow.get(True))
     assert on["schedule"] == [{"cron": "17 6 * * *"}] and "workflow_dispatch" in on

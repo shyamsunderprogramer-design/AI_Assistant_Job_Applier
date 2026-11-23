@@ -57,6 +57,19 @@ class HttpSettings:
     # Hosts that want a longer gap than min_delay_seconds: apply.workable.com
     # turned away 56 boards in one run at 1.5s.
     host_delays: dict[str, float] = field(default_factory=dict)
+    # The longest a Retry-After is honoured in one sleep (Nov 2026: also as an HTTP date). Longer asks are
+    # not slept through here: the request gives up, and the host cools off (below).
+    max_retry_after_seconds: float = 60.0
+    # Backoff between retries grows by `backoff_base_seconds ** attempt`, plus up to this fraction of it at
+    # random, so several workers refused at once do not all come back in the same instant.
+    backoff_jitter_fraction: float = 0.5
+    # Providers that give each employer its own host but answer from shared infrastructure (Workday:
+    # acme.wd5.myworkdayjobs.com). One tenant's 429 says little; several different tenants refusing every
+    # retry says the provider is throttling us, so then EVERY host of that provider cools off together --
+    # never asked faster by being asked through another tenant (Discovery partitions, Nov 2026).
+    provider_groups: dict[str, list[str]] = field(default_factory=lambda: {
+        "workday": ["myworkdayjobs.com", "myworkdaysite.com"]})
+    provider_trip_hosts: int = 3
 
     @classmethod
     def from_config(cls, cfg) -> "HttpSettings":
@@ -72,6 +85,12 @@ class HttpSettings:
                 cfg.get("http.rate_limit_cooldown_seconds", 900.0)),
             strict_robots_on_4xx=bool(cfg.get("http.strict_robots_on_4xx", False)),
             host_delays={str(h): float(s) for h, s in (cfg.get("http.host_delays", {}) or {}).items()},
+            max_retry_after_seconds=float(cfg.get("http.max_retry_after_seconds", 60.0)),
+            backoff_jitter_fraction=float(cfg.get("http.backoff_jitter_fraction", 0.5)),
+            provider_groups={str(g): [str(x) for x in (v or [])] for g, v in
+                             (cfg.get("http.provider_groups", None) or {
+                                 "workday": ["myworkdayjobs.com", "myworkdaysite.com"]}).items()},
+            provider_trip_hosts=int(cfg.get("http.provider_trip_hosts", 3)),
         )
 
 
@@ -92,6 +111,14 @@ class PoliteClient:
         self._cooling_until: dict[str, float] = {}
         # host -> refusals in a row; each one doubles the next cool-off
         self._refusals: dict[str, int] = {}
+        # provider group -> (monotonic time before which none of its hosts is asked, its hosts that refused
+        # every retry, refusals in a row of the group). See HttpSettings.provider_groups.
+        self._group_cooling_until: dict[str, float] = {}
+        self._group_refused_hosts: dict[str, set[str]] = {}
+        self._group_refusals: dict[str, int] = {}
+        # For the run's report: how often each host and provider group turned us away (HTTP 429).
+        self.rate_limit_events: dict[str, int] = {}
+        self._rate_guard = threading.Lock()
 
     # -- robots ------------------------------------------------------------
     def _robots_for(self, host_root: str) -> urllib.robotparser.RobotFileParser | None:
@@ -203,9 +230,52 @@ class PoliteClient:
     MAX_COOKIES = 2000
     MAX_ROBOTS = 5000
 
+    def group_of(self, host: str) -> str | None:
+        """The provider group whose hosts `host` belongs to (HttpSettings.provider_groups), or None."""
+        host = (host or "").lower()
+        for group, suffixes in (self.settings.provider_groups or {}).items():
+            if any(host == s or host.endswith("." + s) for s in suffixes):
+                return group
+        return None
+
     def cooling_left(self, host: str) -> float:
-        """Seconds until a host that refused us may be asked again (0 if it may now)."""
-        return max(0.0, self._cooling_until.get(host, 0.0) - time.monotonic())
+        """Seconds until a host that refused us may be asked again (0 if it may now) -- the longer of its own
+        cool-off and its provider group's."""
+        now = time.monotonic()
+        own = self._cooling_until.get(host, 0.0) - now
+        group = self.group_of(host)
+        shared = (self._group_cooling_until.get(group, 0.0) - now) if group else 0.0
+        return max(0.0, own, shared)
+
+    def group_cooling_left(self, group: str) -> float:
+        return max(0.0, self._group_cooling_until.get(group, 0.0) - time.monotonic())
+
+    @staticmethod
+    def retry_after_seconds(value) -> float | None:
+        """A Retry-After header as seconds: delta-seconds or an HTTP date (RFC 9110 §10.2.3); None if absent
+        or unreadable. Never negative."""
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text.isdigit():
+            return float(text)
+        try:
+            from email.utils import parsedate_to_datetime
+            from datetime import datetime, timezone
+            when = parsedate_to_datetime(text)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+
+    def _note_refusal(self, host: str) -> None:
+        with self._rate_guard:
+            self.rate_limit_events[host] = self.rate_limit_events.get(host, 0) + 1
+            group = self.group_of(host)
+            if group:
+                key = f"provider:{group}"
+                self.rate_limit_events[key] = self.rate_limit_events.get(key, 0) + 1
 
     def _forget_old(self) -> None:
         if len(self._session.cookies) > self.MAX_COOKIES:
@@ -221,12 +291,16 @@ class PoliteClient:
         host = urlparse(url).netloc
         last_exc: Exception | None = None
         throttled = False
+        asked_wait = 0.0          # the longest Retry-After this request was given: a cool-off is never shorter
 
         for attempt in range(self.settings.max_retries + 1):
             # Checked every attempt: another worker may have tripped it while
             # this one was sleeping.
             if time.monotonic() < self._cooling_until.get(host, 0.0):
                 raise RateLimited(f"{host} is rate-limiting us; not asking until it cools off")
+            group = self.group_of(host)
+            if group and time.monotonic() < self._group_cooling_until.get(group, 0.0):
+                raise RateLimited(f"{group} is rate-limiting us; none of its hosts is asked until it cools off")
             self._wait_turn(host)
             try:
                 resp = self._session.request(
@@ -238,17 +312,31 @@ class PoliteClient:
             else:
                 if resp.status_code == 429 or resp.status_code >= 500:
                     throttled = resp.status_code == 429
+                    if throttled:
+                        self._note_refusal(host)
                     last_exc = FetchError(f"HTTP {resp.status_code} for {url}")
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        time.sleep(min(int(retry_after), 60))
+                    wait = self.retry_after_seconds(resp.headers.get("Retry-After"))
+                    if wait is not None:
+                        asked_wait = max(asked_wait, wait)
+                    if wait is not None and attempt < self.settings.max_retries:
+                        if wait > self.settings.max_retry_after_seconds:
+                            # Asked to stay away longer than one sleep here: honoured by not asking again
+                            # now -- the host cools off below -- rather than by a worker asleep for it.
+                            break
+                        time.sleep(wait)
                         continue
                 else:
                     self._refusals.pop(host, None)   # it answered: forgive the past
+                    group = self.group_of(host)
+                    if group:
+                        with self._rate_guard:
+                            self._group_refused_hosts.get(group, set()).discard(host)
+                            self._group_refusals.pop(group, None)
                     return resp
 
             if attempt < self.settings.max_retries:
                 backoff = self.settings.backoff_base_seconds ** (attempt + 1)
+                backoff += random.uniform(0, backoff * max(0.0, self.settings.backoff_jitter_fraction))
                 log.debug("Retry %d for %s in %.1fs (%s)", attempt + 1, url, backoff, last_exc)
                 time.sleep(backoff)
 
@@ -261,9 +349,23 @@ class PoliteClient:
             n = self._refusals.get(host, 0) + 1
             self._refusals[host] = n
             cooldown = min(self.settings.rate_limit_cooldown_seconds * 2 ** (n - 1), 6 * 3600)
+            cooldown = max(cooldown, asked_wait)          # never back sooner than the host asked
             self._cooling_until[host] = time.monotonic() + cooldown
             log.warning("%s refused every retry with HTTP 429 — leaving it alone for %.0f min",
                         host, cooldown / 60)
+            group = self.group_of(host)
+            if group:
+                with self._rate_guard:
+                    refused = self._group_refused_hosts.setdefault(group, set())
+                    refused.add(host)
+                    if len(refused) >= max(1, self.settings.provider_trip_hosts):
+                        g = self._group_refusals.get(group, 0) + 1
+                        self._group_refusals[group] = g
+                        pause = min(self.settings.rate_limit_cooldown_seconds * 2 ** (g - 1), 6 * 3600)
+                        self._group_cooling_until[group] = time.monotonic() + pause
+                        refused.clear()
+                        log.warning("%s: %d of its hosts refused every retry -- leaving the whole provider "
+                                    "alone for %.0f min", group, self.settings.provider_trip_hosts, pause / 60)
             raise RateLimited(f"Giving up on {url}: {host} is rate-limiting us (HTTP 429)")
         raise FetchError(f"Giving up on {url} after {self.settings.max_retries} retries: {last_exc}")
 

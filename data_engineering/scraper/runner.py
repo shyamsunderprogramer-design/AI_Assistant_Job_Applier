@@ -64,6 +64,13 @@ class RunSummary:
     failures: list[tuple[str, str, str]] = field(default_factory=list)  # (source, slug, error)
     # Boards a host turned away with 429s, tried again once it has cooled off.
     deferred: list = field(default_factory=list)
+    # Each board's outcome, for a partition's coverage report (devops/discovery_worker.py):
+    # (source, slug) -> (status, error_type). status: complete | partial | failed | rate_limited | not_attempted.
+    # "partial": read, but not completely (nothing closed); "failed": a board-level error (404, robots, parse).
+    outcomes: dict = field(default_factory=dict)
+
+
+COMPLETE, PARTIAL, FAILED, RATE_LIMITED, NOT_ATTEMPTED = "complete", "partial", "failed", "rate_limited", "not_attempted"
 
 
 def build_scrapers(cfg, client: PoliteClient) -> dict[str, PortalScraper]:
@@ -117,15 +124,23 @@ def load_companies(cfg, sites=None, skip_sites=None) -> list[CompanyRef]:
 
 
 def run_scrape(cfg, sites=None, skip_sites=None) -> RunSummary:
-    client = PoliteClient(HttpSettings.from_config(cfg))
+    return scrape_companies(cfg, load_companies(cfg, sites, skip_sites))
+
+
+def scrape_companies(cfg, companies: list[CompanyRef], *, workers: int | None = None,
+                     deadline: float | None = None, client: PoliteClient | None = None,
+                     run_id: str | None = None) -> RunSummary:
+    """Read exactly these boards. `deadline` (time.monotonic()) is a time budget: no board is started after
+    it, and no rate-limit wait runs past it -- those boards are recorded not_attempted or rate_limited, never as
+    read. Without one this is the full run as it always was (`run_scrape`)."""
+    client = client or PoliteClient(HttpSettings.from_config(cfg))
     scrapers = build_scrapers(cfg, client)
     job_filter = resolve_filter(cfg)
-    summary = RunSummary(run_id=uuid.uuid4().hex[:12])
+    summary = RunSummary(run_id=run_id or uuid.uuid4().hex[:12])
     deactivate_after = int(cfg.get("limits.deactivate_after_failures", 5) or 0)
     close_on_empty = bool(cfg.get("limits.close_on_empty_board", False))
 
-    companies = load_companies(cfg, sites, skip_sites)
-    workers = int(cfg.get("limits.scrape_workers", 6) or 1)
+    workers = int(workers or cfg.get("limits.scrape_workers", 6) or 1)
     if _is_in_memory():
         # An in-memory SQLite database belongs to the connection that opened
         # it, so a worker thread finds an empty one. That is a real property
@@ -162,6 +177,10 @@ def run_scrape(cfg, sites=None, skip_sites=None) -> RunSummary:
 
     def walk(host_companies: list) -> None:
         for company in host_companies:
+            if deadline is not None and time.monotonic() >= deadline:
+                with lock:
+                    summary.outcomes[(company.source, company.slug)] = (NOT_ATTEMPTED, "TimeBudget")
+                continue
             _scrape_one(company, scrapers, job_filter, summary, lock,
                         deactivate_after, close_on_empty)
 
@@ -176,7 +195,11 @@ def run_scrape(cfg, sites=None, skip_sites=None) -> RunSummary:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(walk, by_host.values()))
 
-    _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty, workers)
+    max_wait = 20 * 60
+    if deadline is not None:
+        max_wait = max(0.0, min(max_wait, deadline - time.monotonic() - 60))
+    _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty, workers,
+                    max_wait=max_wait, deadline=deadline)
     return summary
 
 
@@ -197,7 +220,7 @@ def scrape_boards(cfg, refs: list[CompanyRef]) -> RunSummary:
 
 
 def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty,
-                    workers, max_wait: float = 20 * 60) -> None:
+                    workers, max_wait: float = 20 * 60, deadline: float | None = None) -> None:
     """Ask the boards a host turned away once more, after its cool-off ends."""
     if not summary.deferred:
         return
@@ -205,12 +228,24 @@ def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_afte
     hosts: dict[str, list] = {}
     for company in again:
         hosts.setdefault(_host_of(scrapers[company.source], company), []).append(company)
-    wait = min(max_wait, max(client.cooling_left(h) for h in hosts))
+    cooling = max(client.cooling_left(h) for h in hosts)
+    if cooling > max_wait:
+        # Not asked again inside this run's time: they stay rate-limited -- incomplete, never read.
+        log.info("%d board(s) were rate-limited and their hosts cool off past this run's time; left as "
+                 "rate-limited", len(again))
+        for company in again:
+            summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
+        return
+    wait = cooling
     log.info("%d board(s) were rate-limited; asking again in %.0f min", len(again), wait / 60)
     time.sleep(wait)
 
     def walk(host_companies: list) -> None:
         for company in host_companies:
+            if deadline is not None and time.monotonic() >= deadline:
+                with lock:          # its time ran out before it was asked again: still rate-limited, not read
+                    summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
+                continue
             _scrape_one(company, scrapers, job_filter, summary, lock,
                         deactivate_after, close_on_empty, retrying=True)
 
@@ -265,9 +300,11 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
         with lock:
             _log_failure(summary, company, "RobotsDisallowed", str(exc), started,
                          deactivate_after)
+            summary.outcomes[(company.source, company.slug)] = (FAILED, "RobotsDisallowed")
         return
     except RateLimited as exc:
         with lock:
+            summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
             if not retrying:
                 # Not a failure yet: asked again once the host has cooled off.
                 summary.companies_attempted -= 1
@@ -279,6 +316,7 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
         with lock:
             _log_failure(summary, company, type(exc).__name__, str(exc), started,
                          deactivate_after)
+            summary.outcomes[(company.source, company.slug)] = (FAILED, type(exc).__name__)
         return
 
     kept = job_filter.apply(raw_jobs)
@@ -311,6 +349,7 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
         summary.jobs_reopened += lifecycle.reopened
 
         _log_success(summary, company, len(raw_jobs), len(kept), new_count, started)
+        summary.outcomes[(company.source, company.slug)] = (PARTIAL if partial else COMPLETE, "")
 
     log.info(
         "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed",

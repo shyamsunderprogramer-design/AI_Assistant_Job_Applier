@@ -1,0 +1,18 @@
+{
+  "_about": "Discovery partitions (devops/discovery_plan.py). One lane per job site, never mixed. partitions: how many independent machines read that site's boards; max_partitions: the most it may ever be split into; budget: the most boards of that site read at the same moment across ALL its partitions (one_host sites: machines asking the one host at once). Raising the total spreads a site's boards over more machines but never raises its budget. A site not listed gets one partition. Budgets start at what one machine already used for a site (6 boards at once; 1 machine for a one-host site), Greenhouse at 2 machines: raising one is a deliberate change, watched for 429s.",
+  "time_budget_minutes": 150,
+  "default_one_partition_budget": 6,
+  "lanes": {
+    "greenhouse": {"partitions": 2, "max_partitions": 3, "budget": 2, "one_host": true},
+    "workday":    {"partitions": 2, "max_partitions": 4, "budget": 6, "one_host": false},
+    "bamboohr":   {"partitions": 2, "max_partitions": 4, "budget": 6, "one_host": false},
+    "lever":      {"partitions": 1, "max_partitions": 2, "budget": 1, "one_host": true},
+    "ashby":      {"partitions": 1, "max_partitions": 2, "budget": 1, "one_host": true},
+    "jazzhr":     {"partitions": 1, "max_partitions": 2, "budget": 6, "one_host": false},
+    "breezy":     {"partitions": 1, "max_partitions": 1, "budget": 6, "one_host": false},
+    "teamtailor": {"partitions": 1, "max_partitions": 1, "budget": 6, "one_host": false},
+    "recruitee":  {"partitions": 1, "max_partitions": 1, "budget": 6, "one_host": false},
+    "workable":   {"partitions": 1, "max_partitions": 1, "budget": 1, "one_host": true},
+    "jobvite":    {"partitions": 1, "max_partitions": 1, "budget": 1, "one_host": true}
+  }
+}

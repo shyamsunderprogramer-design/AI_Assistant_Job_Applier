@@ -1,0 +1,230 @@
+"""One discovery partition: its own boards read on its own machine, from its own copy of the saved database, and
+handed back as a small result of its own (Nov 2026; plan: devops/discovery_plan.py, merge: devops/discovery_merge.py).
+
+A partition reads exactly the boards the plan gave it -- all of one job site -- with that site's share of its budget
+(boards read at once), under a time budget: after it no board is started and no rate-limit wait runs past it, and
+those boards are recorded as not attempted or rate-limited, never as read. Closing a posting is still only ever done
+for a board read successfully and completely (data_engineering/scraper/lifecycle.py); nothing here changes that.
+
+It hands back, instead of the whole database:
+  * part.db -- its boards' rows only (companies; postings of the boards it read; its scrape log), and a table of
+    what happened to each board, the plan it belongs to and when it ran. Locked before it leaves the machine.
+  * report.json -- counts only (boards per outcome, error kinds, minutes): safe for a public log.
+Writing nothing else, it can be run again: a new attempt makes a new result for the same partition.
+
+    python -m devops.discovery_worker --manifest manifest.json --partition greenhouse-1of2 --out out/
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+OUTCOMES = ("complete", "partial", "failed", "rate_limited", "not_attempted")
+TABLES = ("companies", "jobs", "scrape_log")
+
+
+def read_only(path) -> str:
+    """A read-only SQLite address for a file, encoded (a space, '#' or '?' in a folder name is safe)."""
+    return Path(path).resolve().as_uri() + "?mode=ro"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def find(manifest: dict, partition_id: str) -> dict:
+    found = [p for p in manifest.get("partitions", []) if p.get("id") == partition_id]
+    if len(found) != 1:
+        raise ValueError(f"partition {partition_id!r} is not in the plan exactly once")
+    part = found[0]
+    sites = {b["source"] for b in part["boards"]}
+    if sites != {part["provider"]}:
+        raise ValueError(f"partition {partition_id} names boards of more than its own job site")
+    return part
+
+
+def ensure_boards(part: dict) -> dict[tuple, str]:
+    """Each of the partition's boards in this machine's database: added when the saved copy does not have it yet
+    (the plan read the newer board list). A board the copy holds as inactive is not read here."""
+    from data_engineering.db.models import Company
+    from data_engineering.db.session import get_session
+    skipped: dict[tuple, str] = {}
+    with get_session() as session:
+        for b in part["boards"]:
+            row = session.query(Company).filter_by(source=b["source"], slug=b["slug"]).one_or_none()
+            if row is None:
+                session.add(Company(name=b.get("name") or b["slug"], slug=b["slug"], source=b["source"],
+                                    board_url=b.get("board_url") or None, origin=b.get("origin") or "imported",
+                                    active=True))
+            elif not row.active:
+                skipped[(b["source"], b["slug"])] = "Inactive"
+    return skipped
+
+
+def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = None,
+        run_id: str | None = None) -> dict:
+    """Read the partition's boards; return what happened, board by board, and the run's id."""
+    from data_engineering.scraper.runner import NOT_ATTEMPTED, SCRAPER_TYPES, scrape_companies
+    from data_engineering.scraper.base import CompanyRef
+    from data_engineering.scraper.http_client import HttpSettings, PoliteClient
+    part = find(manifest, partition_id)
+    started_at, started = _now(), time.monotonic()
+    budget = float(budget_minutes if budget_minutes is not None else manifest.get("budget_minutes", 150))
+    outcomes: dict[tuple, tuple] = {}
+    client = None
+    if part["provider"] not in SCRAPER_TYPES or not cfg.get(f"portals.{part['provider']}.enabled", True):
+        for b in part["boards"]:
+            outcomes[(b["source"], b["slug"])] = (NOT_ATTEMPTED, "NoReader")
+        summary_id = run_id or f"{partition_id}-none"
+    else:
+        skipped = ensure_boards(part)
+        refs = [CompanyRef(name=b.get("name") or b["slug"], slug=b["slug"], source=b["source"])
+                for b in part["boards"] if (b["source"], b["slug"]) not in skipped]
+        client = PoliteClient(HttpSettings.from_config(cfg))
+        summary = scrape_companies(cfg, refs, workers=int(part.get("workers") or 1),
+                                   deadline=started + budget * 60, client=client, run_id=run_id)
+        summary_id = summary.run_id
+        outcomes.update(summary.outcomes)
+        for key, why in skipped.items():
+            outcomes[key] = (NOT_ATTEMPTED, why)
+    for b in part["boards"]:                       # a board with no outcome was never started
+        outcomes.setdefault((b["source"], b["slug"]), (NOT_ATTEMPTED, "NotStarted"))
+    events = dict(getattr(client, "rate_limit_events", {}) or {})
+    return {"partition": partition_id, "provider": part["provider"], "plan_id": manifest["plan_id"],
+            "run_id": summary_id, "started_at": started_at, "finished_at": _now(),
+            "minutes": round((time.monotonic() - started) / 60, 2), "budget_minutes": budget,
+            "outcomes": {f"{s}\t{slug}": list(v) for (s, slug), v in outcomes.items()},
+            "rate_limited_requests": sum(v for k, v in events.items() if not k.startswith("provider:")),
+            "provider_rate_limits": {k.split(":", 1)[1]: v for k, v in events.items() if k.startswith("provider:")}}
+
+
+def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
+    """part.db: the partition's boards' rows only, and what happened to each, from this machine's database."""
+    part = find(manifest, result["partition"])
+    out.mkdir(parents=True, exist_ok=True)
+    target = out / "part.db"
+    if target.exists():
+        target.unlink()
+    read = {k for k, v in result["outcomes"].items() if v[0] in ("complete", "partial")}
+    src = sqlite3.connect(read_only(db_path), uri=True)
+    dst = sqlite3.connect(target)
+    try:
+        for table in TABLES:
+            sql = src.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+            if sql is None:
+                raise RuntimeError(f"the database has no {table} table")
+            dst.execute(sql[0])
+        dst.execute("CREATE TABLE boards (source TEXT, slug TEXT, status TEXT, error_type TEXT, "
+                    "PRIMARY KEY (source, slug))")
+        dst.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        cols = {t: [r[1] for r in src.execute(f"PRAGMA table_info({t})")] for t in TABLES}
+        mine = [(b["source"], b["slug"]) for b in part["boards"]]
+        for source, slug in mine:
+            row = src.execute(f"SELECT {', '.join(cols['companies'])} FROM companies WHERE source = ? AND slug = ?",
+                              (source, slug)).fetchone()
+            if row is not None:
+                dst.execute(f"INSERT INTO companies ({', '.join(cols['companies'])}) VALUES "
+                            f"({', '.join('?' for _ in cols['companies'])})", row)
+            if f"{source}\t{slug}" in read:
+                for job in src.execute(f"SELECT {', '.join(cols['jobs'])} FROM jobs WHERE source = ? AND "
+                                       f"company_slug = ?", (source, slug)):
+                    dst.execute(f"INSERT INTO jobs ({', '.join(cols['jobs'])}) VALUES "
+                                f"({', '.join('?' for _ in cols['jobs'])})", job)
+            status, error = result["outcomes"][f"{source}\t{slug}"]
+            dst.execute("INSERT INTO boards VALUES (?, ?, ?, ?)", (source, slug, status, error or ""))
+        for row in src.execute(f"SELECT {', '.join(cols['scrape_log'])} FROM scrape_log WHERE run_id = ?",
+                               (result["run_id"],)):
+            dst.execute(f"INSERT INTO scrape_log ({', '.join(cols['scrape_log'])}) VALUES "
+                        f"({', '.join('?' for _ in cols['scrape_log'])})", row)
+        meta = {k: v for k, v in result.items() if k != "outcomes"}
+        for key, value in meta.items():
+            dst.execute("INSERT INTO meta VALUES (?, ?)", (key, json.dumps(value)))
+        dst.commit()
+    finally:
+        src.close()
+        dst.close()
+    return target
+
+
+def database_file() -> Path:
+    """The SQLite file the app opened (data_engineering.db.session resolves a relative path against the project)."""
+    from data_engineering.db import session as session_mod
+    found = getattr(getattr(session_mod, "_engine", None), "url", None)
+    if found is None or not found.database or found.database == ":memory:":
+        raise RuntimeError("the partition needs its own database file")
+    return Path(found.database)
+
+
+def report(result: dict) -> dict:
+    """Counts only -- never a board -- for the public log."""
+    counts = {o: 0 for o in OUTCOMES}
+    errors: dict[str, int] = {}
+    for status, error in result["outcomes"].values():
+        counts[status] = counts.get(status, 0) + 1
+        if status in ("failed", "rate_limited", "not_attempted") and error:
+            errors[error] = errors.get(error, 0) + 1
+    return {"partition": result["partition"], "provider": result["provider"], "plan_id": result["plan_id"],
+            "boards": len(result["outcomes"]), "counts": counts, "errors": errors,
+            "started_at": result["started_at"], "finished_at": result["finished_at"], "minutes": result["minutes"],
+            "budget_minutes": result["budget_minutes"], "rate_limited_requests": result["rate_limited_requests"],
+            "provider_rate_limits": result["provider_rate_limits"], "delivered": True}
+
+
+def failed_report(manifest: dict | None, partition_id: str, why: str) -> dict:
+    """What a partition that could not finish says about itself: its boards were not read here."""
+    boards = 0
+    provider = ""
+    if manifest:
+        try:
+            part = find(manifest, partition_id)
+            boards, provider = len(part["boards"]), part["provider"]
+        except ValueError:
+            pass
+    return {"partition": partition_id, "provider": provider, "plan_id": (manifest or {}).get("plan_id", ""),
+            "boards": boards, "counts": {o: 0 for o in OUTCOMES} | {"not_attempted": boards},
+            "errors": {why[:60]: boards}, "delivered": False, "finished_at": _now()}
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("--manifest", type=Path, required=True)
+    ap.add_argument("--partition", required=True)
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--budget-minutes", default="")
+    args = ap.parse_args(argv)
+    args.out.mkdir(parents=True, exist_ok=True)
+    manifest = None
+    try:
+        manifest = json.loads(args.manifest.read_text())
+        from backend.config.loader import load_config
+        from data_engineering.db.session import init_engine
+        cfg = load_config()
+        init_engine(cfg.database_url)
+        attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+        run_id = "-".join(x for x in (os.environ.get("GITHUB_RUN_ID", ""), attempt, args.partition) if x) or None
+        budget = float(args.budget_minutes) if str(args.budget_minutes).strip() else None
+        result = run(cfg, manifest, args.partition, budget, run_id)
+        export(database_file(), result, manifest, args.out)
+        said = report(result)
+    except Exception as exc:                          # noqa: BLE001 -- said in the report, and the job fails
+        said = failed_report(manifest, args.partition, f"{type(exc).__name__}")
+        (args.out / "report.json").write_text(json.dumps(said, indent=1))
+        print(f"partition {args.partition}: could not finish ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    (args.out / "report.json").write_text(json.dumps(said, indent=1))
+    c = said["counts"]
+    print(f"partition {args.partition}: {said['boards']:,} boards -- {c['complete']:,} complete, {c['partial']:,} "
+          f"partial, {c['failed']:,} failed, {c['rate_limited']:,} rate-limited, {c['not_attempted']:,} not attempted "
+          f"({said['minutes']} min)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
