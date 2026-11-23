@@ -18,37 +18,77 @@
 #   - uploading it as an artifact is no better, because artifacts on a public
 #     repository can be downloaded by anyone.
 # The Actions cache is the one store only this repository's own workflow runs
-# can read, so that is where the database lives between runs.
+# can read, so that is where the database lives between runs. Everything that
+# travels as an artifact is locked first (RESULTS_PASSPHRASE), except the
+# per-partition reports and the coverage report, which carry counts only.
 #
-# FOUR PARTS AT ONCE (2 Nov 2026)
-# One machine read every site six boards at a time, about three and a half hours,
-# mostly queueing. `plan` splits the job SITES four ways (devops/fetch_parts.py);
-# each part reads its own sites on its own machine at the same polite pace (README
-# §C5: every board of a site on one machine, 1.5 s between requests to a host);
-# `join` puts the four together and saves them as one database. The slowest single
-# host sets the floor: Greenhouse, about 2 h 15 min. The parts travel between jobs
-# encrypted, like the result, and are kept one day.
+# INDEPENDENT PARTITIONS (Nov 2026; before: four parts, devops/fetch_parts.py)
+# Four parts split whole job SITES four ways and failed as one: a slow or
+# rate-limited site held up, or failed, every other site's results. Now `plan`
+# gives every board to exactly one partition, each job site its own lane, a big
+# site split over a few partitions (devops/discovery_plan.py, lanes in
+# devops/discovery_lanes.json). Each partition reads only its own boards on its
+# own machine, from its own copy of the saved database, within a time budget,
+# and hands back only its own boards' rows (devops/discovery_worker.py). `join`
+# checks and merges each one on its own (devops/discovery_merge.py): a failed or
+# rate-limited partition never spoils another's work, and a posting is closed
+# only where its board was really read.
+#
+# Politeness does not grow with the matrix: each site has a budget of boards read
+# at once across all its partitions (one machine per one-host site unless its
+# budget says more; Greenhouse: 2), the 1.5 s gap per host stays (README §C5),
+# and a provider several of whose hosts refuse every retry (Workday) is left
+# alone as a whole until it cools off -- never asked faster through another host.
+#
+# WHAT THE MAC TAKES (devops/cloud_results.py)
+# Three statuses, kept apart: the workflow's execution (this run's conclusion),
+# the scan's completeness (the coverage report), and the result's validity
+# (checked on the Mac). This run ends in success only when the coverage is
+# COMPLETE -- every board of every partition read in full; then it also
+# publishes jobs-db-encrypted, as every complete run before (an older Mac takes
+# that). Complete or not, whenever the merge succeeded it publishes
+# discovery-result-v1: the database, the plan and every board's outcome, signed
+# and locked (devops/discovery_result.py). The Mac verifies it whole, takes the
+# postings of the boards read and nothing of the others, and reads only those
+# others itself (devops/cloud_recovery.py). A PARTIAL result is never called
+# complete; a failed Workday partition costs Greenhouse, Lever, Ashby and
+# BambooHR nothing.
+# A failed partition can be run again with "Re-run failed jobs": the partitions
+# that ran are not read again, and the join merges what is new.
 
 name: Daily scrape
 
-# The code this fetch runs is pinned to one tested commit (fd11a5c, tag fetch-tested-fd11a5c;
-# GitHub run 41538146488), not to this branch or any moving branch: every checkout below names it.
-# To run newer code, change the three `ref:` lines on purpose. To go back to the one-machine
-# fetch, revert the commit that added this note.
+# The code this fetch runs is pinned to one tested commit, not to this branch or
+# any moving branch: every checkout below names CODE_REF. To run newer code,
+# change CODE_REF on purpose (to a commit whose tests passed). To go back to the
+# four-part fetch, restore the workflow of the commit that pinned fd11a5c.
+env:
+  CODE_REF: "fee39e03011ab514b1d8792eaedbbe5940096d87"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   schedule:
     # 06:17 UTC = 01:17 America/Chicago (00:17 in winter: cron is UTC only). Early
     # on purpose: GitHub started the 11:17 schedule three to four hours late every
     # day in October 2026 (09:13-10:23 local), and the postings are wanted by the
-    # time the laptop opens. The Mac takes them, waits for a run under way, or
-    # reads the boards itself when there is none (devops/cloud_results.py).
-    # Minute 17 on purpose: every scheduled job in the world asks for :00, the
-    # queue is deepest there, and a job that has to wait is a job that runs late.
+    # time the laptop opens. Minute 17 on purpose: every scheduled job in the world
+    # asks for :00, the queue is deepest there, and a job that has to wait runs late.
     - cron: "17 6 * * *"
   # And whenever the button is pressed: by you, or by the Mac at 8 pm and in the
   # morning once `cloud.trigger_runs` is switched on (devops/cloud_results.py).
   workflow_dispatch:
+    inputs:
+      partitions:
+        description: "More partitions (e.g. 12 or 16): added only where a site gets faster within its budget"
+        required: false
+        default: ""
+      budget_minutes:
+        description: "Time budget per partition, minutes (boards not reached by then are reported, never counted read)"
+        required: false
+        default: ""
+      only:
+        description: "Run only these partitions or sites, comma-separated (the rest are NOT ATTEMPTED; the run fails)"
+        required: false
+        default: ""
 
 concurrency:
   # Never let two scrapes touch the same cached database.
@@ -60,87 +100,53 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
-      parts: ${{ steps.plan.outputs.parts }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      plan_id: ${{ steps.plan.outputs.plan_id }}
+      budget: ${{ steps.plan.outputs.budget }}
+      started: ${{ steps.plan.outputs.started }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fd11a5cef53e43207f5829f11852178ab7423f71   # the tested four-part fetch (tag fetch-tested-fd11a5c)
+          ref: ${{ env.CODE_REF }}
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Restore the job database
-        uses: actions/cache/restore@v4
-        with:
-          path: data/jobs.db
-          # The newest saved copy. Only `join` saves, so every part starts from this same one.
-          key: jobs-db-${{ github.run_id }}
-          restore-keys: |
-            jobs-db-
-
-      - name: Split the job sites into four parts
-        # Balanced by how long each site took last time; standard library only. Site names
-        # and counts only: this log is public.
-        id: plan
-        run: python -m devops.fetch_parts plan --db data/jobs.db --parts 4 >> "$GITHUB_OUTPUT"
-
-  scrape:
-    needs: plan
-    runs-on: ubuntu-latest
-    # A part is about two and a quarter hours at most. The ceiling is six.
-    timeout-minutes: 330
-    strategy:
-      # One part failing fails the run: the Mac takes only a run that read every site,
-      # and reads the boards itself otherwise.
-      fail-fast: true
-      matrix:
-        part: ${{ fromJSON(needs.plan.outputs.parts) }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fd11a5cef53e43207f5829f11852178ab7423f71   # the tested four-part fetch (tag fetch-tested-fd11a5c)
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Restore the job database
-        uses: actions/cache/restore@v4
-        with:
-          path: data/jobs.db
-          key: jobs-db-${{ github.run_id }}
-          restore-keys: |
-            jobs-db-
-
-      - name: Write the search profile
-        # Derived from the resume, so it names the person's job titles and
-        # seniority: a secret, not a file in a public repo. Without it the
-        # scraper refuses to run rather than falling back to someone else's
-        # search, which is the behaviour we want here too.
-        env:
-          SEARCH_PROFILE: ${{ secrets.SEARCH_PROFILE_YAML }}
+      - name: Check the pinned code
+        # Every other job needs this one: a wrong pin stops the run here, loudly, rather than running
+        # other code quietly. The pinned commit must be the one checked out, and must hold the
+        # partitioned fetch this workflow drives, with the complete-refresh rule.
         run: |
-          if [ -z "$SEARCH_PROFILE" ]; then
-            echo "::error::SEARCH_PROFILE_YAML secret is not set."
-            echo "Add it with:  gh secret set SEARCH_PROFILE_YAML < backend/config/search_profile.yaml"
+          if [ "$(git rev-parse HEAD)" != "$CODE_REF" ]; then
+            echo "::error::Checked out $(git rev-parse HEAD), not the pinned $CODE_REF."
             exit 1
           fi
-          mkdir -p config
-          printf '%s' "$SEARCH_PROFILE" > backend/config/search_profile.yaml
-          echo "Search profile written ($(wc -l < backend/config/search_profile.yaml) lines)."
+          for f in devops/discovery_plan.py devops/discovery_worker.py devops/discovery_merge.py devops/discovery_result.py devops/discovery_lanes.json; do
+            if [ ! -f "$f" ]; then
+              echo "::error::The pinned commit has no $f: it predates the partitioned fetch."
+              exit 1
+            fi
+          done
+          if ! grep -q 'complete_refresh' devops/discovery_merge.py; then
+            echo "::error::The pinned commit's merge predates the complete-refresh rule."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore the job database
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jobs.db
+          # The newest saved copy. Only `join` saves, so every partition starts from this same one.
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
 
       - name: Unlock the full board list
         # The full list is not in this public repository: the Mac sends it as an
         # encrypted release asset whenever it changes (devops/cloud_results.py
-        # push-boards), locked with the same passphrase as the results. Without
-        # it, or the passphrase, the older list in backend/config/boards.csv is
-        # read instead. Counts only in the log, which is public.
+        # push-boards). Without it, or the passphrase, the older list in
+        # backend/config/boards.csv is read instead. Counts only in the log.
         env:
           GH_TOKEN: ${{ github.token }}
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
@@ -157,67 +163,66 @@ jobs:
             echo "::warning::No encrypted board list; reading the repository's older list."
           fi
 
-      - name: Seed the board list
-        # The boards live in data/jobs.db, which is gitignored, so a runner
-        # with a cold cache starts with nothing to scrape -- the first cloud
-        # run walked 8 boards instead of 1,501 for exactly this reason.
-        # backend/config/boards.csv carries the list separately: employer names and
-        # public board addresses, safe for a public repository, and nothing
-        # about the person searching. The import is keyed on (source, slug),
-        # so running it against a warm cache adds nothing. Every part imports
-        # all of it; the join keeps each site's boards from its own part only.
-        run: python -m data_engineering.boards import
-
-      - name: Scrape this part's job sites
+      - name: Give every board to exactly one partition
+        # Standard library only. Partition ids, sites and counts in the log -- never a board.
+        id: plan
         env:
-          SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
-          SITES: ${{ matrix.part.sites }}
-          SKIP: ${{ matrix.part.skip }}
-        run: python -u main.py scrape --sites "$SITES" --skip-sites "$SKIP"
+          PARTITIONS: ${{ github.event.inputs.partitions }}
+          BUDGET: ${{ github.event.inputs.budget_minutes }}
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          python -m devops.discovery_plan plan --db data/jobs.db --boards-csv backend/config/boards.csv \
+            --target-total "$PARTITIONS" --budget-minutes "$BUDGET" --only "$ONLY" \
+            --out "$RUNNER_TEMP/manifest.json" >> "$GITHUB_OUTPUT"
 
-      # NO SCORING HERE. Scoring compares a posting against the resume text,
-      # and the resume is not on this machine -- by design, since it is the
-      # one thing that should never leave the laptop. The first run failed on
-      # exactly this: "No base resume found". Scoring happens locally, after
-      # the Mac brings the postings down (devops/cloud_results.py).
-
-      - name: Lock this part for the join
-        # Artifacts on a public repository can be downloaded by anyone: locked
-        # like the result, or not sent at all.
+      - name: Lock the plan
+        # It names every board: locked like the results.
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
         run: |
           if [ -z "$PASSPHRASE" ]; then
-            echo "::error::RESULTS_PASSPHRASE is not set: the four parts cannot travel to the join unlocked."
+            echo "::error::RESULTS_PASSPHRASE is not set: the plan cannot travel to the partitions unlocked."
             exit 1
           fi
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
-            -in data/jobs.db -out part.db.enc -pass env:PASSPHRASE
-          ls -lh part.db.enc
+            -in "$RUNNER_TEMP/manifest.json" -out manifest.json.enc -pass env:PASSPHRASE
 
-      - name: Hand it to the join
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: part-${{ matrix.part.name }}
-          path: part.db.enc
+          name: plan-manifest
+          path: manifest.json.enc
           retention-days: 1
 
-  join:
-    needs: [plan, scrape]
+  scrape:
+    needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The worker stops starting boards at its time budget and reports the rest;
+    # this ceiling only catches a machine that hangs outright.
+    timeout-minutes: 220
+    strategy:
+      # Each partition stands on its own: one failing never cancels the others.
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        part: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: scrape ${{ matrix.part.id }}
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fd11a5cef53e43207f5829f11852178ab7423f71   # the tested four-part fetch (tag fetch-tested-fd11a5c)
+          ref: ${{ env.CODE_REF }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Restore the job database
-        # The same copy every part started from.
+        # This machine's own copy: no other partition writes to it.
         uses: actions/cache/restore@v4
         with:
           path: data/jobs.db
@@ -225,41 +230,137 @@ jobs:
           restore-keys: |
             jobs-db-
 
-      - name: Collect the parts
-        uses: actions/download-artifact@v4
+      - name: Write the search profile
+        # Derived from the resume, so it names the person's job titles and
+        # seniority: a secret, not a file in a public repo.
+        env:
+          SEARCH_PROFILE: ${{ secrets.SEARCH_PROFILE_YAML }}
+        run: |
+          if [ -z "$SEARCH_PROFILE" ]; then
+            echo "::error::SEARCH_PROFILE_YAML secret is not set."
+            exit 1
+          fi
+          printf '%s' "$SEARCH_PROFILE" > backend/config/search_profile.yaml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan-manifest
+          path: plan
+
+      - name: Read this partition's boards
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+          SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
+          BUDGET: ${{ needs.plan.outputs.budget }}
+        run: |
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+            -in plan/manifest.json.enc -out "$RUNNER_TEMP/manifest.json" -pass env:PASSPHRASE
+          python -u -m devops.discovery_worker --manifest "$RUNNER_TEMP/manifest.json" \
+            --partition "${{ matrix.part.id }}" --budget-minutes "$BUDGET" --out out
+
+      - name: Lock this partition's result
+        # Its boards' rows only -- locked like everything else that travels.
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in out/part.db -out part.db.enc -pass env:PASSPHRASE
+          ls -lh part.db.enc
+
+      - name: Hand it to the join
+        uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.part.id }}
+          path: part.db.enc
+          retention-days: 1
+          overwrite: true
+
+      - name: Its report (counts only)
+        # Uploaded even when the partition failed, so the join can tell FAILED from NOT ATTEMPTED.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.part.id }}
+          path: out/report.json
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: ignore
+
+  join:
+    needs: [plan, scrape]
+    # Also when some partitions failed: the others' work is merged all the same. Not when the run was
+    # cancelled: nothing is merged, saved or published from a run someone stopped.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CODE_REF }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore the job database
+        # The same copy every partition started from.
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan-manifest
+          path: plan
+
+      - uses: actions/download-artifact@v4
         with:
           pattern: part-*
           path: parts
 
-      - name: Join the four parts
-        # Each site's rows from the part that read it, and from no other; every
-        # posting a part holds must be in the result exactly once, or nothing is
-        # saved and the run fails (the Mac then reads the boards itself).
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: reports
+
+      - name: Merge every partition whose result arrived
+        # A result that cannot be unlocked is left out here and counted FAILED by the merge.
+        id: merge
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
-          PLAN: ${{ needs.plan.outputs.parts }}
+          STARTED: ${{ needs.plan.outputs.started }}
         run: |
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+            -in plan/manifest.json.enc -out "$RUNNER_TEMP/manifest.json" -pass env:PASSPHRASE
           for locked in parts/part-*/part.db.enc; do
+            [ -e "$locked" ] || continue
             openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
-              -in "$locked" -out "${locked%.enc}" -pass env:PASSPHRASE
+              -in "$locked" -out "${locked%.enc}" -pass env:PASSPHRASE || rm -f "${locked%.enc}"
           done
-          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
-          python -m devops.fetch_parts join --db data/jobs.db --plan "$RUNNER_TEMP/plan.json" --parts-dir parts
+          set +e
+          python -m devops.discovery_merge --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
+            --parts-dir parts --reports-dir reports --coverage coverage.json \
+            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" > merge.txt
+          code=$?
+          set -e
+          cat merge.txt >> "$GITHUB_STEP_SUMMARY"
+          grep '^complete=' merge.txt >> "$GITHUB_OUTPUT" || true
+          echo "merged=$([ $code -eq 0 ] || [ $code -eq 3 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Save the job database
-        # A new key every run so each saves a fresh copy; the restores above fall
-        # back to the most recent one.
+        # Whatever was merged: boards that were read are newer, the rest as before.
+        if: steps.merge.outputs.merged == 'true'
         uses: actions/cache/save@v4
         with:
           path: data/jobs.db
-          key: jobs-db-${{ github.run_id }}
+          key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Encrypt the database for collection
-        # The cache cannot be downloaded to a laptop, and an artifact on a
-        # public repository can be downloaded by anyone -- so the artifact is
-        # encrypted before it leaves the runner. Without RESULTS_PASSPHRASE it
-        # is a 25MB blob of noise to everyone including GitHub; with it, one
-        # command on the Mac turns it back into the job database.
+      - name: Lock the database for collection
+        if: steps.merge.outputs.merged == 'true'
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
         run: |
@@ -267,16 +368,67 @@ jobs:
             -in data/jobs.db -out jobs.db.enc -pass env:PASSPHRASE
           ls -lh jobs.db.enc
 
-      - name: Upload it
+      - name: Upload it (a complete refresh)
+        if: steps.merge.outputs.complete == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: jobs-db-encrypted
           path: jobs.db.enc
           retention-days: 7
+          overwrite: true
+
+      - name: Build the verified result
+        # Complete or not: the database, the plan, and every board's outcome, signed and locked as one file
+        # (devops/discovery_result.py, contract v1). The Mac checks all of it, takes only the boards read and
+        # reads only the rest itself. Its status is the coverage's -- a PARTIAL result is never complete.
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+          STARTED: ${{ needs.plan.outputs.started }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+          SCRAPE_JOBS: ${{ needs.scrape.result }}
+        run: |
+          mkdir -p result
+          python -m devops.discovery_result build --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
+            --outcomes "$RUNNER_TEMP/outcomes.json" --coverage coverage.json --out result/result.json \
+            --run-id "$RUN_ID" --attempt "$ATTEMPT" --started "$STARTED" --scrape-jobs "$SCRAPE_JOBS"
+          cp data/jobs.db result/jobs.db
+          COPYFILE_DISABLE=1 tar -cf discovery-result.tar -C result result.json jobs.db   # exactly two members
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in discovery-result.tar -out discovery-result.tar.enc -pass env:PASSPHRASE
+          rm -rf result discovery-result.tar
+          ls -lh discovery-result.tar.enc
+
+      - name: Upload the verified result
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-result-v1
+          path: discovery-result.tar.enc
+          retention-days: 7
+          overwrite: true
+
+      - name: Coverage report (counts only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.json
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: ignore
 
       - name: Summary
         if: always()
-        # Counts only. This summary is public on a public repository, so it
-        # says how many, never which.
+        # Counts only. This summary is public on a public repository.
         run: |
-          python devops/actions_summary.py >> "$GITHUB_STEP_SUMMARY"
+          python devops/actions_summary.py >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Fail unless this is a complete refresh
+        # The Mac takes only a run that ended in success, so a run that did not read
+        # every board in full ends here, and the Mac reads the boards itself.
+        if: steps.merge.outputs.complete != 'true'
+        run: |
+          echo "::error::Not a complete refresh: see the coverage report. Its verified result is discovery-result-v1."
+          exit 1
