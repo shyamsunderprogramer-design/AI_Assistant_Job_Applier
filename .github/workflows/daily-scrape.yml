@@ -66,15 +66,13 @@ env:
   CODE_REF: "fee39e03011ab514b1d8792eaedbbe5940096d87"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
-  schedule:
-    # 06:17 UTC = 01:17 America/Chicago (00:17 in winter: cron is UTC only). Early
-    # on purpose: GitHub started the 11:17 schedule three to four hours late every
-    # day in October 2026 (09:13-10:23 local), and the postings are wanted by the
-    # time the laptop opens. Minute 17 on purpose: every scheduled job in the world
-    # asks for :00, the queue is deepest there, and a job that has to wait runs late.
-    - cron: "17 6 * * *"
-  # And whenever the button is pressed: by you, or by the Mac at 8 pm and in the
-  # morning once `cloud.trigger_runs` is switched on (devops/cloud_results.py).
+  # Started when asked, and only then: by the Mac at 8 pm and in the morning
+  # (`cloud.trigger_runs`, devops/cloud_results.py: evening, the morning top-up), or
+  # by the button. GitHub's own schedule was retired on 23 Nov 2026: set for 06:17
+  # UTC, it started 8-11.5 hours late every day (08:29-11:59 local, 18-23 Nov), after
+  # the morning had taken the night's run and asked for its own top-up -- a third
+  # full read of every board each day that nothing used until the next morning.
+  # To bring it back, restore the `schedule:` block from git history.
   workflow_dispatch:
     inputs:
       partitions:
