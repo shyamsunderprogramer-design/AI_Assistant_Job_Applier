@@ -712,9 +712,10 @@ def test_the_workflow_plans_partitions_and_joins_them():
     assert jobs["join"]["needs"] == ["plan", "scrape"]
     join = " ".join(s.get("run", "") for s in jobs["join"]["steps"])
     assert "devops.discovery_merge" in join and "jobs.db.enc" in join
-    # The schedule stays as the backup, and the button the Mac presses is there.
+    # Started only when asked: the Mac at 8 pm and in the morning, or the button. GitHub's own schedule, which
+    # ran 8-11.5 hours late and read every board a third time each day, was retired on 23 Nov 2026.
     on = flow.get("on", flow.get(True))
-    assert on["schedule"] == [{"cron": "17 6 * * *"}] and "workflow_dispatch" in on
+    assert "schedule" not in on and "workflow_dispatch" in on
 
 
 def test_the_summary_counts_every_part_of_the_last_fetch(tmp_path):
