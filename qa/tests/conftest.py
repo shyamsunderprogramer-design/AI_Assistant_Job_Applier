@@ -232,3 +232,36 @@ def _no_real_fetch_bookkeeping(monkeypatch, tmp_path):
     monkeypatch.setattr(probe_runner, "PAUSEFILE", tmp_path / "probe_runner.pause")
     monkeypatch.setattr(cloud_results, "COLLECTED", tmp_path / "cloud_collected.json")
     monkeypatch.setattr(cloud_results, "TOPUP", tmp_path / "cloud_topup.json")
+
+
+@pytest.fixture
+def local_clock(monkeypatch):
+    """A controlled clock for the application history (A1.1.1): `set(utc_instant, tz)` makes it that moment, in
+    that time zone, for backend.apply.tracker -- its "today" and "now" -- however late the test is run."""
+    import time as _time
+    from datetime import date as _date, datetime as _datetime
+    from backend.apply import tracker
+    before = os.environ.get("TZ")
+
+    def set_to(instant, tz="America/Chicago"):
+        os.environ["TZ"] = tz
+        _time.tzset()
+
+        class Today(_date):
+            @classmethod
+            def today(cls):
+                return instant.astimezone().date()
+
+        class Now(_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz else instant.astimezone().replace(tzinfo=None)
+        monkeypatch.setattr(tracker, "date", Today)
+        monkeypatch.setattr(tracker, "datetime", Now)
+        return instant.astimezone().date()
+    yield set_to
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    _time.tzset()
