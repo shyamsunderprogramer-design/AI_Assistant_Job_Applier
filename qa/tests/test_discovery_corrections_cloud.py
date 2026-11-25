@@ -350,9 +350,10 @@ def test_the_plan_puts_every_board_in_exactly_one_lane_with_the_approved_splits(
         by.setdefault(p["provider"], []).append(p)
     assert len(by["greenhouse"]) == 3 and len(by["lever"]) == 2 and len(by["ashby"]) == 2
     assert all(p["workers"] == 1 for site in ("greenhouse", "lever", "ashby") for p in by[site])   # one at a time
-    assert "workday" not in by and plan["mac_lanes"] == {"workday": 7}
+    # Every site in the cloud since 25 Nov 2026: Workday too, nothing on a Mac lane.
+    assert len(by["workday"]) == 2 and plan["mac_lanes"] == {}
     assert by["workable"][0]["quota"] == 150
-    assert plan["boards"] + 7 == len(rows)
+    assert plan["boards"] == len(rows)
     bad = json.loads(json.dumps(plan))
     bad["partitions"][0]["boards"].append(bad["partitions"][1]["boards"][0])
     with pytest.raises(ValueError):
@@ -540,7 +541,7 @@ def test_the_result_carries_mac_lanes_and_pending_boards_and_an_old_result_still
     tampered["details"][0][6] = 0
     with pytest.raises(dr.ResultError):
         dr.verify(tampered, db, "pw")                             # signed with the rest
-    old = {k: v for k, v in result.items() if k not in ("details", "mac_lanes", "signature")}
+    old = {k: v for k, v in result.items() if k not in ("details", "mac_lanes", "feeds", "signature")}
     old["signature"] = dr.sign(old, "pw")
     got = dr.verify(old, db, "pw")                                 # a result from before Nov 2026 still reads
     assert got["pending"] == {} and got["mac_lanes"] == {}

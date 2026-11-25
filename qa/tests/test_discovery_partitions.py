@@ -256,10 +256,9 @@ def test_1_every_board_is_in_exactly_one_partition(target):
     assert len(assigned) == len(set(assigned)) == len(cloud) == plan["boards"]
     assert set(assigned) == {(r["source"], r["slug"]) for r in cloud}
     assert len({p["id"] for p in plan["partitions"]}) == len(plan["partitions"])
-    # The Mac lane's boards (Workday since Nov 2026) are counted, never dropped: every board in exactly one lane.
-    on_mac = [r for r in rows if dp.mac_lane(lanes, r["source"])]
-    assert on_mac and sum(plan["mac_lanes"].values()) == len(on_mac)
-    assert plan["boards"] + sum(plan["mac_lanes"].values()) == len(rows)
+    # Every site is read in the cloud (25 Nov 2026): no Mac lane, every board in exactly one partition.
+    assert not [r for r in rows if dp.mac_lane(lanes, r["source"])] and plan["mac_lanes"] == {}
+    assert plan["boards"] == len(rows)
 
 
 def test_2_the_same_boards_give_the_same_plan_whatever_their_order(tmp_path):
@@ -857,18 +856,18 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
     text = WORKFLOW.read_text()
     flow = yaml.safe_load(text)
     jobs = flow["jobs"]
-    assert set(jobs) == {"plan", "scrape", "join"}
+    assert set(jobs) == {"plan", "scrape", "feeds", "join"}       # feeds: the job-search sites (25 Nov 2026)
     scrape, join = jobs["scrape"], jobs["join"]
     assert scrape["needs"] == "plan" and scrape["strategy"]["fail-fast"] is False
     assert scrape["strategy"]["matrix"]["part"] == "${{ fromJSON(needs.plan.outputs.matrix) }}"
     assert scrape["strategy"]["max-parallel"] >= 16
-    assert join["needs"] == ["plan", "scrape"] and "!cancelled()" in join["if"] and "always()" not in join["if"]
+    assert join["needs"] == ["plan", "scrape", "feeds"] and "!cancelled()" in join["if"] and "always()" not in join["if"]
     assert "needs.plan.result == 'success'" in join["if"]
     assert flow["concurrency"]["group"] == "daily-scrape" and flow["concurrency"]["cancel-in-progress"] is False
     # One pinned commit for every checkout, named once.
     assert re.fullmatch(r"[0-9a-f]{40}", flow["env"]["CODE_REF"])
     checkouts = [s for j in jobs.values() for s in j["steps"] if str(s.get("uses", "")).startswith("actions/checkout")]
-    assert len(checkouts) == 3 and all(s["with"]["ref"] == "${{ env.CODE_REF }}" for s in checkouts)
+    assert len(checkouts) == 4 and all(s["with"]["ref"] == "${{ env.CODE_REF }}" for s in checkouts)
     # Inputs reach a shell only through env, never spliced into a command.
     for j in jobs.values():
         for s in j["steps"]:
@@ -891,7 +890,8 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
 
 
 CONTRACT = ("devops/discovery_plan.py", "devops/discovery_worker.py", "devops/discovery_merge.py",
-            "devops/discovery_result.py", "devops/discovery_lanes.json")
+            "devops/discovery_result.py", "devops/discovery_lanes.json", "devops/discovery_slot.py",
+            "devops/discovery_feeds.py")
 
 
 def test_the_pin_names_a_real_commit_holding_exactly_the_code_this_workflow_drives():

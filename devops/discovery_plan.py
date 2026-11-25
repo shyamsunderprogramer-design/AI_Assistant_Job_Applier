@@ -53,7 +53,39 @@ def _lane(lanes: dict, provider: str) -> dict:
     found.setdefault("one_host", False)
     found.setdefault("lane", "cloud")
     found.setdefault("quota", 0)
+    # A provider that refused nearly every board of its last cloud run (HTTP 429 through every retry) is asked only
+    # `probe_quota` boards, the least recently read first, until it answers again -- never hammered while it says
+    # no, never dropped (Nov 2026: Workday refused nearly every board asked from GitHub from late November).
+    found.setdefault("probe_quota", 0)
+    found.setdefault("probe_when_refused", 0.9)
     return found
+
+
+def refused_shares(db_path: Path | None) -> dict[str, float]:
+    """For each provider: the share of its boards its latest cloud run left RateLimited, from the saved scrape log
+    (the cloud's own memory between runs). Empty with no database or no log."""
+    if db_path is None or not Path(db_path).exists():
+        return {}
+    shares = {}
+    with sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'scrape_log'").fetchone():
+            return {}
+        for source, run_id in db.execute(
+                "SELECT s.source, s.run_id FROM scrape_log s JOIN "
+                "(SELECT MAX(id) AS id FROM scrape_log GROUP BY source) n ON s.id = n.id"):
+            total, refused = db.execute(
+                "SELECT COUNT(*), SUM(error_type = 'RateLimited') FROM scrape_log WHERE source = ? AND run_id = ?",
+                (source, run_id)).fetchone()
+            if total:
+                shares[source] = (refused or 0) / total
+    return shares
+
+
+def quota_of(lane: dict, refused: float | None) -> tuple[int, bool]:
+    """(boards to ask this run, 0 for all; whether it is a probe of a provider that refused its last run)."""
+    if lane["probe_quota"] and refused is not None and refused >= float(lane["probe_when_refused"]):
+        return int(lane["probe_quota"]), True
+    return int(lane["quota"] or 0), False
 
 
 def mac_lane(lanes: dict, provider: str) -> bool:
@@ -166,7 +198,8 @@ def plan_id_of(partitions: list[dict]) -> str:
 
 
 def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
-              budget_minutes: float | None = None, only: set[str] | None = None) -> dict:
+              budget_minutes: float | None = None, only: set[str] | None = None,
+              refused: dict[str, float] | None = None) -> dict:
     """The manifest: every board in exactly one partition of its own site. `only` (partition ids or site names)
     keeps those partitions to run; the rest are listed as not to run, so a subset is never taken for a full scan."""
     by_site: dict[str, list[dict]] = {}
@@ -181,6 +214,7 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
     for site in sorted(by_site):
         lane = _lane(lanes, site)
         k = how_many[site]
+        quota, probe = quota_of(lane, (refused or {}).get(site))
         for i, group in enumerate(_split(by_site[site], k), start=1):
             if not group:
                 continue
@@ -188,7 +222,7 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
             w = workers_of(lane, k, i)
             partitions.append({"id": pid, "provider": site, "index": i, "of": k, "workers": w,
                                "one_host": bool(lane["one_host"]),
-                               "quota": int(lane["quota"] or 0) // k if lane["quota"] else 0,
+                               "quota": max(1, quota // k) if quota else 0, "probe": probe,
                                "est_minutes": round(_lane_minutes([b["est_s"] for b in group], lane, 1)
                                                     if lane["one_host"] else
                                                     max(max(b["est_s"] for b in group),
@@ -230,7 +264,8 @@ def check_assignment(rows: list[dict], manifest: dict, lanes: dict) -> None:
 def matrix(manifest: dict) -> list[dict]:
     """What the public workflow log may show of the plan: ids, sites and counts -- never a board."""
     return [{"id": p["id"], "provider": p["provider"], "boards": len(p["boards"]), "workers": p["workers"],
-             "est_minutes": p["est_minutes"], **({"quota": p["quota"]} if p.get("quota") else {})}
+             "est_minutes": p["est_minutes"], **({"quota": p["quota"]} if p.get("quota") else {}),
+             **({"probe": True} if p.get("probe") else {})}
             for p in manifest["partitions"] if p.get("run", True)]
 
 
@@ -268,14 +303,16 @@ def main(argv: list[str]) -> int:
     target = int(args.target_total) if str(args.target_total).strip().isdigit() else None
     budget = float(args.budget_minutes) if str(args.budget_minutes).strip() else None
     only = {x.strip() for x in args.only.split(",") if x.strip()} or None
-    manifest = make_plan(boards(args.db, args.boards_csv), lanes, target, budget, only)
+    manifest = make_plan(boards(args.db, args.boards_csv), lanes, target, budget, only, refused_shares(args.db))
     if args.command == "plan":
         args.out.write_text(json.dumps(manifest, separators=(",", ":")))
         print("matrix=" + json.dumps(matrix(manifest), separators=(",", ":")))
         print(f"plan_id={manifest['plan_id']}")
         print(f"budget={int(manifest['budget_minutes'])}")
         print(f"{len(manifest['partitions'])} partitions, {manifest['boards']:,} boards, plan {manifest['plan_id']}"
-              + "".join(f"; {n:,} {site} boards on the Mac lane" for site, n in manifest["mac_lanes"].items()),
+              + "".join(f"; {n:,} {site} boards on the Mac lane" for site, n in manifest["mac_lanes"].items())
+              + "".join(f"; {p['id']} asks only {p['quota']} boards (it refused its last run)"
+                        for p in manifest["partitions"] if p.get("probe")),
               file=sys.stderr)
         return 0
     b = manifest["budget_minutes"]

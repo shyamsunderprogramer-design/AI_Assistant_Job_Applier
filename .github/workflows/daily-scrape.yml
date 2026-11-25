@@ -39,9 +39,24 @@
 # budget says more; since Nov 2026 Greenhouse 3, Lever 2, Ashby 2, one board at a
 # time each), the 1.5 s gap per host stays (README §C5), and a provider several of
 # whose hosts refuse every retry is left alone as a whole until it cools off --
-# never asked faster through another host. Workday is read on the Mac instead (its
-# boards still counted, as the Mac's lane), and Workable and Jobvite are asked a
-# quota of boards a run, the least recently read first.
+# never asked faster through another host. Workable and Jobvite are asked a quota
+# of boards a run, the least recently read first; a site that refused nearly every
+# board of its last run (Workday, from late Nov 2026) is asked only a small probe
+# of its least recently read boards until it answers again. Every site is read
+# here: none is left to the Mac.
+#
+# THE JOB-SEARCH SITES (job `feeds`, devops/discovery_feeds.py): Adzuna, the job
+# feeds and, once a dedicated job-alert mailbox is set, its alert emails, read on
+# their own machine beside the partitions with their keys from this repository's
+# encrypted secrets, and merged after the boards.
+#
+# WHEN IT RUNS (25 Nov 2026): twice a day, from the cloud, the Mac on or off --
+# 1:00 and 11:00 America/Chicago, the results published by 3:00 and 13:00. The
+# outside scheduler (cron-job.org) starts it at the minute through
+# workflow_dispatch with trigger=scheduler; GitHub's own schedule below is only a
+# fallback (it started 3-12 hours late on every one of 68 measured days). The
+# first run of a window reads it; a later one for the same window stops at once
+# (devops/discovery_slot.py). The button (trigger=manual) always runs.
 #
 # WHAT THE MAC TAKES (devops/cloud_results.py)
 # Three statuses, kept apart: the workflow's execution (this run's conclusion),
@@ -51,9 +66,9 @@
 # publishes jobs-db-encrypted, as every complete run before (an older Mac takes
 # that). Complete or not, whenever the merge succeeded it publishes
 # discovery-result-v1: the database, the plan and every board's outcome, signed
-# and locked (devops/discovery_result.py). The Mac verifies it whole, takes the
-# postings of the boards read and nothing of the others, and reads only those
-# others itself (devops/cloud_recovery.py). A PARTIAL result is never called
+# and locked (devops/discovery_result.py). The Mac verifies it whole when it is next
+# on, and takes the postings of the boards read and nothing of the others; it reads
+# no board itself. The boards not read are asked again by the next cloud runs. A PARTIAL result is never called
 # complete; a failed Workday partition costs Greenhouse, Lever, Ashby and
 # BambooHR nothing.
 # A failed partition can be run again with "Re-run failed jobs": the partitions
@@ -69,16 +84,19 @@ env:
   CODE_REF: "ec5d8bdc3869f072e1e682d910fe1a5a4c6e4ef1"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
-  # Started when asked, and only then: by the Mac at 8 pm (`cloud.trigger_runs`,
-  # devops/cloud_results.py: evening) -- the day's one full read; in the morning only
-  # when there is no recent run at all (the routine morning top-up was retired in
-  # Nov 2026: it added nothing) -- or by the button. GitHub's own schedule was retired on 23 Nov 2026: set for 06:17
-  # UTC, it started 8-11.5 hours late every day (08:29-11:59 local, 18-23 Nov), after
-  # the morning had taken the night's run and asked for its own top-up -- a third
-  # full read of every board each day that nothing used until the next morning.
-  # To bring it back, restore the `schedule:` block from git history.
+  # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
+  # Central daylight time and one for standard time; whichever comes first for a window
+  # reads it (unless the outside scheduler already did), the other stops at once.
+  #   1:00 Central  = 06:00 UTC (CDT) / 07:00 UTC (CST)
+  #  11:00 Central  = 16:00 UTC (CDT) / 17:00 UTC (CST)
+  schedule:
+    - cron: "23 6,7,16,17 * * *"
   workflow_dispatch:
     inputs:
+      trigger:
+        description: "Who starts it: manual (always runs) or scheduler (the outside scheduler: once per window)"
+        required: false
+        default: "manual"
       partitions:
         description: "More partitions (e.g. 12 or 16): added only where a site gets faster within its budget"
         required: false
@@ -101,7 +119,11 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read            # the window check lists this workflow's runs
     outputs:
+      go: ${{ steps.slot.outputs.go }}
       matrix: ${{ steps.plan.outputs.matrix }}
       plan_id: ${{ steps.plan.outputs.plan_id }}
       budget: ${{ steps.plan.outputs.budget }}
@@ -120,7 +142,7 @@ jobs:
             echo "::error::Checked out $(git rev-parse HEAD), not the pinned $CODE_REF."
             exit 1
           fi
-          for f in devops/discovery_plan.py devops/discovery_worker.py devops/discovery_merge.py devops/discovery_result.py devops/discovery_lanes.json; do
+          for f in devops/discovery_plan.py devops/discovery_worker.py devops/discovery_merge.py devops/discovery_result.py devops/discovery_lanes.json devops/discovery_slot.py devops/discovery_feeds.py; do
             if [ ! -f "$f" ]; then
               echo "::error::The pinned commit has no $f: it predates the partitioned fetch."
               exit 1
@@ -135,7 +157,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Is this window read already?
+        # Once per window (devops/discovery_slot.py): a later start of the same window stops here,
+        # and every other job is skipped. The button always runs.
+        id: slot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER: ${{ github.event.inputs.trigger }}
+        run: |
+          python -m devops.discovery_slot --event "${{ github.event_name }}" --trigger "$TRIGGER" \
+            --run-id "${{ github.run_id }}" --repo "${{ github.repository }}" | tee -a "$GITHUB_OUTPUT"
+
       - name: Restore the job database
+        if: steps.slot.outputs.go == 'true'
         uses: actions/cache/restore@v4
         with:
           path: data/jobs.db
@@ -145,6 +179,7 @@ jobs:
             jobs-db-
 
       - name: Unlock the full board list
+        if: steps.slot.outputs.go == 'true'
         # The full list is not in this public repository: the Mac sends it as an
         # encrypted release asset whenever it changes (devops/cloud_results.py
         # push-boards). Without it, or the passphrase, the older list in
@@ -166,6 +201,7 @@ jobs:
           fi
 
       - name: Give every board to exactly one partition
+        if: steps.slot.outputs.go == 'true'
         # Standard library only. Partition ids, sites and counts in the log -- never a board.
         id: plan
         env:
@@ -179,6 +215,7 @@ jobs:
             --out "$RUNNER_TEMP/manifest.json" >> "$GITHUB_OUTPUT"
 
       - name: Lock the plan
+        if: steps.slot.outputs.go == 'true'
         # It names every board: locked like the results.
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
@@ -191,6 +228,7 @@ jobs:
             -in "$RUNNER_TEMP/manifest.json" -out manifest.json.enc -pass env:PASSPHRASE
 
       - uses: actions/upload-artifact@v4
+        if: steps.slot.outputs.go == 'true'
         with:
           name: plan-manifest
           path: manifest.json.enc
@@ -198,6 +236,7 @@ jobs:
 
   scrape:
     needs: plan
+    if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
     # The worker stops starting boards at its time budget and reports the rest;
     # this ceiling only catches a machine that hangs outright.
@@ -288,11 +327,80 @@ jobs:
           overwrite: true
           if-no-files-found: ignore
 
+  feeds:
+    # The job-search sites and alert emails, beside the partitions (devops/discovery_feeds.py). Their keys are
+    # this job's alone: no other job is given them, and nothing is printed but counts.
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CODE_REF }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore the job database
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
+
+      - name: Write the search profile
+        env:
+          SEARCH_PROFILE: ${{ secrets.SEARCH_PROFILE_YAML }}
+        run: |
+          if [ -z "$SEARCH_PROFILE" ]; then
+            echo "::error::SEARCH_PROFILE_YAML secret is not set."
+            exit 1
+          fi
+          printf '%s' "$SEARCH_PROFILE" > backend/config/search_profile.yaml
+
+      - name: Read the job-search sites and alert emails
+        env:
+          SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
+          CAREERJET_AFFID: ${{ secrets.CAREERJET_AFFID }}
+          USAJOBS_API_KEY: ${{ secrets.USAJOBS_API_KEY }}
+          USAJOBS_EMAIL: ${{ secrets.USAJOBS_EMAIL }}
+          FINDWORK_API_KEY: ${{ secrets.FINDWORK_API_KEY }}
+          # A dedicated job-alert mailbox only, opened read-only -- never the person's own mailbox.
+          MAIL_ADDRESS: ${{ secrets.ALERTS_MAIL_ADDRESS }}
+          MAIL_APP_PASSWORD: ${{ secrets.ALERTS_MAIL_APP_PASSWORD }}
+        run: python -u -m devops.discovery_feeds --out out
+
+      - name: Lock its result
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          tar -cf feeds.tar -C out feeds.db feeds-report.json
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in feeds.tar -out feeds.tar.enc -pass env:PASSPHRASE
+          ls -lh feeds.tar.enc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feeds-result
+          path: feeds.tar.enc
+          retention-days: 1
+          overwrite: true
+
   join:
-    needs: [plan, scrape]
-    # Also when some partitions failed: the others' work is merged all the same. Not when the run was
-    # cancelled: nothing is merged, saved or published from a run someone stopped.
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    needs: [plan, scrape, feeds]
+    # Also when some partitions, or the job-search sites, failed: the others' work is merged all the same. Not
+    # when the run was cancelled, or when this window was read already.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -329,6 +437,12 @@ jobs:
           pattern: report-*
           path: reports
 
+      - uses: actions/download-artifact@v4
+        continue-on-error: true       # the job-search sites failing never stops the boards' merge
+        with:
+          name: feeds-result
+          path: feeds
+
       - name: Merge every partition whose result arrived
         # A result that cannot be unlocked is left out here and counted FAILED by the merge.
         id: merge
@@ -343,12 +457,17 @@ jobs:
             openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
               -in "$locked" -out "${locked%.enc}" -pass env:PASSPHRASE || rm -f "${locked%.enc}"
           done
+          if [ -e feeds/feeds.tar.enc ] && openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+               -in feeds/feeds.tar.enc -out feeds/feeds.tar -pass env:PASSPHRASE; then
+            tar -xf feeds/feeds.tar -C feeds feeds.db feeds-report.json || rm -f feeds/feeds.db
+          fi
           set +e
           # --prune-log-days: this saved copy's scrape log kept to 30 days (each board's newest row always
           # kept, for the plan). The cloud's copy only; the Mac's history is never pruned.
           python -m devops.discovery_merge --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
             --parts-dir parts --reports-dir reports --coverage coverage.json \
-            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 30 > merge.txt
+            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 30 \
+            --feeds-dir feeds > merge.txt
           code=$?
           set -e
           cat merge.txt >> "$GITHUB_STEP_SUMMARY"
@@ -383,8 +502,7 @@ jobs:
 
       - name: Build the verified result
         # Complete or not: the database, the plan, and every board's outcome, signed and locked as one file
-        # (devops/discovery_result.py, contract v1). The Mac checks all of it, takes only the boards read and
-        # reads only the rest itself. Its status is the coverage's -- a PARTIAL result is never complete.
+        # (devops/discovery_result.py, contract v1). The Mac checks all of it and takes only the boards read. Its status is the coverage's -- a PARTIAL result is never complete.
         if: steps.merge.outputs.merged == 'true'
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
@@ -430,8 +548,8 @@ jobs:
           python devops/actions_summary.py >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Fail unless this is a complete refresh
-        # The Mac takes only a run that ended in success, so a run that did not read
-        # every board in full ends here, and the Mac reads the boards itself.
+        # A run that did not read every board in full ends here. Its verified result is published all the
+        # same and the Mac takes it; the boards not read are asked again by the next cloud runs.
         if: steps.merge.outputs.complete != 'true'
         run: |
           echo "::error::Not a complete refresh: see the coverage report. Its verified result is discovery-result-v1."

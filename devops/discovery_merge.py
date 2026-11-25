@@ -416,7 +416,7 @@ def summary(coverage: dict) -> str:
     t = coverage.get("totals") or totals(coverage)
     lines = [f"### Discovery coverage: {coverage['status']}"
              + ("" if coverage["complete_refresh"] else
-                " (not a complete refresh: kept as partial, and the Mac reads the rest itself)"),
+                " (not a complete refresh: kept as partial; the boards not read are asked again by the next cloud runs)"),
              "", "| Site | Status | Partitions | Boards | Complete | Partial | Failed | Rate-limited | Deferred | "
              "Not attempted |", "|---|---|---|---|---|---|---|---|---|---|"]
     for site, p in coverage["providers"].items():
@@ -450,10 +450,67 @@ def summary(coverage: dict) -> str:
               + (f"; {t['duration_minutes']} min" if "duration_minutes" in t else "")
               + (f"; merge {t['merge_seconds']} s" if "merge_seconds" in t else "")
               + ("" if t.get("reconciles", True) else "; THE BOARD COUNTS DO NOT ADD UP") + "."]
+    feeds = coverage.get("feeds")
+    if feeds is not None:
+        lines += ["", "| Job-search site or alerts | Status | New | Seen again | Aged out |", "|---|---|---|---|---|"]
+        if not feeds.get("arrived"):
+            lines.append("| (all) | NOT ARRIVED | | | |")
+        for name, c in sorted((feeds.get("sources") or {}).items()):
+            lines.append(f"| {name} | {c.get('status', '')} | {c.get('new', '')} | {c.get('seen', '')} | "
+                         f"{c.get('retired', '')} |")
     lines += ["", "| Partition | Status | Minutes | Reason |", "|---|---|---|---|"]
     for e in coverage["partitions"]:
         lines.append(f"| {e['id']} | {e['status']} | {e.get('minutes', '')} | {e['reason']} |")
     return "\n".join(lines) + "\n"
+
+
+def merge_feeds(db: Path, feeds_dir: Path | None) -> dict:
+    """The job-search sites' and alert emails' rows (devops/discovery_feeds.py) brought into the saved database, in
+    one transaction. Each row is that job's newer copy of the posting -- it started from this same database and no
+    board partition touches these sources -- so an existing posting takes every column but its id, and a new one is
+    added. Returns the public counts: what was read, added and updated, per source; nothing when no result came."""
+    report_file = feeds_dir / "feeds-report.json" if feeds_dir else None
+    rows_file = feeds_dir / "feeds.db" if feeds_dir else None
+    if not (report_file and report_file.is_file() and rows_file and rows_file.is_file()):
+        return {"arrived": False, "read": [], "row_sources": [], "sources": {}, "added": 0, "updated": 0}
+    try:
+        report = json.loads(report_file.read_text())
+    except ValueError:
+        return {"arrived": False, "read": [], "row_sources": [], "sources": {}, "added": 0, "updated": 0}
+    con = sqlite3.connect(db)
+    try:
+        con.execute("ATTACH DATABASE ? AS f", (str(rows_file),))
+        mine = [r[1] for r in con.execute("PRAGMA main.table_info(jobs)")]
+        theirs = {r[1] for r in con.execute("PRAGMA f.table_info(jobs)")}
+        cols = [c for c in mine if c in theirs and c != "id"]
+        boards = {r[0] for r in con.execute("SELECT DISTINCT source FROM main.companies")}
+        added = updated = 0
+        key = "source = ? AND company_slug = ? AND external_id = ?"
+        for row in con.execute(f"SELECT {', '.join(cols)} FROM f.jobs").fetchall():
+            values = dict(zip(cols, row))
+            if values["source"] in boards:
+                continue                    # never a board's posting: those are the partitions'
+            k = (values["source"], values["company_slug"], values["external_id"])
+            if con.execute(f"SELECT 1 FROM main.jobs WHERE {key}", k).fetchone():
+                con.execute(f"UPDATE main.jobs SET {', '.join(f'{c} = ?' for c in cols)} WHERE {key}",
+                            [*values.values(), *k])
+                updated += 1
+            else:
+                con.execute(f"INSERT INTO main.jobs ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                            list(values.values()))
+                added += 1
+        con.commit()
+        con.execute("DETACH DATABASE f")
+    except BaseException:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    sources = {name: {k: v for k, v in c.items() if k in ("status", "new", "seen", "retired", "calls")}
+               for name, c in (report.get("sources") or {}).items()}
+    return {"arrived": True, "read": sorted(report.get("read") or []),
+            "row_sources": sorted(report.get("row_sources") or []), "sources": sources,
+            "added": added, "updated": updated, "minutes": report.get("minutes")}
 
 
 def main(argv: list[str]) -> int:
@@ -465,6 +522,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--coverage", type=Path, required=True)
     ap.add_argument("--outcomes", type=Path, default=None, help="board-by-board outcomes (private: names boards)")
     ap.add_argument("--started", default="", help="when the run started (ISO, UTC), for its duration")
+    ap.add_argument("--feeds-dir", type=Path, default=None,
+                    help="the job-search sites' result (feeds.db and feeds-report.json), merged after the boards")
     ap.add_argument("--prune-log-days", type=float, default=0,
                     help="keep the scrape log to this many days (each board's newest row always kept): the cloud's copy only")
     args = ap.parse_args(argv)
@@ -487,6 +546,11 @@ def main(argv: list[str]) -> int:
     except MergeError as exc:
         print(f"merge stopped: {exc}", file=sys.stderr)
         return 4
+    try:
+        coverage["feeds"] = merge_feeds(args.db, args.feeds_dir)
+    except sqlite3.Error as exc:            # the boards' merge stands; the sites are reported unmerged
+        coverage["feeds"] = {"arrived": False, "read": [], "row_sources": [], "sources": {}, "added": 0,
+                             "updated": 0, "error": type(exc).__name__}
     if args.started:
         try:
             began = datetime.fromisoformat(args.started.replace("Z", "+00:00"))

@@ -232,6 +232,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--budget-minutes", default="")
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
+    # The scraper's own log lines name boards ("FAILED source/slug ...") and the searched titles, and this job's
+    # log is public on a public repository: they go to a file on this machine only (25 Nov 2026; before, the
+    # default handler printed every warning to the public log). The worker's own lines are counts only.
+    import logging
+    logging.basicConfig(filename=str(args.out.parent / "worker-private.log"), level=logging.INFO, force=True)
     manifest = None
     try:
         manifest = json.loads(args.manifest.read_text())

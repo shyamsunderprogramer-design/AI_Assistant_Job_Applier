@@ -98,13 +98,15 @@ DETAIL = ("listing", "listed", "relevant", "described", "pending", "skipped")
 
 def build(db: Path, manifest: dict, outcomes: list, coverage: dict, passphrase: str, *, run_id: str = "",
           attempt: str = "", started: str = "", scrape_jobs: str = "", now: datetime | None = None,
-          details: list | None = None) -> dict:
+          details: list | None = None, feeds: dict | None = None) -> dict:
     """result.json for the merged database `db`, signed.
 
     Since Nov 2026, beside the contract-v1 fields and read only by a Mac that knows them (an older one ignores
     them, and they are signed with the rest): `mac_lanes`, the boards per site the plan left to the Mac's own
     lanes (counts); `details`, for each board read whose listing was incomplete or whose relevant descriptions
-    are still pending, [source, slug, listing, listed, relevant, described, pending, skipped]."""
+    are still pending, [source, slug, listing, listed, relevant, described, pending, skipped]; `feeds` (25 Nov 2026),
+    the job-search sites and alert emails read in the cloud this run (`read`, by feed name) and the sources whose
+    rows it brought in (`sources`) -- the Mac takes those sources' postings beside the boards'."""
     if not passphrase:
         raise ResultError("no passphrase: the result cannot be signed")
     finished = (now or datetime.now(timezone.utc))
@@ -135,6 +137,8 @@ def build(db: Path, manifest: dict, outcomes: list, coverage: dict, passphrase: 
               "mac_lanes": dict(manifest.get("mac_lanes") or {}),
               "details": [list(d) for d in (details or [])
                           if d[2] != "complete" or int(d[6] or 0) > 0],
+              "feeds": {"read": sorted((feeds or {}).get("read") or []),
+                        "sources": sorted((feeds or {}).get("row_sources") or [])},
               "database": {"file": "jobs.db", "sha256": sha256_of(db), "bytes": Path(db).stat().st_size}}
     result["signature"] = sign(result, passphrase)
     return result
@@ -239,6 +243,11 @@ def verify(result: dict, db: Path, passphrase: str) -> dict:
     if not isinstance(mac_lanes, dict) or any(not isinstance(n, int) or n < 0 for n in mac_lanes.values()) \
             or set(mac_lanes) & {p["provider"] for p in plan}:
         raise ResultError("its Mac lanes are malformed, or name a site the cloud also read")
+    feeds = result.get("feeds") or {}
+    if not isinstance(feeds, dict) or any(
+            not isinstance(feeds.get(k, []), list) or not all(isinstance(x, str) and x for x in feeds.get(k, []))
+            for k in ("read", "sources")) or set(feeds.get("sources", [])) & {p["provider"] for p in plan}:
+        raise ResultError("its job-search sites are malformed, or name a board site")
     for key in scanned:
         stamp = read_at.get(key)
         if stamp is None:
@@ -256,7 +265,8 @@ def verify(result: dict, db: Path, passphrase: str) -> dict:
             "status": overall, "partitions": statuses, "started": started,
             "finished": (result.get("run") or {}).get("finished_at") or "",
             "run": (result.get("run") or {}).get("id") or "", "plan_id": result["plan_id"],
-            "provider_paused": {}, "pending": pending, "mac_lanes": dict(mac_lanes)}
+            "provider_paused": {}, "pending": pending, "mac_lanes": dict(mac_lanes),
+            "feeds_read": list(feeds.get("read", [])), "feed_sources": set(feeds.get("sources", []))}
 
 
 def main(argv: list[str]) -> int:
@@ -280,10 +290,11 @@ def main(argv: list[str]) -> int:
     outcomes = json.loads(args.outcomes.read_text())
     found = args.details or args.outcomes.with_name(args.outcomes.stem + "-details.json")
     details = json.loads(found.read_text()) if found.is_file() else []
+    feeds = coverage.get("feeds") or {}
     try:
         result = build(args.db, manifest, outcomes, coverage, os.environ.get("PASSPHRASE", ""),
                        run_id=args.run_id, attempt=args.attempt, started=args.started, scrape_jobs=args.scrape_jobs,
-                       details=details)
+                       details=details, feeds=feeds)
         verify(result, args.db, os.environ.get("PASSPHRASE", ""))      # never publish what the Mac would refuse
     except ResultError as exc:
         print(f"result not built: {exc}", file=sys.stderr)

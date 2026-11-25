@@ -695,7 +695,7 @@ def test_the_workflow_plans_partitions_and_joins_them():
     # The four-part version this replaced is in git history (fetch_parts). Detail: test_discovery_partitions.py.
     flow = yaml.safe_load((ROOT / ".github" / "workflows" / "daily-scrape.yml").read_text())
     jobs = flow["jobs"]
-    assert list(jobs) == ["plan", "scrape", "join"]
+    assert list(jobs) == ["plan", "scrape", "feeds", "join"]      # feeds: the job-search sites (25 Nov 2026)
     plan_steps = {s.get("name"): s for s in jobs["plan"]["steps"]}
     give = plan_steps["Give every board to exactly one partition"]
     assert "devops.discovery_plan plan" in give["run"]
@@ -709,13 +709,13 @@ def test_the_workflow_plans_partitions_and_joins_them():
     # Only the join saves the database; every partition starts from the same saved copy.
     uses = [s.get("uses", "") for job in jobs.values() for s in job["steps"]]
     assert uses.count("actions/cache/save@v4") == 1 and "actions/cache@v4" not in uses
-    assert jobs["join"]["needs"] == ["plan", "scrape"]
+    assert jobs["join"]["needs"] == ["plan", "scrape", "feeds"]
     join = " ".join(s.get("run", "") for s in jobs["join"]["steps"])
     assert "devops.discovery_merge" in join and "jobs.db.enc" in join
-    # Started only when asked: the Mac at 8 pm and in the morning, or the button. GitHub's own schedule, which
-    # ran 8-11.5 hours late and read every board a third time each day, was retired on 23 Nov 2026.
+    # Started from the cloud (25 Nov 2026): the outside scheduler through workflow_dispatch at 1:00 and 11:00
+    # Central, GitHub's own schedule only as a fallback (once per window: devops/discovery_slot.py). Never the Mac.
     on = flow.get("on", flow.get(True))
-    assert "schedule" not in on and "workflow_dispatch" in on
+    assert on["schedule"] == [{"cron": "23 6,7,16,17 * * *"}] and "workflow_dispatch" in on
 
 
 def test_the_summary_takes_its_board_counts_from_the_coverage_report_only(tmp_path):
