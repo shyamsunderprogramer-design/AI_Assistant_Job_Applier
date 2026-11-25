@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "ec5d8bdc3869f072e1e682d910fe1a5a4c6e4ef1"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "f0f739fb77bd91c9ceac791df8102704a67d59f8"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
