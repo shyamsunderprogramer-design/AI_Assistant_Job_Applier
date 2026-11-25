@@ -36,9 +36,12 @@
 #
 # Politeness does not grow with the matrix: each site has a budget of boards read
 # at once across all its partitions (one machine per one-host site unless its
-# budget says more; Greenhouse: 2), the 1.5 s gap per host stays (README §C5),
-# and a provider several of whose hosts refuse every retry (Workday) is left
-# alone as a whole until it cools off -- never asked faster through another host.
+# budget says more; since Nov 2026 Greenhouse 3, Lever 2, Ashby 2, one board at a
+# time each), the 1.5 s gap per host stays (README §C5), and a provider several of
+# whose hosts refuse every retry is left alone as a whole until it cools off --
+# never asked faster through another host. Workday is read on the Mac instead (its
+# boards still counted, as the Mac's lane), and Workable and Jobvite are asked a
+# quota of boards a run, the least recently read first.
 #
 # WHAT THE MAC TAKES (devops/cloud_results.py)
 # Three statuses, kept apart: the workflow's execution (this run's conclusion),
@@ -63,12 +66,13 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "fee39e03011ab514b1d8792eaedbbe5940096d87"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "ec5d8bdc3869f072e1e682d910fe1a5a4c6e4ef1"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
-  # Started when asked, and only then: by the Mac at 8 pm and in the morning
-  # (`cloud.trigger_runs`, devops/cloud_results.py: evening, the morning top-up), or
-  # by the button. GitHub's own schedule was retired on 23 Nov 2026: set for 06:17
+  # Started when asked, and only then: by the Mac at 8 pm (`cloud.trigger_runs`,
+  # devops/cloud_results.py: evening) -- the day's one full read; in the morning only
+  # when there is no recent run at all (the routine morning top-up was retired in
+  # Nov 2026: it added nothing) -- or by the button. GitHub's own schedule was retired on 23 Nov 2026: set for 06:17
   # UTC, it started 8-11.5 hours late every day (08:29-11:59 local, 18-23 Nov), after
   # the morning had taken the night's run and asked for its own top-up -- a third
   # full read of every board each day that nothing used until the next morning.
@@ -340,9 +344,11 @@ jobs:
               -in "$locked" -out "${locked%.enc}" -pass env:PASSPHRASE || rm -f "${locked%.enc}"
           done
           set +e
+          # --prune-log-days: this saved copy's scrape log kept to 30 days (each board's newest row always
+          # kept, for the plan). The cloud's copy only; the Mac's history is never pruned.
           python -m devops.discovery_merge --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
             --parts-dir parts --reports-dir reports --coverage coverage.json \
-            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" > merge.txt
+            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 30 > merge.txt
           code=$?
           set -e
           cat merge.txt >> "$GITHUB_STEP_SUMMARY"
