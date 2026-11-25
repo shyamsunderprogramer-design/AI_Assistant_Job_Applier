@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("America/Chicago")
 STARTS = ((1, 0), (11, 0))          # local start times of the two windows
 EARLY = timedelta(minutes=10)       # a start a few minutes early still belongs to the window it is for
+NEAR = timedelta(hours=2)           # a late start this close to the next window leaves the reading to that one
 WORKFLOW = "daily-scrape.yml"
 
 
@@ -44,6 +45,18 @@ def slot_start(now: datetime) -> datetime:
     return best.astimezone(timezone.utc)
 
 
+def next_start(start: datetime) -> datetime:
+    """The start (UTC) of the window after the one starting at `start`."""
+    local = start.astimezone(TZ)
+    for days in (0, 1):
+        day = (local + timedelta(days=days)).date()
+        for hour, minute in STARTS:
+            candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
+            if candidate > local:
+                return candidate.astimezone(timezone.utc)
+    raise AssertionError("no next window")          # tomorrow always holds both starts
+
+
 def label(start: datetime) -> str:
     local = start.astimezone(TZ)
     return f"{local:%Y-%m-%d %H:%M} {local.tzname()}"
@@ -54,6 +67,11 @@ def decide(event: str, trigger: str, now: datetime, others: list[dict]) -> dict:
     if event == "workflow_dispatch" and (trigger or "manual") != "scheduler":
         return {"go": True, "slot": "", "why": "started by hand: it always runs"}
     start = slot_start(now)
+    if next_start(start) - now < NEAR:
+        # GitHub's fallback hours late (or its other daylight-saving line, an hour early): reading now would hold
+        # up the next window's own run past its deadline, and that run reads everything anyway.
+        return {"go": False, "slot": label(start),
+                "why": f"the next window starts within {int(NEAR.total_seconds() // 3600)} hours: it reads instead"}
     for run in others:
         if run["created"] >= start - EARLY and run["scraped"]:
             return {"go": False, "slot": label(start),

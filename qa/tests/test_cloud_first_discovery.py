@@ -49,6 +49,20 @@ def test_once_per_window_but_the_button_always_runs():
     assert ds.decide("schedule", "", later, yesterday)["go"]
 
 
+def test_a_late_start_close_to_the_next_window_leaves_the_reading_to_it():
+    # GitHub's 06:23 UTC line in winter is 00:23 CST: inside the 11:00 window, 37 min before the 1:00 one.
+    assert not ds.decide("schedule", "", datetime(2026, 11, 26, 6, 23, tzinfo=UTC), [])["go"]
+    # Its 16:23 UTC line in winter is 10:23 CST: the 1:00 window, 37 min before 11:00.
+    assert not ds.decide("schedule", "", datetime(2026, 11, 26, 16, 23, tzinfo=UTC), [])["go"]
+    # The lines for the season in force: inside their own window, hours before the next.
+    assert ds.decide("schedule", "", datetime(2026, 11, 26, 7, 23, tzinfo=UTC), [])["go"]        # 1:23 CST
+    assert ds.decide("schedule", "", datetime(2026, 7, 15, 6, 23, tzinfo=UTC), [])["go"]         # 1:23 CDT
+    assert ds.decide("schedule", "", datetime(2026, 7, 15, 16, 23, tzinfo=UTC), [])["go"]        # 11:23 CDT
+    # The outside scheduler at the minute is never near the next window; the button always runs.
+    assert ds.decide("workflow_dispatch", "scheduler", datetime(2026, 11, 26, 7, 0, tzinfo=UTC), [])["go"]
+    assert ds.decide("workflow_dispatch", "manual", datetime(2026, 11, 26, 6, 23, tzinfo=UTC), [])["go"]
+
+
 # -- every site in the cloud; a provider that refused its last run is only probed -------------------------------
 
 def _rows(**sites):
