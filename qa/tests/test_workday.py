@@ -234,7 +234,7 @@ def test_only_matching_postings_cost_a_description():
     scraper = WorkdayScraper(client)
     job_filter = JobFilter(title_keywords=["site reliability"])
 
-    jobs, partial = _fetch(scraper, company(), job_filter)
+    jobs = _fetch(scraper, company(), job_filter).jobs
 
     assert len(jobs) == 5
     assert client.details_served == 5          # not 60, and not 200
@@ -246,9 +246,10 @@ def test_a_board_read_completely_is_not_partial():
     from data_engineering.scraper.runner import _fetch
 
     scraper = WorkdayScraper(_TitledClient(count=7, wanted=7))
-    _, partial = _fetch(scraper, company(), JobFilter(title_keywords=["site reliability"]))
+    got = _fetch(scraper, company(), JobFilter(title_keywords=["site reliability"]))
 
-    assert partial is False
+    assert got.detail["listing"] == "complete" and got.detail["pending"] == 0
+    assert got.listed_ids is None          # Workday never closes on its listing: its ids are not the stored ones
 
 
 def test_a_board_bigger_than_we_can_read_is_partial():
@@ -257,10 +258,10 @@ def test_a_board_bigger_than_we_can_read_is_partial():
     from data_engineering.scraper.runner import _fetch
 
     scraper = WorkdayScraper(_TitledClient(count=200, wanted=200))
-    jobs, partial = _fetch(scraper, company(), JobFilter(title_keywords=["site reliability"]))
+    got = _fetch(scraper, company(), JobFilter(title_keywords=["site reliability"]))
 
-    assert len(jobs) == 60          # MAX_DETAILS
-    assert partial is True
+    assert len(got.jobs) == 60          # MAX_DETAILS
+    assert got.detail["pending"] == 140 and got.listed_ids is None   # read in part: nothing may close
 
 
 def test_a_scraper_without_stubs_is_untouched():
@@ -268,9 +269,14 @@ def test_a_scraper_without_stubs_is_untouched():
     from data_engineering.scraper.filters import JobFilter
     from data_engineering.scraper.runner import _fetch
 
+    from types import SimpleNamespace
+
+    a, b = SimpleNamespace(external_id="a"), SimpleNamespace(external_id="b")
+
     class Plain:
         def fetch_jobs(self, company):
-            return ["a", "b"]
+            return [a, b]
 
-    jobs, partial = _fetch(Plain(), company(), JobFilter())
-    assert jobs == ["a", "b"] and partial is False
+    got = _fetch(Plain(), company(), JobFilter())
+    assert got.jobs == [a, b] and got.listed_ids == ["a", "b"]
+    assert got.detail["listing"] == "complete" and got.detail["pending"] == 0

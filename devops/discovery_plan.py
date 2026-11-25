@@ -51,7 +51,14 @@ def _lane(lanes: dict, provider: str) -> dict:
     found.setdefault("max_partitions", 1)
     found.setdefault("budget", int(lanes.get("default_one_partition_budget", 6)))
     found.setdefault("one_host", False)
+    found.setdefault("lane", "cloud")
+    found.setdefault("quota", 0)
     return found
+
+
+def mac_lane(lanes: dict, provider: str) -> bool:
+    """Whether the site is read on the Mac instead of in the cloud fetch (lane "mac")."""
+    return _lane(lanes, provider)["lane"] == "mac"
 
 
 def cap_of(lane: dict) -> int:
@@ -163,7 +170,11 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
     """The manifest: every board in exactly one partition of its own site. `only` (partition ids or site names)
     keeps those partitions to run; the rest are listed as not to run, so a subset is never taken for a full scan."""
     by_site: dict[str, list[dict]] = {}
+    on_mac: dict[str, int] = {}
     for r in rows:
+        if mac_lane(lanes, r["source"]):
+            on_mac[r["source"]] = on_mac.get(r["source"], 0) + 1   # read on the Mac: counted, not partitioned
+            continue
         by_site.setdefault(r["source"], []).append(r)
     how_many = counts(by_site, lanes, target_total)
     partitions = []
@@ -177,6 +188,7 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
             w = workers_of(lane, k, i)
             partitions.append({"id": pid, "provider": site, "index": i, "of": k, "workers": w,
                                "one_host": bool(lane["one_host"]),
+                               "quota": int(lane["quota"] or 0) // k if lane["quota"] else 0,
                                "est_minutes": round(_lane_minutes([b["est_s"] for b in group], lane, 1)
                                                     if lane["one_host"] else
                                                     max(max(b["est_s"] for b in group),
@@ -185,14 +197,41 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
     for p in partitions:
         p["run"] = not only or p["id"] in only or p["provider"] in only
     budget = float(budget_minutes if budget_minutes is not None else lanes.get("time_budget_minutes", 150))
-    return {"schema": SCHEMA, "plan_id": plan_id_of(partitions), "budget_minutes": budget,
-            "boards": sum(len(p["boards"]) for p in partitions), "partitions": partitions}
+    manifest = {"schema": SCHEMA, "plan_id": plan_id_of(partitions), "budget_minutes": budget,
+                "boards": sum(len(p["boards"]) for p in partitions), "partitions": partitions,
+                "mac_lanes": dict(sorted(on_mac.items()))}
+    check_assignment(rows, manifest, lanes)
+    return manifest
+
+
+def check_assignment(rows: list[dict], manifest: dict, lanes: dict) -> None:
+    """Every eligible board in exactly one lane: one cloud partition of its own site, or its site's Mac lane.
+    Raises ValueError otherwise -- a plan that loses or doubles a board is never run."""
+    where: dict[tuple, str] = {}
+    for p in manifest["partitions"]:
+        for b in p["boards"]:
+            key = (b["source"], b["slug"])
+            if key in where:
+                raise ValueError("a board is in two partitions")
+            if b["source"] != p["provider"]:
+                raise ValueError("a partition mixes job sites")
+            where[key] = p["id"]
+    eligible = {(r["source"], r["slug"]) for r in rows}
+    cloud = {k for k in eligible if not mac_lane(lanes, k[0])}
+    if set(where) != cloud:
+        raise ValueError("the cloud partitions do not hold exactly the cloud lanes' boards")
+    mac = {}
+    for source, _ in eligible - cloud:
+        mac[source] = mac.get(source, 0) + 1
+    if mac != manifest.get("mac_lanes", {}):
+        raise ValueError("the Mac lanes' counts do not match their boards")
 
 
 def matrix(manifest: dict) -> list[dict]:
     """What the public workflow log may show of the plan: ids, sites and counts -- never a board."""
     return [{"id": p["id"], "provider": p["provider"], "boards": len(p["boards"]), "workers": p["workers"],
-             "est_minutes": p["est_minutes"]} for p in manifest["partitions"] if p.get("run", True)]
+             "est_minutes": p["est_minutes"], **({"quota": p["quota"]} if p.get("quota") else {})}
+            for p in manifest["partitions"] if p.get("run", True)]
 
 
 def finish_estimate(partition: dict, budget_minutes: float) -> tuple[float, int]:
@@ -235,7 +274,8 @@ def main(argv: list[str]) -> int:
         print("matrix=" + json.dumps(matrix(manifest), separators=(",", ":")))
         print(f"plan_id={manifest['plan_id']}")
         print(f"budget={int(manifest['budget_minutes'])}")
-        print(f"{len(manifest['partitions'])} partitions, {manifest['boards']:,} boards, plan {manifest['plan_id']}",
+        print(f"{len(manifest['partitions'])} partitions, {manifest['boards']:,} boards, plan {manifest['plan_id']}"
+              + "".join(f"; {n:,} {site} boards on the Mac lane" for site, n in manifest["mac_lanes"].items()),
               file=sys.stderr)
         return 0
     b = manifest["budget_minutes"]

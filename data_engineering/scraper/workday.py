@@ -26,16 +26,19 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RobotsDisallowed
 
 log = logging.getLogger(__name__)
 
 # A tenant may hold thousands of postings; Workday caps a page at 20.
 PAGE_SIZE = 20
-MAX_PAGES = 50              # 1,000 postings per company is already generous
+# 2,000 postings per tenant (Nov 2026: was 1,000, which cut the largest employers' listings short). A listing
+# that still goes past it is reported incomplete -- never read as the whole board.
+MAX_PAGES = 100
 # Descriptions cost one request each, so only ever fetch them for postings a
-# filter has already kept.
+# filter has already kept -- and those not stored yet first (runner._fetch), so
+# a later read resumes where this one stopped instead of the same first sixty.
 MAX_DETAILS = 60
 
 # Workday writes "6 Locations" when a posting spans several offices. That is a
@@ -154,7 +157,7 @@ class WorkdayScraper(PortalScraper):
         the whole thing, for callers that want it.
         """
         stubs = self.stub_jobs(company)
-        return self.fill_details(company, stubs)
+        return [job for job in self.fill_details(company, stubs) if not job.detail_missing]
 
     def stub_jobs(self, company: CompanyRef) -> list[RawJob]:
         """Postings with title and location but no description yet.
@@ -172,12 +175,14 @@ class WorkdayScraper(PortalScraper):
         # `total` is sent on the first page only; later pages report 0, so
         # trusting it per-page stops the walk after forty postings.
         total: int | None = None
+        ended = False
         for page in range(MAX_PAGES):
             payload = self._page(tenant, dc, site, offset=page * PAGE_SIZE, limit=PAGE_SIZE)
             if total is None:
                 total = payload.get("total") or None
             postings = payload.get("jobPostings") or []
             if not postings:
+                ended = True
                 break
             for entry in postings:
                 path = entry.get("externalPath")
@@ -199,8 +204,20 @@ class WorkdayScraper(PortalScraper):
                     )
                 )
             if total is not None and len(stubs) >= total:
+                ended = True
                 break
-        return stubs
+        if not ended:
+            log.info("%s: listing stopped at %d pages (%s postings said to exist) -- incomplete",
+                     company.name, MAX_PAGES, total if total is not None else "more")
+        return Listing(stubs, complete=ended, total=total)
+
+    @staticmethod
+    def listing_key(application_url: str | None) -> str | None:
+        """The listing's id (its externalPath, "/job/...") of a STORED posting, from the URL its detail gave
+        it: how a later read knows which listed postings it has already described."""
+        url = application_url or ""
+        at = url.find("/job/")
+        return url[at:] if at >= 0 else None
 
     def fill_details(self, company: CompanyRef, stubs: list[RawJob]) -> list[RawJob]:
         """Fetch the description for each posting that survived filtering."""
@@ -213,11 +230,12 @@ class WorkdayScraper(PortalScraper):
         for stub in stubs[:MAX_DETAILS]:
             try:
                 info = self._detail(tenant, dc, site, stub.external_id)
-            except (FetchError, RobotsDisallowed) as exc:
-                # One unreachable posting must not cost the whole tenant.
+            except (FetchError, RobotsDisallowed, ValueError) as exc:
+                # One unreachable posting must not cost the whole tenant. Returned marked, with its listing id:
+                # never stored under that id (the stored id is the requisition id), counted as pending.
                 log.debug("Workday detail failed for %s: %s", stub.external_id, exc)
-                continue
-            except ValueError:
+                stub.detail_missing = True
+                filled.append(stub)
                 continue
 
             description = html_to_text(info.get("jobDescription"))

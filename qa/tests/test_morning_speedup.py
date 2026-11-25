@@ -718,16 +718,24 @@ def test_the_workflow_plans_partitions_and_joins_them():
     assert "schedule" not in on and "workflow_dispatch" in on
 
 
-def test_the_summary_counts_every_part_of_the_last_fetch(tmp_path):
+def test_the_summary_takes_its_board_counts_from_the_coverage_report_only(tmp_path):
+    """Nov 2026: the old "Boards that failed" counted every failed log row of the last 7 hours (5,525 on 23 Nov:
+    two runs mixed, a board once per retry). The board counts now come only from the run's coverage report."""
     import importlib.util
+    import json as _json
     spec = importlib.util.spec_from_file_location("actions_summary", ROOT / "devops" / "actions_summary.py")
     summary = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(summary)
     path = new_db(tmp_path / "jobs.db")
     with sqlite3.connect(path) as db:
-        for i, run in enumerate(("p1", "p2", "p3", "p4")):
-            _row(db, "scrape_log", run_id=run, source="greenhouse", company_slug=f"c{i}", ok=1, jobs_seen=10,
+        for i in range(3):        # failed rows of two runs: never counted as failed boards any more
+            _row(db, "scrape_log", run_id=f"r{i % 2}", source="workday", company_slug=f"c{i}", ok=0,
                  created_at=f"2026-11-02 2{i}:00:00")
-        _row(db, "scrape_log", run_id="yesterday", source="greenhouse", company_slug="old", ok=1, jobs_seen=99,
-             created_at="2026-11-01 08:00:00")
-    assert "| Postings seen | 40 |" in summary.summary(path)
+    cov = tmp_path / "coverage.json"
+    cov.write_text(_json.dumps({"totals": {"boards_planned_cloud": 10, "boards_planned_mac": 4,
+                                           "boards_scanned_in_full": 6, "boards_read_in_part": 2,
+                                           "boards_failed": 1, "boards_rate_limited": 1, "postings_listed": 40}}))
+    text = summary.summary(path, cov)
+    assert "Boards that failed" not in text and "| Failed | 1 |" in text
+    assert "| Boards planned on the Mac lanes | 4 |" in text and "| Postings listed | 40 |" in text
+    assert "no coverage report" in summary.summary(path, tmp_path / "missing.json")

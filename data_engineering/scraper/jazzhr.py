@@ -55,6 +55,7 @@ def parse_description(page: str) -> str | None:
 
 class JazzHRScraper(PortalScraper):
     name = "jazzhr"
+    durable_listing_ids = True        # the listing's id is the posting's id, the one stored
 
     def board_url(self, slug: str) -> str:
         return f"https://{slug}.applytojob.com/apply"
@@ -82,8 +83,10 @@ class JazzHRScraper(PortalScraper):
                 if resp.status_code == 200:
                     job.description = parse_description(resp.text)
                     job.requirements = extract_requirements(job.description) if job.description else None
+                else:
+                    job.detail_missing = True
             except (FetchError, RobotsDisallowed):
-                pass          # one unreachable posting must not lose the board
+                job.detail_missing = True   # one unreachable posting must not lose the board; it is still listed
         return jobs
 
     def fetch_jobs(self, company: CompanyRef) -> list[RawJob]:

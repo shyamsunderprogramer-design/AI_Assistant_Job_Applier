@@ -36,6 +36,7 @@ def _place(entry: dict) -> str | None:
 
 class BambooHRScraper(PortalScraper):
     name = "bamboohr"
+    durable_listing_ids = True        # the listing's id is the posting's id, the one stored
 
     def _list(self, slug: str) -> str:
         return f"https://{slug}.bamboohr.com/careers/list"
@@ -91,9 +92,10 @@ class BambooHRScraper(PortalScraper):
                 opening = (detail.get("result") or {}).get("jobOpening") or {}
                 job = self._to_job(company, {**opening, "id": job.external_id},
                                    opening.get("description")) or job
-            except (FetchError, RobotsDisallowed, AttributeError) as exc:
-                # One unreachable posting must not lose the rest of the board.
+            except (FetchError, RobotsDisallowed, AttributeError, ValueError) as exc:
+                # One unreachable posting must not lose the rest of the board; it is still listed.
                 self.log_detail_miss(company, job, exc)
+                job.detail_missing = True
             filled.append(job)
         return filled
 

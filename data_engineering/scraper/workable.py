@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ MAX_PAGES = 200          # 2,000 postings; a guard, not an expectation
 
 class WorkableScraper(PortalScraper):
     name = "workable"
+    durable_listing_ids = True        # the shortcode names the posting in the listing and in its detail alike
 
     def board_url(self, slug: str) -> str:
         return f"https://apply.workable.com/{slug}/"
@@ -87,10 +88,13 @@ class WorkableScraper(PortalScraper):
 
     # -- listing ------------------------------------------------------------
 
-    def _pages(self, slug: str):
-        """Every page of the listing, following Workable's paging token."""
+    def _pages(self, slug: str, ended: dict | None = None):
+        """Every page of the listing, following Workable's paging token. `ended["complete"]` says whether the
+        walk reached the end (False: stopped at MAX_PAGES)."""
         token = None
         seen = 0
+        ended = ended if ended is not None else {}
+        ended["complete"] = True
         for _ in range(MAX_PAGES):
             body = dict(LIST_BODY)
             if token:
@@ -113,6 +117,7 @@ class WorkableScraper(PortalScraper):
             # count the API itself reported. A paging bug must not loop.
             if not token or not results or (total is not None and seen >= total):
                 return
+        ended["complete"] = False
         log.warning("workable/%s: stopped at %d pages", slug, MAX_PAGES)
 
     def stub_jobs(self, company: CompanyRef) -> list[RawJob]:
@@ -123,12 +128,13 @@ class WorkableScraper(PortalScraper):
         rejected on their title.
         """
         stubs: list[RawJob] = []
-        for page in self._pages(company.slug):
+        ended: dict = {}
+        for page in self._pages(company.slug, ended):
             for entry in page:
                 stub = self._to_job(company, entry, description=None)
                 if stub is not None:
                     stubs.append(stub)
-        return stubs
+        return Listing(stubs, complete=ended.get("complete", True))
 
     def fill_details(self, company: CompanyRef, jobs: list[RawJob]) -> list[RawJob]:
         """Fetch the description for postings that survived the filter."""
@@ -141,10 +147,13 @@ class WorkableScraper(PortalScraper):
                 # One unreachable posting must not lose the rest of the board.
                 log.warning("workable/%s: %s has no detail (%s)",
                             company.slug, job.external_id, exc)
+                job.detail_missing = True       # still listed: kept, its stored text untouched
                 filled.append(job)
                 continue
             if isinstance(detail, dict):
                 job = self._to_job(company, detail, description=True) or job
+            else:
+                job.detail_missing = True
             filled.append(job)
         return filled
 

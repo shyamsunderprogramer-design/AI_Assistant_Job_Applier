@@ -93,9 +93,18 @@ def roll_up(statuses: list[str]) -> str:
     return PARTIAL
 
 
+DETAIL = ("listing", "listed", "relevant", "described", "pending", "skipped")
+
+
 def build(db: Path, manifest: dict, outcomes: list, coverage: dict, passphrase: str, *, run_id: str = "",
-          attempt: str = "", started: str = "", scrape_jobs: str = "", now: datetime | None = None) -> dict:
-    """result.json for the merged database `db`, signed."""
+          attempt: str = "", started: str = "", scrape_jobs: str = "", now: datetime | None = None,
+          details: list | None = None) -> dict:
+    """result.json for the merged database `db`, signed.
+
+    Since Nov 2026, beside the contract-v1 fields and read only by a Mac that knows them (an older one ignores
+    them, and they are signed with the rest): `mac_lanes`, the boards per site the plan left to the Mac's own
+    lanes (counts); `details`, for each board read whose listing was incomplete or whose relevant descriptions
+    are still pending, [source, slug, listing, listed, relevant, described, pending, skipped]."""
     if not passphrase:
         raise ResultError("no passphrase: the result cannot be signed")
     finished = (now or datetime.now(timezone.utc))
@@ -123,6 +132,9 @@ def build(db: Path, manifest: dict, outcomes: list, coverage: dict, passphrase: 
               "partitions": partitions,
               "boards": [list(o) for o in outcomes],
               "totals": coverage.get("totals", {}),
+              "mac_lanes": dict(manifest.get("mac_lanes") or {}),
+              "details": [list(d) for d in (details or [])
+                          if d[2] != "complete" or int(d[6] or 0) > 0],
               "database": {"file": "jobs.db", "sha256": sha256_of(db), "bytes": Path(db).stat().st_size}}
     result["signature"] = sign(result, passphrase)
     return result
@@ -211,6 +223,22 @@ def verify(result: dict, db: Path, passphrase: str) -> dict:
         except ValueError as exc:
             raise ResultError("its start time cannot be read") from exc
     scanned = {k for k, st in seen.items() if st in SCANNED}
+    pending: dict[tuple, dict] = {}
+    for row in result.get("details") or []:
+        if not isinstance(row, list) or len(row) != 2 + len(DETAIL):
+            raise ResultError("a board's detail is malformed")
+        key = (row[0], row[1])
+        if key not in scanned or key in pending:
+            raise ResultError("a board's detail is not one of the boards read, or is given twice")
+        d = dict(zip(DETAIL, row[2:]))
+        if d["listing"] not in ("complete", "incomplete") or any(
+                not isinstance(d[k], int) or d[k] < 0 for k in DETAIL[1:]):
+            raise ResultError("a board's detail is malformed")
+        pending[key] = d
+    mac_lanes = result.get("mac_lanes") or {}
+    if not isinstance(mac_lanes, dict) or any(not isinstance(n, int) or n < 0 for n in mac_lanes.values()) \
+            or set(mac_lanes) & {p["provider"] for p in plan}:
+        raise ResultError("its Mac lanes are malformed, or name a site the cloud also read")
     for key in scanned:
         stamp = read_at.get(key)
         if stamp is None:
@@ -228,7 +256,7 @@ def verify(result: dict, db: Path, passphrase: str) -> dict:
             "status": overall, "partitions": statuses, "started": started,
             "finished": (result.get("run") or {}).get("finished_at") or "",
             "run": (result.get("run") or {}).get("id") or "", "plan_id": result["plan_id"],
-            "provider_paused": {}}
+            "provider_paused": {}, "pending": pending, "mac_lanes": dict(mac_lanes)}
 
 
 def main(argv: list[str]) -> int:
@@ -244,13 +272,18 @@ def main(argv: list[str]) -> int:
     b.add_argument("--attempt", default="")
     b.add_argument("--started", default="")
     b.add_argument("--scrape-jobs", default="")
+    b.add_argument("--details", type=Path, default=None,
+                   help="the merge's board details (default: beside --outcomes, as the merge writes them)")
     args = ap.parse_args(argv)
     manifest = json.loads(args.manifest.read_text())
     coverage = json.loads(args.coverage.read_text())
     outcomes = json.loads(args.outcomes.read_text())
+    found = args.details or args.outcomes.with_name(args.outcomes.stem + "-details.json")
+    details = json.loads(found.read_text()) if found.is_file() else []
     try:
         result = build(args.db, manifest, outcomes, coverage, os.environ.get("PASSPHRASE", ""),
-                       run_id=args.run_id, attempt=args.attempt, started=args.started, scrape_jobs=args.scrape_jobs)
+                       run_id=args.run_id, attempt=args.attempt, started=args.started, scrape_jobs=args.scrape_jobs,
+                       details=details)
         verify(result, args.db, os.environ.get("PASSPHRASE", ""))      # never publish what the Mac would refuse
     except ResultError as exc:
         print(f"result not built: {exc}", file=sys.stderr)

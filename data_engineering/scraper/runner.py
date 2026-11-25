@@ -29,7 +29,8 @@ from data_engineering.scraper.jobvite import JobviteScraper
 from data_engineering.scraper.workday import WorkdayScraper
 from data_engineering.scraper.filters import JobFilter, resolve_filter
 from data_engineering.scraper.greenhouse import GreenhouseScraper
-from data_engineering.scraper.http_client import HttpSettings, PoliteClient, RateLimited, RobotsDisallowed
+from data_engineering.scraper.http_client import (HttpSettings, NetworkError, PoliteClient, RateLimited,
+                                                  RobotsDisallowed, network_ok)
 from data_engineering.scraper.lever import LeverScraper
 from data_engineering.scraper.lifecycle import reconcile_board
 
@@ -66,11 +67,57 @@ class RunSummary:
     deferred: list = field(default_factory=list)
     # Each board's outcome, for a partition's coverage report (devops/discovery_worker.py):
     # (source, slug) -> (status, error_type). status: complete | partial | failed | rate_limited | not_attempted.
-    # "partial": read, but not completely (nothing closed); "failed": a board-level error (404, robots, parse).
+    # "partial": read, but its listing or its relevant descriptions are incomplete; "failed": a board-level error
+    # (404, robots, parse, or no answer). not_attempted with "NetworkDown": this machine lost the internet first.
     outcomes: dict = field(default_factory=dict)
+    # Each board read, at the posting level (Nov 2026): (source, slug) -> {listing: complete|incomplete, listed,
+    # relevant, described, pending, skipped}. relevant: postings the search wants a description of; skipped: the
+    # rest, intentionally not described; pending: relevant postings whose description is still missing.
+    details: dict = field(default_factory=dict)
+    network_down: bool = False          # the run stopped because nothing answered at all (NetworkWatch)
 
 
 COMPLETE, PARTIAL, FAILED, RATE_LIMITED, NOT_ATTEMPTED = "complete", "partial", "failed", "rate_limited", "not_attempted"
+NETWORK_DOWN = "NetworkDown"
+
+
+class NetworkWatch:
+    """Tells "this board's host did not answer" apart from "nothing answers": an outage morning once read for
+    hours with no internet, recorded thousands of failures and retired healthy boards.
+
+    Every board that fails with no answer at all (NetworkError) adds to a streak shared by all workers; any board
+    that answers resets it. At `streak` in a row the internet itself is checked (http_client.network_ok, one check
+    at a time). Unreachable: the run is DOWN -- no further board is started, and the boards that failed in the
+    streak are recorded as not attempted, never as failed. Reachable: those were the boards' own hosts."""
+
+    def __init__(self, probe=network_ok, streak: int = 5):
+        self.probe, self.limit = probe, max(1, int(streak))
+        self.down = False
+        self._streak = 0
+        self._lock = threading.Lock()
+        self._probing = threading.Lock()
+
+    def answered(self) -> None:
+        with self._lock:
+            self._streak = 0
+
+    def silent(self) -> bool:
+        """A board got no answer. Returns whether the network is down."""
+        with self._lock:
+            self._streak += 1
+            due = self._streak >= self.limit and not self.down
+        if due and self._probing.acquire(blocking=False):
+            try:
+                if not self.probe():
+                    self.down = True
+                    log.warning("nothing answers: this machine has no internet -- the run stops; the boards not "
+                                "read stay as they were, none of them counted as failed")
+                else:
+                    with self._lock:
+                        self._streak = 0
+            finally:
+                self._probing.release()
+        return self.down
 
 
 def build_scrapers(cfg, client: PoliteClient) -> dict[str, PortalScraper]:
@@ -129,7 +176,7 @@ def run_scrape(cfg, sites=None, skip_sites=None) -> RunSummary:
 
 def scrape_companies(cfg, companies: list[CompanyRef], *, workers: int | None = None,
                      deadline: float | None = None, client: PoliteClient | None = None,
-                     run_id: str | None = None) -> RunSummary:
+                     run_id: str | None = None, watch: NetworkWatch | None = None) -> RunSummary:
     """Read exactly these boards. `deadline` (time.monotonic()) is a time budget: no board is started after
     it, and no rate-limit wait runs past it -- those boards are recorded not_attempted or rate_limited, never as
     read. Without one this is the full run as it always was (`run_scrape`)."""
@@ -174,15 +221,20 @@ def scrape_companies(cfg, companies: list[CompanyRef], *, workers: int | None = 
         by_host.setdefault(_host_of(scraper, company), []).append(company)
 
     lock = threading.Lock()
+    watch = watch or NetworkWatch(streak=int(cfg.get("limits.network_down_streak", 5) or 5))
 
     def walk(host_companies: list) -> None:
         for company in host_companies:
+            if watch.down:
+                with lock:
+                    summary.outcomes[(company.source, company.slug)] = (NOT_ATTEMPTED, NETWORK_DOWN)
+                continue
             if deadline is not None and time.monotonic() >= deadline:
                 with lock:
                     summary.outcomes[(company.source, company.slug)] = (NOT_ATTEMPTED, "TimeBudget")
                 continue
             _scrape_one(company, scrapers, job_filter, summary, lock,
-                        deactivate_after, close_on_empty)
+                        deactivate_after, close_on_empty, watch=watch)
 
     if workers <= 1:
         # No pool at all, not a pool of one. A ThreadPoolExecutor with a single
@@ -198,8 +250,15 @@ def scrape_companies(cfg, companies: list[CompanyRef], *, workers: int | None = 
     max_wait = 20 * 60
     if deadline is not None:
         max_wait = max(0.0, min(max_wait, deadline - time.monotonic() - 60))
+    if watch.down:
+        max_wait = 0.0                    # no internet: no wait for a host to cool off either
     _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty, workers,
-                    max_wait=max_wait, deadline=deadline)
+                    max_wait=max_wait, deadline=deadline, watch=watch)
+    if watch.down:
+        summary.network_down = True
+        for key, (status, error) in list(summary.outcomes.items()):
+            if status == FAILED and error == "NetworkError":
+                summary.outcomes[key] = (NOT_ATTEMPTED, NETWORK_DOWN)    # failed only because nothing answered
     return summary
 
 
@@ -220,7 +279,8 @@ def scrape_boards(cfg, refs: list[CompanyRef]) -> RunSummary:
 
 
 def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty,
-                    workers, max_wait: float = 20 * 60, deadline: float | None = None) -> None:
+                    workers, max_wait: float = 20 * 60, deadline: float | None = None,
+                    watch: "NetworkWatch | None" = None) -> None:
     """Ask the boards a host turned away once more, after its cool-off ends."""
     if not summary.deferred:
         return
@@ -242,12 +302,12 @@ def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_afte
 
     def walk(host_companies: list) -> None:
         for company in host_companies:
-            if deadline is not None and time.monotonic() >= deadline:
+            if (deadline is not None and time.monotonic() >= deadline) or (watch is not None and watch.down):
                 with lock:          # its time ran out before it was asked again: still rate-limited, not read
                     summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
                 continue
             _scrape_one(company, scrapers, job_filter, summary, lock,
-                        deactivate_after, close_on_empty, retrying=True)
+                        deactivate_after, close_on_empty, retrying=True, watch=watch)
 
     if workers <= 1:
         for group in hosts.values():
@@ -284,7 +344,7 @@ def _host_of(scraper, company) -> str:
 
 
 def _scrape_one(company, scrapers, job_filter, summary, lock,
-                deactivate_after, close_on_empty, retrying: bool = False) -> None:
+                deactivate_after, close_on_empty, retrying: bool = False, watch: NetworkWatch | None = None) -> None:
     """One board, start to finish. Runs on a worker thread."""
     scraper = scrapers.get(company.source)
     if scraper is None:
@@ -293,16 +353,19 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
     with lock:
         summary.companies_attempted += 1
     started = time.monotonic()
-    partial = False
     try:
-        raw_jobs, partial = _fetch(scraper, company, job_filter)
+        got = _fetch(scraper, company, job_filter)
     except RobotsDisallowed as exc:
+        if watch is not None:
+            watch.answered()
         with lock:
             _log_failure(summary, company, "RobotsDisallowed", str(exc), started,
                          deactivate_after)
             summary.outcomes[(company.source, company.slug)] = (FAILED, "RobotsDisallowed")
         return
     except RateLimited as exc:
+        if watch is not None:
+            watch.answered()               # a refusal is an answer: the network is there
         with lock:
             summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
             if not retrying:
@@ -313,12 +376,21 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
                 _log_failure(summary, company, "RateLimited", str(exc), started, deactivate_after)
         return
     except Exception as exc:
+        silent = isinstance(exc, NetworkError)
+        if watch is not None:
+            if silent:
+                watch.silent()
+            else:
+                watch.answered()
         with lock:
             _log_failure(summary, company, type(exc).__name__, str(exc), started,
                          deactivate_after)
             summary.outcomes[(company.source, company.slug)] = (FAILED, type(exc).__name__)
         return
+    if watch is not None:
+        watch.answered()
 
+    raw_jobs = got.jobs
     kept = job_filter.apply(raw_jobs)
 
     # One writer at a time past this point. SQLite takes an exclusive lock for
@@ -330,31 +402,36 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
 
         # Only reachable on a SUCCESSFUL fetch — every failure path above has
         # already returned, so an outage can never close a company's jobs.
-        # Reconciled against EVERY posting returned, not the filtered subset:
-        # a stored job whose title no longer matches the filters is still on
-        # the board (data_engineering/scraper/lifecycle.py).
-        lifecycle = reconcile_board(
-            company.source,
-            company.slug,
-            [raw.external_id for raw in raw_jobs],
-            close_on_empty_board=close_on_empty,
-            partial=partial,
-        )
+        # Reconciled against EVERY posting the listing named, not the filtered
+        # subset: a stored job whose title no longer matches the filters, or
+        # whose description was never asked for, is still on the board
+        # (data_engineering/scraper/lifecycle.py). A listing that is not
+        # complete, or whose ids are not the stored ones, closes nothing.
+        if got.listed_ids is not None:
+            lifecycle = reconcile_board(company.source, company.slug, got.listed_ids,
+                                        close_on_empty_board=close_on_empty, partial=False)
+        else:
+            lifecycle = reconcile_board(company.source, company.slug, got.seen_ids,
+                                        close_on_empty_board=close_on_empty, partial=True)
 
-        summary.jobs_seen += len(raw_jobs)
+        summary.jobs_seen += got.detail["listed"]
         summary.jobs_kept += len(kept)
         summary.jobs_new += new_count
         summary.jobs_updated += updated_count
         summary.jobs_closed += lifecycle.closed
         summary.jobs_reopened += lifecycle.reopened
 
-        _log_success(summary, company, len(raw_jobs), len(kept), new_count, started)
-        summary.outcomes[(company.source, company.slug)] = (PARTIAL if partial else COMPLETE, "")
+        _log_success(summary, company, got.detail["listed"], len(kept), new_count, started)
+        done = got.detail["listing"] == "complete" and got.detail["pending"] == 0
+        summary.outcomes[(company.source, company.slug)] = (COMPLETE if done else PARTIAL, "")
+        summary.details[(company.source, company.slug)] = dict(got.detail)
 
     log.info(
-        "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed",
-        company.source, company.slug, len(raw_jobs), len(kept), new_count,
+        "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed%s",
+        company.source, company.slug, got.detail["listed"], len(kept), new_count,
         lifecycle.closed,
+        (f"  ({got.detail['pending']} description(s) pending)" if got.detail["pending"] else "")
+        + ("  (listing incomplete)" if got.detail["listing"] != "complete" else ""),
     )
 
 
@@ -396,6 +473,10 @@ def _persist(jobs: list[RawJob]) -> tuple[int, int]:
                     )
                 )
                 new_count += 1
+            elif raw.detail_missing:
+                # Its description did not come this time: the posting is still listed, and its stored text
+                # stays as it was rather than being wiped by an empty one.
+                continue
             elif existing.content_hash != content_hash:
                 # Posting was edited — refresh in place, never duplicate.
                 existing.title = raw.title
@@ -446,40 +527,108 @@ def _log_success(
             row.consecutive_failures = 0
 
 
-def _fetch(scraper, company, job_filter) -> tuple[list[RawJob], bool]:
-    """Every posting worth keeping from one board, and whether we saw it all.
+@dataclass
+class Fetched:
+    """One board read: what to store, and what may be judged from it.
+
+    jobs        the postings to store (described; or, where listing ids are durable, listed with a missing
+                description -- kept, their stored text untouched);
+    listed_ids  every id a COMPLETE listing with durable ids named: closure is judged against these. None: this
+                read may close nothing (an incomplete listing, or ids that are not the stored ones);
+    seen_ids    the stored postings this read saw, refreshed when it may close nothing;
+    detail      the board at the posting level (RunSummary.details)."""
+    jobs: list
+    listed_ids: list | None
+    seen_ids: list
+    detail: dict
+
+
+def _known(scraper, company) -> dict:
+    """{listing id: stored id} for the board's postings already stored, on a site whose listing ids are not the
+    stored ones (Workday: the URL path, against the requisition id): how a read knows which listed postings it
+    has described before. Read-only."""
+    key_of = getattr(scraper, "listing_key", None)
+    if key_of is None:
+        return {}
+    try:
+        with get_session() as session:
+            rows = (session.query(Job.application_url, Job.external_id)
+                    .filter_by(source=company.source, company_slug=company.slug).all())
+    except RuntimeError:            # no database opened (a reader used on its own): nothing is known yet
+        return {}
+    known = {}
+    for url, external_id in rows:
+        key = key_of(url)
+        if key:
+            known[key] = external_id
+        if str(external_id).startswith("/job/"):
+            known[str(external_id)] = external_id      # stored before its requisition id was known
+    return known
+
+
+def _fetch(scraper, company, job_filter) -> Fetched:
+    """Every posting worth keeping from one board, and how much of the board was seen.
 
     Most boards hand over titles, locations and descriptions together, so there
-    is nothing to decide: fetch, then filter.
+    is nothing to decide: fetch, then filter. That listing is the whole board.
 
-    Workday does not. Its listing carries no descriptions, each one costs a
-    separate request, and a tenant can hold two thousand postings — so the
-    scraper splits the work into `stub_jobs` and `fill_details` precisely so a
-    filter can run in between. Nothing ran in between. Every Workday board
-    fetched descriptions for the first sixty postings in board order and then
-    filtered those, which is why the log reads "Citigroup: 999 postings
-    matched, fetching the first 60 ... 0 match": the sixty were arbitrary, and
-    any posting worth having was somewhere in the other 939.
+    Workday, Workable, BambooHR, JazzHR and Jobvite do not: the listing carries
+    no descriptions and each one costs a separate request, so the scraper splits
+    the work into `stub_jobs` and `fill_details`, and the title and location
+    filter runs in between. Only the postings the search wants are described;
+    the rest are skipped on purpose -- which says nothing about whether the
+    board was read. Until Nov 2026 it did: a skipped posting made the board
+    "partial", and a partial board closes nothing, so on JazzHR and BambooHR a
+    posting taken down was never closed (on JazzHR, half the open postings
+    went unseen for weeks).
 
-    Filtering on title and location first turns those sixty requests into sixty
-    *relevant* requests.
-
-    The second return value is whether the board was read completely. It was
-    not, whenever filtering left more candidates than `fill_details` will
-    fetch — and a board we could not read completely must not close anything.
+    Now three things are kept apart:
+      * whether the LISTING is complete (`Listing.complete`: no page cap hit);
+      * whether every RELEVANT posting has its description (`pending`);
+      * how many were skipped as irrelevant (`skipped`) -- never a shortfall.
+    A complete listing whose ids are the stored ones (`durable_listing_ids`)
+    is authoritative: closure is judged against everything it names. Workday's
+    are not (a URL path, where the stored id is the requisition id), so Workday
+    still closes nothing; instead the postings it has described before are
+    recognised by their path, and the ones never described are asked for first,
+    so the next read resumes where this one stopped.
     """
     stubs = getattr(scraper, "stub_jobs", None)
     if stubs is None:
-        return scraper.fetch_jobs(company), False
+        jobs = scraper.fetch_jobs(company)
+        ids = [raw.external_id for raw in jobs]
+        return Fetched(jobs, ids, ids, {"listing": "complete", "listed": len(jobs), "relevant": len(jobs),
+                                        "described": len(jobs), "pending": 0, "skipped": 0})
 
     listed = stubs(company)
+    complete = bool(getattr(listed, "complete", True))
     candidates = [job for job in listed if job_filter.matches_stub(job)]
-    filled = scraper.fill_details(company, candidates)
+    durable = bool(getattr(scraper, "durable_listing_ids", False))
+    known = {} if durable else _known(scraper, company)
+    unknown = [job for job in candidates if job.external_id not in known]
+    first = {id(job) for job in unknown}
+    ordered = unknown + [job for job in candidates if id(job) not in first]
+    filled = scraper.fill_details(company, ordered)
 
     if len(listed) > len(candidates):
         log.info("%s: %d of %d postings worth a description", company.name,
                  len(candidates), len(listed))
-    return filled, len(filled) < len(listed)
+    detail = {"listing": "complete" if complete else "incomplete", "listed": len(listed),
+              "relevant": len(candidates), "skipped": len(listed) - len(candidates)}
+    if complete and getattr(listed, "total", None) and listed.total > len(listed) and not durable:
+        detail["listing"] = "incomplete"
+    if durable:
+        missing = sum(1 for job in filled if job.detail_missing)
+        detail.update(described=len(filled) - missing, pending=missing + max(0, len(candidates) - len(filled)))
+        ids = [job.external_id for job in listed]
+        return Fetched(filled, ids if complete else None, ids, detail)
+
+    described = [job for job in filled if not job.detail_missing]
+    got_unknown = sum(1 for job in described if id(job) in first)
+    detail.update(described=len(described), pending=len(unknown) - got_unknown)
+    seen = [job.external_id for job in described]
+    seen += [known[job.external_id] for job in listed if job.external_id in known]
+    return Fetched(described, None, list(dict.fromkeys(seen)), detail)
 
 
 def _log_failure(
@@ -509,7 +658,10 @@ def _log_failure(
         row = session.query(Company).filter_by(source=company.source, slug=company.slug).one_or_none()
         # A host refusing us says nothing about the board: it is not counted
         # toward retiring it, or one busy afternoon retires healthy boards.
-        if row is not None and error_type != "RateLimited":
+        # Nor is no answer at all (NetworkError: no name lookup, no connection,
+        # a timeout) -- an outage once retired healthy boards that way. A
+        # board is retired only on what its host said.
+        if row is not None and error_type not in ("RateLimited", "NetworkError"):
             row.consecutive_failures += 1
             # A dead slug shouldn't be re-probed forever once the list is large.
             if deactivate_after and row.consecutive_failures >= deactivate_after:

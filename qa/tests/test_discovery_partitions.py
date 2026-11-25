@@ -249,11 +249,17 @@ def synthetic_rows(n=500, seed_=7) -> list[dict]:
 @pytest.mark.parametrize("target", [None, 8, 12, 16])
 def test_1_every_board_is_in_exactly_one_partition(target):
     rows = synthetic_rows()
-    plan = dp.make_plan(rows, dp.load_lanes(), target)
+    lanes = dp.load_lanes()
+    plan = dp.make_plan(rows, lanes, target)
     assigned = [(b["source"], b["slug"]) for p in plan["partitions"] for b in p["boards"]]
-    assert len(assigned) == len(set(assigned)) == len(rows) == plan["boards"]
-    assert set(assigned) == {(r["source"], r["slug"]) for r in rows}
+    cloud = [r for r in rows if not dp.mac_lane(lanes, r["source"])]
+    assert len(assigned) == len(set(assigned)) == len(cloud) == plan["boards"]
+    assert set(assigned) == {(r["source"], r["slug"]) for r in cloud}
     assert len({p["id"] for p in plan["partitions"]}) == len(plan["partitions"])
+    # The Mac lane's boards (Workday since Nov 2026) are counted, never dropped: every board in exactly one lane.
+    on_mac = [r for r in rows if dp.mac_lane(lanes, r["source"])]
+    assert on_mac and sum(plan["mac_lanes"].values()) == len(on_mac)
+    assert plan["boards"] + sum(plan["mac_lanes"].values()) == len(rows)
 
 
 def test_2_the_same_boards_give_the_same_plan_whatever_their_order(tmp_path):

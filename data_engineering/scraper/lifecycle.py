@@ -154,12 +154,15 @@ class StaleCompany:
     days: float | None  # None = never successfully scraped
 
 
-def stale_companies(warn_days: int, now=None) -> list[StaleCompany]:
+def stale_companies(warn_days: int, now=None, also_read: dict | None = None) -> list[StaleCompany]:
     """Active companies not successfully scraped within `warn_days`.
 
     Silence is the failure mode this catches: a board that stopped being
     scraped keeps its jobs marked open forever, because closure only ever
     happens on a successful fetch. Nothing looks wrong — the rows just rot.
+
+    `also_read`: {"source\tslug": ISO time} of reads made elsewhere (the cloud fetch, whose read time this
+    database's boards rows never get): the newer of the two counts.
     """
     if warn_days <= 0:
         return []
@@ -171,6 +174,14 @@ def stale_companies(warn_days: int, now=None) -> list[StaleCompany]:
     with get_session() as session:
         for row in session.query(Company).filter(Company.active.is_(True)).order_by(Company.id):
             last = as_utc(row.last_scraped_at)
+            there = (also_read or {}).get(f"{row.source}\t{row.slug}")
+            if there:
+                try:
+                    elsewhere = as_utc(datetime.fromisoformat(str(there).replace("Z", "+00:00")))
+                except ValueError:
+                    elsewhere = None
+                if elsewhere is not None and (last is None or elsewhere > last):
+                    last = elsewhere
             if last is None:
                 stale.append(StaleCompany(row.source, row.slug, row.name, None, None))
             elif last < cutoff:

@@ -40,11 +40,17 @@ import os
 import shutil
 import sqlite3
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 COMPLETE, PARTIAL, FAILED, NOT_ATTEMPTED = "COMPLETE", "PARTIAL", "FAILED", "NOT ATTEMPTED"
 READ = ("complete", "partial")
+DETAIL = ("listing", "listed", "relevant", "described", "pending", "skipped")
+# The scrape log's duplicate check asks for one run's row of one board. Without this index SQLite walked the
+# per-site index over the whole log for every incoming row -- most of a half-hour merge, measured by replaying a
+# run's own files; about a second with it (Nov 2026). Built once, kept in the saved database.
+LOG_INDEX = "CREATE INDEX IF NOT EXISTS ix_scrape_log_run_board ON scrape_log (run_id, source, company_slug)"
 BOARD_STATES = ("complete", "partial", "failed", "rate_limited", "not_attempted")
 KEYS = {"companies": ("source", "slug"), "jobs": ("source", "company_slug", "external_id")}
 
@@ -108,6 +114,11 @@ def check_part(path: Path | None, manifest: dict, part: dict) -> tuple[str | Non
         own = {(b["source"], b["slug"]) for b in part["boards"]}
         boards = {(s, slug): (status, err) for s, slug, status, err in
                   db.execute("SELECT source, slug, status, error_type FROM boards")}
+        have = {r[1] for r in db.execute("PRAGMA table_info(boards)")}
+        details = {}
+        if set(DETAIL) <= have:          # a result from before Nov 2026's posting-level counts has none
+            for row in db.execute(f"SELECT source, slug, {', '.join(DETAIL)} FROM boards WHERE listing IS NOT NULL"):
+                details[(row[0], row[1])] = dict(zip(DETAIL, row[2:]))
         if set(boards) != own:
             return "its result does not account for exactly its own boards", {}
         if any(status not in BOARD_STATES for status, _ in boards.values()):
@@ -120,7 +131,7 @@ def check_part(path: Path | None, manifest: dict, part: dict) -> tuple[str | Non
                   if boards[(r[0], r[1])][0] not in READ]
         if unread:
             return "its result holds postings of boards it did not read", {}
-        return None, {"boards": boards, "meta": meta}
+        return None, {"boards": boards, "meta": meta, "details": details}
     except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
         return f"its result cannot be read ({type(exc).__name__})", {}
     finally:
@@ -206,8 +217,28 @@ def _roll_up(statuses: list[str]) -> str:
     return PARTIAL
 
 
+def prune_log(db: sqlite3.Connection, days: float, now: datetime | None = None) -> int:
+    """The cloud's scrape log kept to its last `days` days -- and each board's newest row whatever its age, which
+    the planner reads for how long the board takes (devops/discovery_plan.boards). Postings and boards are never
+    touched. Only the cloud's own saved copy is ever pruned (the workflow asks for it); the Mac's history is not.
+    Returns the rows removed."""
+    cutoff = ((now or datetime.now(timezone.utc)) - timedelta(days=float(days))).strftime("%Y-%m-%d %H:%M:%S")
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scrape_log'").fetchone():
+        return 0
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        cur = db.execute("DELETE FROM scrape_log WHERE created_at < ? AND id NOT IN "
+                         "(SELECT MAX(id) FROM scrape_log GROUP BY source, company_slug)", (cutoff,))
+        db.execute("COMMIT")
+        return cur.rowcount
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+
+
 def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: dict[str, dict] | None = None,
-          now: datetime | None = None) -> dict:
+          now: datetime | None = None, prune_log_days: float = 0) -> dict:
     """Every usable result merged into `base` (replaced in one step); the coverage report. A partition whose
     result cannot be used, or whose merge fails, is FAILED and the rest go on. Raises MergeError, leaving `base`
     as it was, only when the merged copy itself cannot be made sound."""
@@ -233,10 +264,16 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
     else:
         raise MergeError("no saved database and no results")
     coverage = {"plan_id": manifest["plan_id"], "at": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
-                "partitions": [], "providers": {}, "boards": {s: 0 for s in BOARD_STATES}, "outcomes": []}
+                "partitions": [], "providers": {}, "boards": {s: 0 for s in BOARD_STATES}, "outcomes": [],
+                "details": [], "mac_lanes": dict(manifest.get("mac_lanes") or {}), "timings": {}}
     # uri=True: ATTACH then reads each result through a read-only address -- it is never written.
     db = sqlite3.connect(work.resolve().as_uri(), uri=True, isolation_level=None)
     try:
+        t0 = time.monotonic()
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scrape_log'").fetchone():
+            db.execute(LOG_INDEX)
+        coverage["timings"]["index_s"] = round(time.monotonic() - t0, 2)
+        t0 = time.monotonic()
         for part in manifest["partitions"]:
             pid = part["id"]
             # Planned to run and nothing usable came back: FAILED. NOT ATTEMPTED is only a partition the plan
@@ -273,15 +310,28 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
                     st, err = found["boards"][key]
                     if st == "not_attempted" and err == "TimeBudget":
                         st = "timed_out"                  # started too late in its partition's time, not skipped
+                    d = found["details"].get(key)
+                    if d and st in READ:
+                        coverage["details"].append([key[0], key[1], *(d.get(k) for k in DETAIL)])
                 else:
                     st, err = "not_attempted", ("PartitionFailed" if ran else "NotRun")
                 coverage["outcomes"].append([key[0], key[1], st, err or "", pid])
+        coverage["timings"]["merge_s"] = round(time.monotonic() - t0, 2)
+        if prune_log_days:
+            t0 = time.monotonic()
+            coverage["pruned_log_rows"] = prune_log(db, prune_log_days, now)
+            coverage["timings"]["prune_s"] = round(time.monotonic() - t0, 2)
+            t0 = time.monotonic()
+            db.execute("VACUUM")
+            coverage["timings"]["vacuum_s"] = round(time.monotonic() - t0, 2)
+        t0 = time.monotonic()
         if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise MergeError("the merged copy failed its integrity check; the database was left as it was")
     except BaseException:
         db.close()
         work.unlink(missing_ok=True)
         raise
+    coverage["timings"]["check_s"] = round(time.monotonic() - t0, 2)
     db.close()
     if _side_files(work) or _side_files(base):
         work.unlink(missing_ok=True)
@@ -292,9 +342,12 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
         by_site.setdefault(entry["provider"], []).append(entry)
     for site, entries in sorted(by_site.items()):
         counts = {s: sum(e["counts"][s] for e in entries) for s in BOARD_STATES}
+        mine = {e["id"] for e in entries}
+        deferred = sum(1 for _, _, st, err, pid in coverage["outcomes"]
+                       if pid in mine and st == "not_attempted" and err in ("ProviderQuota", "NetworkDown"))
         coverage["providers"][site] = {"status": _roll_up([e["status"] for e in entries]),
                                        "partitions": len(entries), "boards": sum(e["boards"] for e in entries),
-                                       "counts": counts}
+                                       "counts": counts, "deferred": deferred}
     statuses = [e["status"] for e in coverage["partitions"]]
     coverage["status"] = _roll_up(statuses)
     # Every result arriving is reported, but it is not a refresh: only every board read in full is.
@@ -305,52 +358,98 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
 
 
 def totals(coverage: dict, started: datetime | None = None, finished: datetime | None = None) -> dict:
-    """The run in numbers -- counts only, safe for the public summary."""
+    """The run in numbers -- counts only, safe for the public summary.
+
+    Board level, each board in exactly one of: read in full, read in part, failed, rate-limited, deferred by its
+    site's quota, deferred because the machine lost the internet, out of time, not attempted -- they add up to the
+    boards planned in the cloud. Boards planned on the Mac lanes are counted beside them, never dropped. Read in
+    part says why, board by board (listing incomplete; relevant descriptions pending -- a board may be both), and
+    the posting level says how many postings were listed, wanted by the search, described, still pending, and
+    skipped on purpose as irrelevant (never a shortfall)."""
     by = {}
-    for _, _, st, _, _ in coverage["outcomes"]:
+    for _, _, st, err, _ in coverage["outcomes"]:
+        if st == "not_attempted" and err in ("ProviderQuota", "NetworkDown"):
+            st = "quota" if err == "ProviderQuota" else "network"
         by[st] = by.get(st, 0) + 1
     planned = len(coverage["outcomes"])
     scanned = by.get("complete", 0) + by.get("partial", 0)
     statuses = [e["status"] for e in coverage["partitions"]]
+    details = coverage.get("details") or []
+    col = {k: i + 2 for i, k in enumerate(DETAIL)}
+    postings = {k: sum(int(d[col[k]] or 0) for d in details)
+                for k in ("listed", "relevant", "described", "pending", "skipped")}
+    mac = dict(coverage.get("mac_lanes") or {})
     out = {"partitions_complete": statuses.count(COMPLETE), "partitions_partial": statuses.count(PARTIAL),
            "partitions_failed": statuses.count(FAILED), "partitions_not_attempted": statuses.count(NOT_ATTEMPTED),
-           "boards_planned": planned, "boards_scanned_in_full": by.get("complete", 0),
-           "boards_read_in_part": by.get("partial", 0),
+           "boards_planned": planned, "boards_planned_cloud": planned, "boards_planned_mac": sum(mac.values()),
+           "mac_lanes": mac,
+           "boards_scanned_in_full": by.get("complete", 0), "boards_read_in_part": by.get("partial", 0),
+           "boards_listing_incomplete": sum(1 for d in details if d[col["listing"]] != "complete"),
+           "boards_descriptions_pending": sum(1 for d in details if int(d[col["pending"]] or 0) > 0),
            "boards_needing_recovery": planned - scanned,
            "boards_deferred_provider_limits": by.get("rate_limited", 0),
+           "boards_rate_limited": by.get("rate_limited", 0),
+           "boards_deferred_quota": by.get("quota", 0), "boards_deferred_network": by.get("network", 0),
            "boards_failed": by.get("failed", 0), "boards_timed_out": by.get("timed_out", 0),
            "boards_not_attempted": by.get("not_attempted", 0),
+           "postings_listed": postings["listed"], "postings_relevant": postings["relevant"],
+           "postings_described": postings["described"], "postings_descriptions_pending": postings["pending"],
+           "postings_skipped_irrelevant": postings["skipped"],
            "coverage_pct": round(100.0 * scanned / planned, 1) if planned else 0.0}
+    parts = ("boards_scanned_in_full", "boards_read_in_part", "boards_failed", "boards_rate_limited",
+             "boards_deferred_quota", "boards_deferred_network", "boards_timed_out", "boards_not_attempted")
+    out["reconciles"] = sum(out[k] for k in parts) == planned
     if started and finished:
         out["duration_minutes"] = round((finished - started).total_seconds() / 60, 1)
+    if coverage.get("timings"):
+        out["merge_seconds"] = round(sum(coverage["timings"].values()), 1)
     return out
 
 
 def public(coverage: dict) -> dict:
-    """The coverage report as published: everything but the board-by-board outcomes."""
-    return {k: v for k, v in coverage.items() if k != "outcomes"}
+    """The coverage report as published: everything but the board-by-board outcomes and details."""
+    return {k: v for k, v in coverage.items() if k not in ("outcomes", "details")}
 
 
 def summary(coverage: dict) -> str:
     """Markdown for the run's public summary: sites and counts only."""
+    t = coverage.get("totals") or totals(coverage)
     lines = [f"### Discovery coverage: {coverage['status']}"
              + ("" if coverage["complete_refresh"] else
-                " (not a complete refresh: kept as partial, and the Mac reads the boards itself)"),
-             "", "| Site | Status | Partitions | Boards | Complete | Partial | Failed | Rate-limited | Not attempted |",
-             "|---|---|---|---|---|---|---|---|---|"]
+                " (not a complete refresh: kept as partial, and the Mac reads the rest itself)"),
+             "", "| Site | Status | Partitions | Boards | Complete | Partial | Failed | Rate-limited | Deferred | "
+             "Not attempted |", "|---|---|---|---|---|---|---|---|---|---|"]
     for site, p in coverage["providers"].items():
         c = p["counts"]
         lines.append(f"| {site} | {p['status']} | {p['partitions']} | {p['boards']:,} | {c['complete']:,} | "
-                     f"{c['partial']:,} | {c['failed']:,} | {c['rate_limited']:,} | {c['not_attempted']:,} |")
-    t = coverage.get("totals") or {}
-    if t:
-        lines += ["", f"Partitions: {t['partitions_complete']} complete, {t['partitions_partial']} partial, "
-                      f"{t['partitions_failed']} failed, {t['partitions_not_attempted']} not attempted. "
-                      f"Boards: {t['boards_planned']:,} planned, {t['boards_scanned_in_full']:,} read in full, "
-                      f"{t['boards_read_in_part']:,} in part, {t['boards_needing_recovery']:,} needing recovery "
-                      f"({t['boards_deferred_provider_limits']:,} held back by provider limits). "
-                      f"Coverage {t['coverage_pct']}%"
-                      + (f", {t['duration_minutes']} min." if "duration_minutes" in t else ".")]
+                     f"{c['partial']:,} | {c['failed']:,} | {c['rate_limited']:,} | {p.get('deferred', 0):,} | "
+                     f"{c['not_attempted'] - p.get('deferred', 0):,} |")
+    for site, n in (coverage.get("mac_lanes") or {}).items():
+        lines.append(f"| {site} | read on the Mac | - | {n:,} | | | | | | |")
+    lines += ["", "| Boards (each counted once) | |", "|---|---:|",
+              f"| Planned in the cloud | {t['boards_planned_cloud']:,} |",
+              f"| Planned on the Mac lanes | {t['boards_planned_mac']:,} |",
+              f"| Read in full (listing complete, every relevant description) | {t['boards_scanned_in_full']:,} |",
+              f"| Read in part | {t['boards_read_in_part']:,} |",
+              f"| Failed | {t['boards_failed']:,} |",
+              f"| Rate-limited | {t['boards_rate_limited']:,} |",
+              f"| Deferred by quota (their turn comes) | {t['boards_deferred_quota']:,} |",
+              f"| Deferred: no internet | {t['boards_deferred_network']:,} |",
+              f"| Out of time | {t['boards_timed_out']:,} |",
+              f"| Not attempted | {t['boards_not_attempted']:,} |",
+              "", "| Read in part, why (a board may be both) | |", "|---|---:|",
+              f"| Listing incomplete | {t['boards_listing_incomplete']:,} |",
+              f"| Relevant descriptions pending | {t['boards_descriptions_pending']:,} |",
+              "", "| Postings (boards read) | |", "|---|---:|",
+              f"| Listed | {t['postings_listed']:,} |",
+              f"| Relevant to the search | {t['postings_relevant']:,} |",
+              f"| Described | {t['postings_described']:,} |",
+              f"| Relevant, description pending | {t['postings_descriptions_pending']:,} |",
+              f"| Skipped as irrelevant (on purpose) | {t['postings_skipped_irrelevant']:,} |",
+              "", f"Coverage {t['coverage_pct']}% of the cloud's boards read"
+              + (f"; {t['duration_minutes']} min" if "duration_minutes" in t else "")
+              + (f"; merge {t['merge_seconds']} s" if "merge_seconds" in t else "")
+              + ("" if t.get("reconciles", True) else "; THE BOARD COUNTS DO NOT ADD UP") + "."]
     lines += ["", "| Partition | Status | Minutes | Reason |", "|---|---|---|---|"]
     for e in coverage["partitions"]:
         lines.append(f"| {e['id']} | {e['status']} | {e.get('minutes', '')} | {e['reason']} |")
@@ -366,6 +465,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--coverage", type=Path, required=True)
     ap.add_argument("--outcomes", type=Path, default=None, help="board-by-board outcomes (private: names boards)")
     ap.add_argument("--started", default="", help="when the run started (ISO, UTC), for its duration")
+    ap.add_argument("--prune-log-days", type=float, default=0,
+                    help="keep the scrape log to this many days (each board's newest row always kept): the cloud's copy only")
     args = ap.parse_args(argv)
     manifest = json.loads(args.manifest.read_text())
     parts = {}
@@ -382,7 +483,7 @@ def main(argv: list[str]) -> int:
                 except ValueError:
                     reports[p["id"]] = {"unreadable": True}
     try:
-        coverage = merge(args.db, manifest, parts, reports)
+        coverage = merge(args.db, manifest, parts, reports, prune_log_days=args.prune_log_days)
     except MergeError as exc:
         print(f"merge stopped: {exc}", file=sys.stderr)
         return 4
@@ -394,6 +495,9 @@ def main(argv: list[str]) -> int:
             pass
     if args.outcomes:
         args.outcomes.write_text(json.dumps(coverage["outcomes"], separators=(",", ":")))
+        # Beside it, the boards read in part, posting by posting count (private too: it names boards).
+        args.outcomes.with_name(args.outcomes.stem + "-details.json").write_text(
+            json.dumps(coverage["details"], separators=(",", ":")))
     args.coverage.write_text(json.dumps(public(coverage), indent=1))
     print(summary(coverage))
     print(f"complete={'true' if coverage['complete_refresh'] else 'false'}")

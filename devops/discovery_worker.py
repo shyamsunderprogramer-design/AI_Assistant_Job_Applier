@@ -28,6 +28,8 @@ from pathlib import Path
 
 OUTCOMES = ("complete", "partial", "failed", "rate_limited", "not_attempted")
 TABLES = ("companies", "jobs", "scrape_log")
+QUOTA = "ProviderQuota"          # not asked this run: past its site's quota, its turn comes in a later run
+DETAIL = ("listing", "listed", "relevant", "described", "pending", "skipped")   # runner.RunSummary.details
 
 
 def read_only(path) -> str:
@@ -68,6 +70,21 @@ def ensure_boards(part: dict) -> dict[tuple, str]:
     return skipped
 
 
+def rotation(refs: list, quota: int) -> tuple[list, list]:
+    """(the boards to ask this run, the rest): at most `quota`, the least recently read first -- never read
+    first -- so every board takes its turn and none waits for ever. Ties by slug, so the order is stable."""
+    if not quota or len(refs) <= quota:
+        return list(refs), []
+    from data_engineering.db.models import Company
+    from data_engineering.db.session import get_session
+    with get_session() as session:
+        last = {(c.source, c.slug): c.last_scraped_at for c in session.query(Company).filter(
+            Company.source.in_({r.source for r in refs})).all()}
+    order = sorted(refs, key=lambda r: (last.get((r.source, r.slug)) is not None,
+                                        str(last.get((r.source, r.slug)) or ""), r.slug))
+    return order[:quota], order[quota:]
+
+
 def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = None,
         run_id: str | None = None) -> dict:
     """Read the partition's boards; return what happened, board by board, and the run's id."""
@@ -78,6 +95,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
     started_at, started = _now(), time.monotonic()
     budget = float(budget_minutes if budget_minutes is not None else manifest.get("budget_minutes", 150))
     outcomes: dict[tuple, tuple] = {}
+    details: dict[tuple, dict] = {}
     client = None
     if part["provider"] not in SCRAPER_TYPES or not cfg.get(f"portals.{part['provider']}.enabled", True):
         for b in part["boards"]:
@@ -87,11 +105,15 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
         skipped = ensure_boards(part)
         refs = [CompanyRef(name=b.get("name") or b["slug"], slug=b["slug"], source=b["source"])
                 for b in part["boards"] if (b["source"], b["slug"]) not in skipped]
+        refs, later = rotation(refs, int(part.get("quota") or 0))
         client = PoliteClient(HttpSettings.from_config(cfg))
         summary = scrape_companies(cfg, refs, workers=int(part.get("workers") or 1),
                                    deadline=started + budget * 60, client=client, run_id=run_id)
         summary_id = summary.run_id
         outcomes.update(summary.outcomes)
+        details.update(summary.details)
+        for ref in later:
+            outcomes[(ref.source, ref.slug)] = (NOT_ATTEMPTED, QUOTA)
         for key, why in skipped.items():
             outcomes[key] = (NOT_ATTEMPTED, why)
     for b in part["boards"]:                       # a board with no outcome was never started
@@ -101,6 +123,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
             "run_id": summary_id, "started_at": started_at, "finished_at": _now(),
             "minutes": round((time.monotonic() - started) / 60, 2), "budget_minutes": budget,
             "outcomes": {f"{s}\t{slug}": list(v) for (s, slug), v in outcomes.items()},
+            "details": {f"{s}\t{slug}": v for (s, slug), v in details.items()},
             "rate_limited_requests": sum(v for k, v in events.items() if not k.startswith("provider:")),
             "provider_rate_limits": {k.split(":", 1)[1]: v for k, v in events.items() if k.startswith("provider:")}}
 
@@ -121,7 +144,8 @@ def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
             if sql is None:
                 raise RuntimeError(f"the database has no {table} table")
             dst.execute(sql[0])
-        dst.execute("CREATE TABLE boards (source TEXT, slug TEXT, status TEXT, error_type TEXT, "
+        dst.execute("CREATE TABLE boards (source TEXT, slug TEXT, status TEXT, error_type TEXT, listing TEXT, "
+                    "listed INTEGER, relevant INTEGER, described INTEGER, pending INTEGER, skipped INTEGER, "
                     "PRIMARY KEY (source, slug))")
         dst.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
         cols = {t: [r[1] for r in src.execute(f"PRAGMA table_info({t})")] for t in TABLES}
@@ -138,12 +162,14 @@ def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
                     dst.execute(f"INSERT INTO jobs ({', '.join(cols['jobs'])}) VALUES "
                                 f"({', '.join('?' for _ in cols['jobs'])})", job)
             status, error = result["outcomes"][f"{source}\t{slug}"]
-            dst.execute("INSERT INTO boards VALUES (?, ?, ?, ?)", (source, slug, status, error or ""))
+            d = (result.get("details") or {}).get(f"{source}\t{slug}") or {}
+            dst.execute("INSERT INTO boards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (source, slug, status, error or "", *(d.get(k) for k in DETAIL)))
         for row in src.execute(f"SELECT {', '.join(cols['scrape_log'])} FROM scrape_log WHERE run_id = ?",
                                (result["run_id"],)):
             dst.execute(f"INSERT INTO scrape_log ({', '.join(cols['scrape_log'])}) VALUES "
                         f"({', '.join('?' for _ in cols['scrape_log'])})", row)
-        meta = {k: v for k, v in result.items() if k != "outcomes"}
+        meta = {k: v for k, v in result.items() if k not in ("outcomes", "details")}
         for key, value in meta.items():
             dst.execute("INSERT INTO meta VALUES (?, ?)", (key, json.dumps(value)))
         dst.commit()
@@ -170,8 +196,14 @@ def report(result: dict) -> dict:
         counts[status] = counts.get(status, 0) + 1
         if status in ("failed", "rate_limited", "not_attempted") and error:
             errors[error] = errors.get(error, 0) + 1
+    postings = {k: sum(int(d.get(k) or 0) for d in (result.get("details") or {}).values())
+                for k in ("listed", "relevant", "described", "pending", "skipped")}
+    listing = {"complete": 0, "incomplete": 0}
+    for d in (result.get("details") or {}).values():
+        listing[d.get("listing", "complete")] = listing.get(d.get("listing", "complete"), 0) + 1
     return {"partition": result["partition"], "provider": result["provider"], "plan_id": result["plan_id"],
             "boards": len(result["outcomes"]), "counts": counts, "errors": errors,
+            "postings": postings, "listings": listing,
             "started_at": result["started_at"], "finished_at": result["finished_at"], "minutes": result["minutes"],
             "budget_minutes": result["budget_minutes"], "rate_limited_requests": result["rate_limited_requests"],
             "provider_rate_limits": result["provider_rate_limits"], "delivered": True}

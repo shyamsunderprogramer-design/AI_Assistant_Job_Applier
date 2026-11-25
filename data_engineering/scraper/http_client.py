@@ -26,6 +26,14 @@ class FetchError(Exception):
     """Non-retryable or retry-exhausted HTTP failure."""
 
 
+class NetworkError(FetchError):
+    """No answer at all: the name did not resolve, the connection was refused or reset, or it timed out.
+
+    Not an answer about the board. A board is retired only on what its host SAID (a 404, a page that is not a
+    board, a refusal of access), never on silence -- an outage once retired healthy boards whose last "failure"
+    was the machine having no internet (data_engineering/scraper/runner.py)."""
+
+
 class RateLimited(FetchError):
     """The host is refusing us with 429s. Not an answer about the URL.
 
@@ -367,6 +375,8 @@ class PoliteClient:
                         log.warning("%s: %d of its hosts refused every retry -- leaving the whole provider "
                                     "alone for %.0f min", group, self.settings.provider_trip_hosts, pause / 60)
             raise RateLimited(f"Giving up on {url}: {host} is rate-limiting us (HTTP 429)")
+        if isinstance(last_exc, (requests.ConnectionError, requests.Timeout)):
+            raise NetworkError(f"Giving up on {url} after {self.settings.max_retries} retries: {last_exc}")
         raise FetchError(f"Giving up on {url} after {self.settings.max_retries} retries: {last_exc}")
 
     def get_json(self, url: str, **kwargs) -> object:
@@ -383,3 +393,20 @@ class PoliteClient:
         except (FetchError, RobotsDisallowed):
             return False
         return 200 <= resp.status_code < 300
+
+
+# Two well-known hosts, asked only whether they answer at all (a name lookup and a TCP connect -- nothing is sent).
+PROBE_HOSTS = (("github.com", 443), ("www.cloudflare.com", 443))
+
+
+def network_ok(hosts=PROBE_HOSTS, timeout: float = 4.0) -> bool:
+    """Whether this machine can reach the internet at all: True as soon as one probe host accepts a connection.
+    Tells "this board's host is silent" apart from "nothing answers" (runner.NetworkWatch; devops/cloud_results)."""
+    import socket
+    for host, port in hosts:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            continue
+    return False

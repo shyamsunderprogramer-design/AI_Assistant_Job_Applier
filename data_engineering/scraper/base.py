@@ -35,12 +35,33 @@ class RawJob:
     posted_at: datetime | None = None
     requirements: str | None = None
     job_type: str | None = None          # the board's own word: "Full-time", "Contract", "FullTime"…
+    # Its description was asked for and did not come (an error, a refusal, no answer): it is still on the board,
+    # and its stored text is kept rather than wiped (runner._persist); the board's relevant descriptions are
+    # incomplete until a later read brings it (Nov 2026).
+    detail_missing: bool = False
+
+
+class Listing(list):
+    """A board's listing (`stub_jobs`): every posting it names, and whether that is all of them.
+
+    `complete` is False when the reader stopped before the end -- a page cap (Workday's 1,000, Workable's 2,000)
+    -- so "not in this listing" cannot mean "gone from the board". A plain list is a complete listing."""
+
+    def __init__(self, items=(), complete: bool = True, total: int | None = None):
+        super().__init__(items)
+        self.complete = complete
+        self.total = total
 
 
 class PortalScraper(ABC):
     """Base for every ATS scraper."""
 
     name: str = "base"
+    # Whether the listing's ids are the postings' own durable ids, the ones stored (Nov 2026). Then a COMPLETE
+    # listing is authoritative: a stored posting it no longer names is gone, even when its description was never
+    # asked for because the search leaves it out. Workday's listing ids are URL paths, and the stored id is the
+    # requisition id that comes only with the description -- so Workday never closes on its listing.
+    durable_listing_ids: bool = False
 
     def __init__(self, client: PoliteClient):
         self.client = client
