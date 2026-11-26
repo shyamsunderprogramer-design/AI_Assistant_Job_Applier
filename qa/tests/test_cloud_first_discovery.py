@@ -302,3 +302,26 @@ def test_cancelled_runs_are_never_counted_as_a_read(monkeypatch):
     monkeypatch.setattr(ds, "_gh", lambda path: runs if "/runs?" in path else jobs)
     got = ds.others_in("o/r", datetime(2026, 11, 27, 16, 50, tzinfo=UTC), "12")
     assert [r["id"] for r in got] == [11] and not got[0]["scraped"]
+
+
+def test_a_development_run_always_runs_and_never_counts_as_a_windows_read(monkeypatch):
+    runs = {"workflow_runs": [
+        {"id": 20, "conclusion": "success", "created_at": "2026-11-27T07:00:40Z",
+         "display_title": "Daily scrape [development run]"},
+        {"id": 21, "conclusion": "success", "created_at": "2026-11-27T07:01:00Z", "display_title": "Daily scrape"}]}
+    jobs = {"jobs": [{"name": "scrape greenhouse-1of3", "conclusion": "success"}]}
+    monkeypatch.setattr(ds, "_gh", lambda path: runs if "/runs?" in path else jobs)
+    got = ds.others_in("o/r", datetime(2026, 11, 27, 6, 50, tzinfo=UTC), "99")
+    assert [r["id"] for r in got] == [21]                       # the development run is not a read
+    runs["workflow_runs"].pop()                                 # only the development run read this window
+    got = ds.others_in("o/r", datetime(2026, 11, 27, 6, 50, tzinfo=UTC), "99")
+    assert ds.decide("workflow_dispatch", "scheduler", datetime(2026, 11, 27, 7, 2, tzinfo=UTC), got)["go"]
+    # And a development run itself always runs, whatever was read.
+    assert ds.decide("workflow_dispatch", "manual", datetime(2026, 11, 27, 7, 2, tzinfo=UTC),
+                     [{"id": 21, "created": datetime(2026, 11, 27, 7, 1, tzinfo=UTC), "scraped": True}])["go"]
+
+
+def test_the_workflow_names_a_run_started_by_hand_a_development_run():
+    import yaml
+    wf = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github" / "workflows" / "daily-scrape.yml").read_text())
+    assert ds.DEV_MARK in wf["run-name"] and "inputs.trigger != 'scheduler'" in wf["run-name"]

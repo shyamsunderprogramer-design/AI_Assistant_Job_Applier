@@ -110,6 +110,11 @@ on:
         required: false
         default: ""
 
+# A run started by hand is a development (or maintenance) run: named so in the Actions list, it always runs, and it
+# is never counted as a scheduled window's read (devops/discovery_slot.py DEV_MARK). The outside scheduler and
+# GitHub's schedule keep the plain name.
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.trigger != 'scheduler' && 'Daily scrape [development run]' || 'Daily scrape' }}
+
 concurrency:
   # Never let two scrapes touch the same cached database.
   group: daily-scrape

@@ -7,7 +7,8 @@ workflow_dispatch with trigger=scheduler), and GitHub's own schedule as a fallba
 late on every one of 68 measured days. The first of them to run reads the window; any later one for the same
 window stops before reading anything. A run started with the button (trigger=manual) always runs.
 
-A window counts as read when an earlier run created inside it got as far as its partitions (a `scrape ...` job
+A run started by hand is a development run (named "[development run]"): it always runs and is never counted.
+A window counts as read when an earlier scheduled run created inside it got as far as its partitions (a `scrape ...` job
 that was not skipped). The workflow's concurrency group runs one at a time, so by the time a later run asks,
 the earlier one has finished or never started.
 
@@ -29,6 +30,10 @@ STARTS = ((1, 0), (11, 0))          # local start times of the two windows
 EARLY = timedelta(minutes=10)       # a start a few minutes early still belongs to the window it is for
 NEAR = timedelta(hours=2)           # a late start this close to the next window leaves the reading to that one
 WORKFLOW = "daily-scrape.yml"
+# A run started by hand (trigger=manual) is named with this (the workflow's run-name): a development or maintenance
+# run. It always runs, and it never counts as a scheduled window's read -- so it never makes a scheduled run of the
+# same window stand down (Development Mode, 26 Nov 2026).
+DEV_MARK = "[development run]"
 
 
 def slot_start(now: datetime) -> datetime:
@@ -94,6 +99,8 @@ def others_in(repo: str, since: datetime, run_id: str) -> list[dict]:
     for r in runs.get("workflow_runs") or []:
         if str(r["id"]) == str(run_id) or r.get("conclusion") == "cancelled":
             continue
+        if DEV_MARK in str(r.get("display_title") or ""):
+            continue                                    # a development run never reads a window for the schedule
         jobs = _gh(f"repos/{repo}/actions/runs/{r['id']}/jobs?per_page=100").get("jobs") or []
         scraped = any(j["name"].startswith("scrape ") and j.get("conclusion") not in ("skipped", "cancelled")
                       for j in jobs)
