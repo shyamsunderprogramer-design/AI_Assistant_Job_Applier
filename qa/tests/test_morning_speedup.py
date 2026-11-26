@@ -272,7 +272,8 @@ def test_the_scrape_command_takes_the_sites_and_passes_over_unknown_ones(monkeyp
 
 # -- taking the runs: every fresh one, once, oldest first -------------------------------------------
 
-NOW = datetime.now(timezone.utc)
+# Noon here today: "started today" holds however early the tests run (they failed between midnight and 4 am).
+NOW = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 def stamp(hours_ago):
@@ -294,6 +295,13 @@ def gh(monkeypatch):
     """GitHub as a script: each look at the runs gives the next list (the last one repeats);
     starting a fetch is counted, never sent."""
     state = {"lists": [[]], "dispatched": 0, "taken": [], "fail": set()}
+
+    # Fixed local noon (as on the Mac branch): "today's runs" and "hours ago" both read this clock.
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.astimezone().replace(tzinfo=None)
+    monkeypatch.setattr(cloud_results, "datetime", FixedDatetime)
 
     def runs():
         lists = state["lists"]

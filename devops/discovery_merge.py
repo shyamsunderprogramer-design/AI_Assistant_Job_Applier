@@ -53,6 +53,7 @@ DETAIL = ("listing", "listed", "relevant", "described", "pending", "skipped")
 LOG_INDEX = "CREATE INDEX IF NOT EXISTS ix_scrape_log_run_board ON scrape_log (run_id, source, company_slug)"
 BOARD_STATES = ("complete", "partial", "failed", "rate_limited", "not_attempted")
 KEYS = {"companies": ("source", "slug"), "jobs": ("source", "company_slug", "external_id")}
+WORKABLE_FEED, WORKABLE_BOARDS = "workable-feed", "workable"      # data_engineering/scraper/workable_feed.py
 
 
 class MergeError(RuntimeError):
@@ -484,14 +485,20 @@ def merge_feeds(db: Path, feeds_dir: Path | None) -> dict:
         theirs = {r[1] for r in con.execute("PRAGMA f.table_info(jobs)")}
         cols = [c for c in mine if c in theirs and c != "id"]
         boards = {r[0] for r in con.execute("SELECT DISTINCT source FROM main.companies")}
-        added = updated = 0
+        added = updated = on_boards = 0
         key = "source = ? AND company_slug = ? AND external_id = ?"
+        on_board = (f"SELECT 1 FROM main.jobs WHERE source = '{WORKABLE_BOARDS}' AND external_id = ? LIMIT 1")
         for row in con.execute(f"SELECT {', '.join(cols)} FROM f.jobs").fetchall():
             values = dict(zip(cols, row))
             if values["source"] in boards:
                 continue                    # never a board's posting: those are the partitions'
             k = (values["source"], values["company_slug"], values["external_id"])
-            if con.execute(f"SELECT 1 FROM main.jobs WHERE {key}", k).fetchone():
+            exists = con.execute(f"SELECT 1 FROM main.jobs WHERE {key}", k).fetchone()
+            if (not exists and values["source"] == WORKABLE_FEED
+                    and con.execute(on_board, (values["external_id"],)).fetchone()):
+                on_boards += 1              # a board read it this run: its copy is the posting
+                continue
+            if exists:
                 con.execute(f"UPDATE main.jobs SET {', '.join(f'{c} = ?' for c in cols)} WHERE {key}",
                             [*values.values(), *k])
                 updated += 1
@@ -499,6 +506,12 @@ def merge_feeds(db: Path, feeds_dir: Path | None) -> dict:
                 con.execute(f"INSERT INTO main.jobs ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
                             list(values.values()))
                 added += 1
+        # A Workable feed copy whose board copy now exists (the same shortcode) is that board's posting twice:
+        # the feed copy is closed. The Mac's import keeps any status a person gave it (merge_cloud).
+        superseded = con.execute(
+            f"UPDATE main.jobs SET is_open = 0, closed_at = ? WHERE source = '{WORKABLE_FEED}' AND is_open = 1 "
+            f"AND external_id IN (SELECT external_id FROM main.jobs WHERE source = '{WORKABLE_BOARDS}')",
+            (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"),)).rowcount
         con.commit()
         con.execute("DETACH DATABASE f")
     except BaseException:
@@ -510,7 +523,8 @@ def merge_feeds(db: Path, feeds_dir: Path | None) -> dict:
                for name, c in (report.get("sources") or {}).items()}
     return {"arrived": True, "read": sorted(report.get("read") or []),
             "row_sources": sorted(report.get("row_sources") or []), "sources": sources,
-            "added": added, "updated": updated, "minutes": report.get("minutes")}
+            "added": added, "updated": updated, "on_boards": on_boards, "superseded": superseded,
+            "minutes": report.get("minutes")}
 
 
 def main(argv: list[str]) -> int:

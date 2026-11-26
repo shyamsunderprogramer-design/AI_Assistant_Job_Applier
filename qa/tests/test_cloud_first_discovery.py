@@ -219,6 +219,8 @@ def test_the_feeds_job_reads_what_has_keys_reports_the_rest_and_hands_on_its_row
                     feeds_pkg.FeedSummary("themuse", "The Muse", calls=1, error="FetchError: HTTP 404")]
         monkeypatch.setattr(adzuna, "credentials", lambda: None)
         monkeypatch.setattr(feeds_pkg, "run_feeds", fake_feeds)
+        from data_engineering.scraper import workable_feed
+        monkeypatch.setattr(workable_feed, "run", lambda cfg, **kw: workable_feed.Summary(why="not in this test"))
         monkeypatch.delenv("MAIL_ADDRESS", raising=False)
         monkeypatch.delenv("MAIL_APP_PASSWORD", raising=False)
 
@@ -235,6 +237,7 @@ def test_the_feeds_job_reads_what_has_keys_reports_the_rest_and_hands_on_its_row
     assert report["read"] == ["jooble"]
     assert report["sources"]["adzuna"]["status"] == "skipped" and report["sources"]["themuse"]["status"] == "failed"
     assert report["sources"]["usajobs"]["status"] == "skipped" and report["sources"]["alerts"]["status"] == "skipped"
+    assert report["sources"]["workable-feed"]["status"] == "skipped"
     assert (report["rows"], report["row_sources"]) == (1, ["jooble"])
     saved = json.loads((tmp_path / "out" / "feeds-report.json").read_text())
     assert saved["read"] == ["jooble"] and (tmp_path / "out" / "feeds.db").is_file()

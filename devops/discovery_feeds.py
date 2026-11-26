@@ -1,6 +1,6 @@
 """The job-search sites and job-alert emails, read in the cloud beside the board partitions (Nov 2026).
 
-Adzuna, the job feeds (USAJobs, Jooble, Careerjet, Findwork, The Muse, Remotive, ...) and, when a dedicated
+Adzuna, Workable's official job feed (data_engineering/scraper/workable_feed.py), the job feeds (USAJobs, Jooble, Careerjet, Findwork, The Muse, Remotive, ...) and, when a dedicated
 job-alert mailbox is configured, the alert emails: each read on its own copy of the saved database, exactly as
 the daily run reads them, with the same filter, the same duplicate check against the boards' postings and the
 same 21-day retirement rule for a feed posting no longer seen. Keys come from the workflow's encrypted secrets,
@@ -56,6 +56,16 @@ def run(cfg, out: Path) -> dict:
             note(ADZUNA, status="failed", why=f"{type(exc).__name__}: {str(exc)[:120]}")
     else:
         note(ADZUNA, status="skipped", why="ADZUNA_APP_ID and ADZUNA_APP_KEY are not set")
+
+    # -- Workable's official job feed (one file a run; never in place of the Workable boards) -------------------
+    from data_engineering.scraper import workable_feed
+    try:
+        w = workable_feed.run(cfg, workdir=out.parent)
+        note(workable_feed.SOURCE, status=w.status, calls=w.calls, jobs=w.jobs, matched=w.matched, new=w.new,
+             seen=w.seen, on_boards=w.on_boards, duplicates=w.duplicates, retired=w.retired,
+             complete=w.complete, megabytes=round(w.bytes / 1e6, 1), seconds=w.seconds, why=w.why)
+    except Exception as exc:                      # noqa: BLE001
+        note(workable_feed.SOURCE, status="failed", why=f"{type(exc).__name__}: {str(exc)[:120]}")
 
     # -- the job feeds ---------------------------------------------------------
     from data_engineering.scraper.feeds import run_feeds
