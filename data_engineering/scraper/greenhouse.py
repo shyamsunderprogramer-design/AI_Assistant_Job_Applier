@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 log = logging.getLogger(__name__)
@@ -42,13 +42,21 @@ class GreenhouseScraper(PortalScraper):
         if not isinstance(payload, dict):
             raise FetchError(f"Unexpected Greenhouse payload for {company.slug}")
 
+        if not isinstance(payload.get("jobs"), list):
+            raise FetchError(f"Unexpected Greenhouse payload for {company.slug}")
+        entries = payload["jobs"]
         jobs: list[RawJob] = []
-        for entry in payload.get("jobs", []) or []:
+        for entry in entries:
             try:
                 jobs.append(self._parse_job(company, entry))
             except Exception as exc:  # one malformed posting must not kill the board
                 log.warning("Skipping malformed Greenhouse job for %s: %s", company.slug, exc)
-        return jobs
+        # Every id it named (one it could not parse is still on the board), and whether that is all of them:
+        # an entry without an id, or fewer entries than the board's own total, is not the whole board.
+        ids = [str(e["id"]) for e in entries if isinstance(e, dict) and e.get("id") is not None]
+        total = (payload.get("meta") or {}).get("total") if isinstance(payload.get("meta"), dict) else None
+        return Listing(jobs, complete=not (isinstance(total, int) and total != len(entries)), total=total,
+                       ids=ids, malformed=len(entries) - len(ids))
 
     @staticmethod
     def _parse_job(company: CompanyRef, entry: dict) -> RawJob:

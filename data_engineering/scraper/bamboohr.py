@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 JSON = {"Accept": "application/json"}
@@ -82,7 +82,10 @@ class BambooHRScraper(PortalScraper):
         payload = self.client.get_json(self._list(company.slug), headers=JSON)
         if not isinstance(payload, dict) or not isinstance(payload.get("result"), list):
             raise FetchError(f"Unexpected BambooHR payload for {company.slug}")
-        return [j for j in (self._to_job(company, e) for e in payload["result"]) if j]
+        entries = payload["result"]
+        ids = [str(e["id"]).strip() for e in entries if isinstance(e, dict) and str(e.get("id") or "").strip()]
+        jobs = [j for j in (self._to_job(company, e) for e in entries if isinstance(e, dict)) if j]
+        return Listing(jobs, ids=ids, malformed=len(entries) - len(ids))
 
     def fill_details(self, company: CompanyRef, jobs: list[RawJob]) -> list[RawJob]:
         filled = []

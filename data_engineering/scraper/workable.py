@@ -116,6 +116,9 @@ class WorkableScraper(PortalScraper):
             # Stop on any of: no token, an empty page, or having seen the
             # count the API itself reported. A paging bug must not loop.
             if not token or not results or (total is not None and seen >= total):
+                if isinstance(total, int) and seen < total:
+                    ended["complete"] = False      # the pages ended short of the count Workable itself gave
+                    log.warning("workable/%s: %d of %d postings listed", slug, seen, total)
                 return
         ended["complete"] = False
         log.warning("workable/%s: stopped at %d pages", slug, MAX_PAGES)
@@ -128,13 +131,20 @@ class WorkableScraper(PortalScraper):
         rejected on their title.
         """
         stubs: list[RawJob] = []
+        ids: list[str] = []
+        malformed = 0
         ended: dict = {}
         for page in self._pages(company.slug, ended):
             for entry in page:
-                stub = self._to_job(company, entry, description=None)
+                code = str((entry.get("shortcode") or entry.get("id") or "") if isinstance(entry, dict) else "").strip()
+                if code:
+                    ids.append(code)          # still on the board even if its entry is unusable below
+                else:
+                    malformed += 1
+                stub = self._to_job(company, entry, description=None) if isinstance(entry, dict) else None
                 if stub is not None:
                     stubs.append(stub)
-        return Listing(stubs, complete=ended.get("complete", True))
+        return Listing(stubs, complete=ended.get("complete", True), ids=ids, malformed=malformed)
 
     def fill_details(self, company: CompanyRef, jobs: list[RawJob]) -> list[RawJob]:
         """Fetch the description for postings that survived the filter."""

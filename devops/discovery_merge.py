@@ -132,16 +132,19 @@ def check_part(path: Path | None, manifest: dict, part: dict) -> tuple[str | Non
                   if boards[(r[0], r[1])][0] not in READ]
         if unread:
             return "its result holds postings of boards it did not read", {}
-        return None, {"boards": boards, "meta": meta, "details": details}
+        from devops.discovery_inventory import check_part as check_inventory
+        sound, unsound = check_inventory(db, boards, str(meta.get("run_id") or ""))
+        return None, {"boards": boards, "meta": meta, "details": details, "inventory": sound,
+                      "inventory_refused": unsound}
     except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
         return f"its result cannot be read ({type(exc).__name__})", {}
     finally:
         db.close()
 
 
-def _merge_one(db: sqlite3.Connection, path: Path, boards: dict) -> dict:
+def _merge_one(db: sqlite3.Connection, path: Path, boards: dict, inventory: set | None = None) -> dict:
     """One checked result into the open copy, in one transaction. Returns what it did."""
-    done = {"added": 0, "updated": 0, "older_skipped": 0, "logged": 0}
+    done = {"added": 0, "updated": 0, "older_skipped": 0, "logged": 0, "inventories": 0}
     db.execute("ATTACH DATABASE ? AS part", (read_only(path),))
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -188,6 +191,9 @@ def _merge_one(db: sqlite3.Connection, path: Path, boards: dict) -> dict:
                          f"(SELECT 1 FROM main.scrape_log m WHERE m.run_id = p.run_id AND m.source = p.source "
                          f"AND m.company_slug = p.company_slug)")
         done["logged"] = cur.rowcount
+        # Each board read completely: its inventory, the previous one kept beside it (devops/discovery_inventory.py).
+        from devops.discovery_inventory import merge_part
+        done["inventories"] = merge_part(db, inventory or set())
         db.execute("COMMIT")
         return done
     except BaseException:
@@ -284,7 +290,8 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
             did = {}
             if why is None:
                 try:
-                    did = _merge_one(db, Path(parts[pid]), found["boards"])
+                    did = _merge_one(db, Path(parts[pid]), found["boards"], found.get("inventory"))
+                    did["inventories_refused"] = found.get("inventory_refused", 0)
                 except (sqlite3.Error, MergeError) as exc:
                     why = f"its merge failed ({type(exc).__name__}): nothing of it was kept"
             counts = {s: 0 for s in BOARD_STATES}

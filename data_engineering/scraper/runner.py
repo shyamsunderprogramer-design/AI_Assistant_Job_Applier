@@ -17,7 +17,7 @@ from data_engineering.db.models import Company, Job, ScrapeLog, utcnow
 from data_engineering.db.session import get_session
 from backend.core.jobfields import derive
 from data_engineering.scraper.ashby import AshbyScraper
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob
 from data_engineering.scraper.discovery import upsert_company
 from data_engineering.scraper.workable import WorkableScraper
 from data_engineering.scraper.recruitee import RecruiteeScraper
@@ -74,6 +74,11 @@ class RunSummary:
     # relevant, described, pending, skipped}. relevant: postings the search wants a description of; skipped: the
     # rest, intentionally not described; pending: relevant postings whose description is still missing.
     details: dict = field(default_factory=dict)
+    # Each board read in full with durable ids (Nov 2026): (source, slug) -> every posting id its complete listing
+    # named, filtered or not -- the board's authoritative inventory, carried in the cloud's locked result so the
+    # Mac can close what the board no longer lists (devops/discovery_inventory.py). Only a COMPLETE outcome has one:
+    # {"ids": [...], "at": ISO time (UTC) the listing was read}.
+    inventory: dict = field(default_factory=dict)
     network_down: bool = False          # the run stopped because nothing answered at all (NetworkWatch)
 
 
@@ -425,6 +430,12 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
         done = got.detail["listing"] == "complete" and got.detail["pending"] == 0
         summary.outcomes[(company.source, company.slug)] = (COMPLETE if done else PARTIAL, "")
         summary.details[(company.source, company.slug)] = dict(got.detail)
+        if done and got.listed_ids is not None:
+            summary.inventory[(company.source, company.slug)] = {
+                "ids": list(dict.fromkeys(str(x) for x in got.listed_ids)),
+                "at": utcnow().isoformat(timespec="seconds")}
+        else:
+            summary.inventory.pop((company.source, company.slug), None)    # a retry that ended short has none
 
     log.info(
         "%-11s %-24s %3d seen  %3d match  %3d new  %3d closed%s",
@@ -596,9 +607,13 @@ def _fetch(scraper, company, job_filter) -> Fetched:
     stubs = getattr(scraper, "stub_jobs", None)
     if stubs is None:
         jobs = scraper.fetch_jobs(company)
-        ids = [raw.external_id for raw in jobs]
-        return Fetched(jobs, ids, ids, {"listing": "complete", "listed": len(jobs), "relevant": len(jobs),
-                                        "described": len(jobs), "pending": 0, "skipped": 0})
+        # Every id the board named (Listing.ids: one whose entry could not be made a posting is still there), and
+        # whether that is the whole board: an entry with no id, or fewer than its own total, closes nothing.
+        complete = bool(getattr(jobs, "complete", True))
+        ids = jobs.listed_ids() if isinstance(jobs, Listing) else [str(raw.external_id) for raw in jobs]
+        return Fetched(jobs, ids if complete else None, ids,
+                       {"listing": "complete" if complete else "incomplete", "listed": len(ids),
+                        "relevant": len(jobs), "described": len(jobs), "pending": 0, "skipped": 0})
 
     listed = stubs(company)
     complete = bool(getattr(listed, "complete", True))
@@ -620,7 +635,7 @@ def _fetch(scraper, company, job_filter) -> Fetched:
     if durable:
         missing = sum(1 for job in filled if job.detail_missing)
         detail.update(described=len(filled) - missing, pending=missing + max(0, len(candidates) - len(filled)))
-        ids = [job.external_id for job in listed]
+        ids = listed.listed_ids() if isinstance(listed, Listing) else [str(job.external_id) for job in listed]
         return Fetched(filled, ids if complete else None, ids, detail)
 
     described = [job for job in filled if not job.detail_missing]

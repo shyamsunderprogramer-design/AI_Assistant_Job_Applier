@@ -8,7 +8,8 @@ for a board read successfully and completely (data_engineering/scraper/lifecycle
 
 It hands back, instead of the whole database:
   * part.db -- its boards' rows only (companies; postings of the boards it read; its scrape log), and a table of
-    what happened to each board, the plan it belongs to and when it ran. Locked before it leaves the machine.
+    what happened to each board, the plan it belongs to and when it ran; and (Nov 2026) each board read completely,
+    every posting id its listing named (`inventory`, devops/discovery_inventory.py). Locked before it leaves.
   * report.json -- counts only (boards per outcome, error kinds, minutes): safe for a public log.
 Writing nothing else, it can be run again: a new attempt makes a new result for the same partition.
 
@@ -96,6 +97,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
     budget = float(budget_minutes if budget_minutes is not None else manifest.get("budget_minutes", 150))
     outcomes: dict[tuple, tuple] = {}
     details: dict[tuple, dict] = {}
+    inventory: dict[tuple, dict] = {}
     client = None
     if part["provider"] not in SCRAPER_TYPES or not cfg.get(f"portals.{part['provider']}.enabled", True):
         for b in part["boards"]:
@@ -112,6 +114,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
         summary_id = summary.run_id
         outcomes.update(summary.outcomes)
         details.update(summary.details)
+        inventory.update(getattr(summary, "inventory", {}) or {})
         for ref in later:
             outcomes[(ref.source, ref.slug)] = (NOT_ATTEMPTED, QUOTA)
         for key, why in skipped.items():
@@ -124,6 +127,8 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
             "minutes": round((time.monotonic() - started) / 60, 2), "budget_minutes": budget,
             "outcomes": {f"{s}\t{slug}": list(v) for (s, slug), v in outcomes.items()},
             "details": {f"{s}\t{slug}": v for (s, slug), v in details.items()},
+            "inventory": {f"{s}\t{slug}": v for (s, slug), v in inventory.items()
+                          if outcomes.get((s, slug), (None,))[0] == "complete"},
             "rate_limited_requests": sum(v for k, v in events.items() if not k.startswith("provider:")),
             "provider_rate_limits": {k.split(":", 1)[1]: v for k, v in events.items() if k.startswith("provider:")}}
 
@@ -169,7 +174,10 @@ def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
                                (result["run_id"],)):
             dst.execute(f"INSERT INTO scrape_log ({', '.join(cols['scrape_log'])}) VALUES "
                         f"({', '.join('?' for _ in cols['scrape_log'])})", row)
-        meta = {k: v for k, v in result.items() if k not in ("outcomes", "details")}
+        # Each board read completely: every id its listing named (devops/discovery_inventory.py).
+        from devops.discovery_inventory import write_part
+        write_part(dst, result.get("inventory") or {}, result["outcomes"], result["run_id"])
+        meta = {k: v for k, v in result.items() if k not in ("outcomes", "details", "inventory")}
         for key, value in meta.items():
             dst.execute("INSERT INTO meta VALUES (?, ?)", (key, json.dumps(value)))
         dst.commit()

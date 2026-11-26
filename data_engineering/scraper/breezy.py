@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 
@@ -53,7 +53,10 @@ class BreezyScraper(PortalScraper):
         if not isinstance(payload, list):
             raise FetchError(f"Unexpected Breezy payload for {company.slug}")
         jobs = []
+        ids = [str(e["id"]) for e in payload if isinstance(e, dict) and e.get("id")]
         for entry in payload:
+            if not isinstance(entry, dict):
+                continue
             job_id, title, url = entry.get("id"), (entry.get("name") or "").strip(), entry.get("url")
             if not (job_id and title and url):
                 continue
@@ -69,4 +72,4 @@ class BreezyScraper(PortalScraper):
                 application_url=url, posted_at=posted,
                 requirements=extract_requirements(description) if description else None,
             ))
-        return jobs
+        return Listing(jobs, ids=ids, malformed=len(payload) - len(ids))

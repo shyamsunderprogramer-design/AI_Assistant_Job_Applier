@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 
@@ -50,9 +50,17 @@ class RecruiteeScraper(PortalScraper):
         if not isinstance(payload, dict) or not isinstance(payload.get("offers"), list):
             raise FetchError(f"Unexpected Recruitee payload for {company.slug}")
         jobs = []
+        ids, malformed = [], 0
         for offer in payload["offers"]:
+            if not isinstance(offer, dict):
+                malformed += 1
+                continue
             if offer.get("status") not in (None, "published"):
                 continue
+            if offer.get("id"):
+                ids.append(str(offer["id"]))      # still on the board even if its entry is unusable below
+            else:
+                malformed += 1
             place = ", ".join(p for p in (offer.get("city"), offer.get("country")) if p)
             if offer.get("remote"):
                 place = f"Remote{f' ({place})' if place else ''}"
@@ -69,4 +77,4 @@ class RecruiteeScraper(PortalScraper):
                 posted_at=_when(offer.get("published_at") or offer.get("created_at")),
                 requirements=extract_requirements(description),
             ))
-        return jobs
+        return Listing(jobs, ids=ids, malformed=malformed)

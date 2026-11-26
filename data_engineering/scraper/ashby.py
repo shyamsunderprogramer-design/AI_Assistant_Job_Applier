@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 log = logging.getLogger(__name__)
@@ -55,16 +55,22 @@ class AshbyScraper(PortalScraper):
             raise FetchError(f"Unexpected Ashby payload for {company.slug}")
 
         jobs: list[RawJob] = []
+        ids: list[str] = []
+        malformed = 0
         for entry in payload.get("jobs") or []:
             # Ashby marks a posting it is not publicly showing. Respect that:
             # it is either filled or not open yet, and applying is pointless.
-            if entry.get("isListed") is False:
+            if isinstance(entry, dict) and entry.get("isListed") is False:
                 continue
+            if isinstance(entry, dict) and entry.get("id"):
+                ids.append(str(entry["id"]))
+            else:
+                malformed += 1
             try:
                 jobs.append(self._parse_job(company, entry))
             except Exception as exc:  # one malformed posting must not kill the board
                 log.warning("Skipping malformed Ashby job for %s: %s", company.slug, exc)
-        return jobs
+        return Listing(jobs, ids=ids, malformed=malformed)
 
     @staticmethod
     def _parse_job(company: CompanyRef, entry: dict) -> RawJob:

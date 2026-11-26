@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 log = logging.getLogger(__name__)
@@ -53,7 +53,8 @@ class LeverScraper(PortalScraper):
                 jobs.append(self._parse_job(company, entry))
             except Exception as exc:  # one malformed posting must not kill the board
                 log.warning("Skipping malformed Lever job for %s: %s", company.slug, exc)
-        return jobs
+        ids = [str(e["id"]) for e in payload if isinstance(e, dict) and e.get("id")]
+        return Listing(jobs, ids=ids, malformed=len(payload) - len(ids))
 
     @staticmethod
     def _parse_job(company: CompanyRef, entry: dict) -> RawJob:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
-from data_engineering.scraper.base import CompanyRef, PortalScraper, RawJob, extract_requirements, html_to_text
+from data_engineering.scraper.base import CompanyRef, Listing, PortalScraper, RawJob, extract_requirements, html_to_text
 from data_engineering.scraper.http_client import FetchError, RateLimited, RobotsDisallowed
 
 TT = "{https://teamtailor.com/locations}"
@@ -25,8 +25,13 @@ def parse_feed(xml_text: str, company: CompanyRef, source: str = "teamtailor") -
     except ET.ParseError as exc:
         raise FetchError(f"Teamtailor {company.slug}: feed is not XML") from exc
     jobs = []
+    ids, malformed = [], 0
     for item in root.findall("./channel/item"):
         text = lambda tag: (item.findtext(tag) or "").strip()
+        if text("guid"):
+            ids.append(text("guid"))              # still on the board even if its entry is unusable below
+        else:
+            malformed += 1
         places = []
         for loc in item.iter(f"{TT}location"):
             city, country = loc.findtext(f"{TT}city") or "", loc.findtext(f"{TT}country") or ""
@@ -49,7 +54,7 @@ def parse_feed(xml_text: str, company: CompanyRef, source: str = "teamtailor") -
             application_url=text("link"), posted_at=posted,
             requirements=extract_requirements(description),
         ))
-    return jobs
+    return Listing(jobs, ids=ids, malformed=malformed)
 
 
 class TeamtailorScraper(PortalScraper):

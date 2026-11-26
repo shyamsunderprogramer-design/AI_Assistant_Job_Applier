@@ -45,12 +45,23 @@ class Listing(list):
     """A board's listing (`stub_jobs`): every posting it names, and whether that is all of them.
 
     `complete` is False when the reader stopped before the end -- a page cap (Workday's 1,000, Workable's 2,000)
-    -- so "not in this listing" cannot mean "gone from the board". A plain list is a complete listing."""
+    -- so "not in this listing" cannot mean "gone from the board". A plain list is a complete listing.
 
-    def __init__(self, items=(), complete: bool = True, total: int | None = None):
+    `ids` (Nov 2026): every posting id the board named, including one whose entry could not be made into a posting
+    (no title, no link): it is still on the board, so a stored posting with that id is not gone. None: the items'
+    own ids. An entry with no id at all makes the listing incomplete (`malformed` counts them): which posting it
+    is cannot be known, so nothing may be judged gone from that listing."""
+
+    def __init__(self, items=(), complete: bool = True, total: int | None = None, ids=None, malformed: int = 0):
         super().__init__(items)
-        self.complete = complete
+        self.complete = complete and not malformed
         self.total = total
+        self.ids = None if ids is None else [str(x) for x in ids]
+        self.malformed = malformed
+
+    def listed_ids(self) -> list[str]:
+        """Every id the board named, once each, in its order."""
+        return list(dict.fromkeys(self.ids if self.ids is not None else (str(j.external_id) for j in self)))
 
 
 class PortalScraper(ABC):
