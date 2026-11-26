@@ -36,14 +36,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: replay-config
-          sparse-checkout: replay-mode.txt
-          sparse-checkout-cone-mode: false
+          ref: ${{ env.CODE_REF }}
+          path: .
+          clean: false
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.CODE_REF }}
-          path: code
+          path: replay-config
+          sparse-checkout: replay-mode.txt
+          sparse-checkout-cone-mode: false
 
       - uses: actions/setup-python@v5
         with:
@@ -52,29 +53,30 @@ jobs:
       - name: Restore the job database (read only, never saved from here)
         uses: actions/cache/restore@v4
         with:
-          path: code/data/jobs.db
+          path: data/jobs.db
           key: jobs-db-none
+          fail-on-cache-miss: true
           restore-keys: |
             jobs-db-
 
       - uses: actions/download-artifact@v4
         with:
           name: plan-manifest
-          path: code/plan
+          path: plan
           run-id: ${{ env.SOURCE_RUN }}
           github-token: ${{ github.token }}
 
       - uses: actions/download-artifact@v4
         with:
           pattern: part-*
-          path: code/parts
+          path: parts
           run-id: ${{ env.SOURCE_RUN }}
           github-token: ${{ github.token }}
 
       - uses: actions/download-artifact@v4
         with:
           pattern: report-*
-          path: code/reports
+          path: reports
           run-id: ${{ env.SOURCE_RUN }}
           github-token: ${{ github.token }}
 
@@ -82,7 +84,7 @@ jobs:
         continue-on-error: true
         with:
           name: feeds-result
-          path: code/feeds
+          path: feeds
           run-id: ${{ env.SOURCE_RUN }}
           github-token: ${{ github.token }}
 
@@ -90,17 +92,16 @@ jobs:
         run: |
           mode=$(tr -d '[:space:]' < replay-config/replay-mode.txt)
           echo "mode=$mode"
-          find code/parts -mindepth 1 -maxdepth 1 | wc -l
+          find parts -mindepth 1 -maxdepth 1 | wc -l
           if [ "$mode" = "missing-partition" ]; then
-            rm -rf code/parts/part-teamtailor-1of1          # one partition's result never arrived
+            rm -rf parts/part-teamtailor-1of1          # one partition's result never arrived
             echo "dropped: part-teamtailor-1of1"
           fi
 
-      # ---- from here, the join's own steps (daily-scrape.yml), run in code/ ----
+      # ---- from here, the join's own steps (daily-scrape.yml) ----
 
       - name: Merge every partition whose result arrived
         id: merge
-        working-directory: code
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
         run: |
@@ -130,7 +131,6 @@ jobs:
       - name: Lock the database for collection
         id: lock
         if: steps.merge.outputs.merged == 'true'
-        working-directory: code
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
         run: |
@@ -144,13 +144,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: replay-jobs-db-encrypted
-          path: code/jobs.db.enc
+          path: jobs.db.enc
           retention-days: 1
 
       - name: Build the verified result
         id: build
         if: steps.merge.outputs.merged == 'true'
-        working-directory: code
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
           RUN_ID: ${{ github.run_id }}
@@ -173,14 +172,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: replay-discovery-result
-          path: code/discovery-result.tar.enc
+          path: discovery-result.tar.enc
           retention-days: 1
 
       # ---- replay checks (not in the production join) ----
 
       - name: Check the published result as the Mac would, and that unread boards stay for recovery
         if: steps.upload.outcome == 'success'
-        working-directory: code
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
         run: |
@@ -211,7 +209,6 @@ jobs:
 
       - name: Discovery outcome (COMPLETE, PARTIAL or FAILED)
         if: always()
-        working-directory: code
         env:
           TRIGGER: "replay of #109 (schedule)"
           MERGE_CODE: ${{ steps.merge.outputs.code }}
