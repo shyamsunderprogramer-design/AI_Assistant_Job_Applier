@@ -348,7 +348,7 @@ def test_the_plan_puts_every_board_in_exactly_one_lane_with_the_approved_splits(
     by = {}
     for p in plan["partitions"]:
         by.setdefault(p["provider"], []).append(p)
-    assert len(by["greenhouse"]) == 3 and len(by["lever"]) == 2 and len(by["ashby"]) == 2
+    assert len(by["greenhouse"]) == 6 and len(by["lever"]) == 2 and len(by["ashby"]) == 2   # GH 6: the 26 Nov experiment
     assert all(p["workers"] == 1 for site in ("greenhouse", "lever", "ashby") for p in by[site])   # one at a time
     # Every site in the cloud since 25 Nov 2026: Workday too, nothing on a Mac lane.
     assert len(by["workday"]) == 2 and plan["mac_lanes"] == {}
