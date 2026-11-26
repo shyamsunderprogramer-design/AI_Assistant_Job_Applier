@@ -250,7 +250,7 @@ jobs:
     strategy:
       # Each partition stands on its own: one failing never cancels the others.
       fail-fast: false
-      max-parallel: 19     # experiment (26 Nov 2026): 20 partitions; GitHub runs 20 jobs at once, the feeds job is one
+      max-parallel: 16
       matrix:
         part: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: scrape ${{ matrix.part.id }}
