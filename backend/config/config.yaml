@@ -388,6 +388,9 @@ feeds:
   remotive:  {categories: ["devops", "software-development", "information-technology"]}   # slugs from /api/remote-jobs/categories
   remoteok:  {tags: ["devops", "sre", "cloud"]}
   himalayas: {pages: 5}
+  # Workable's job feed (data_engineering/scraper/workable_feed.py): off until its permitted use is confirmed --
+  # Workable describes it for job-board partners and states no terms (26 Nov 2026). The Workable boards are unaffected.
+  workable_xml: {enabled: false}
   jobicy:    {max_titles: 5}
   weworkremotely: {categories: [remote-devops-sysadmin-jobs, remote-back-end-programming-jobs]}
 
