@@ -1,14 +1,15 @@
 {
-  "_about": "Discovery partitions (devops/discovery_plan.py). One lane per job site, never mixed. partitions: how many independent machines read that site's boards; max_partitions: the most it may ever be split into; budget: the most boards of that site read at the same moment across ALL its partitions (one_host sites: machines asking the one host at once, each keeping the 1.5 s gap). lane \"mac\": the site is read on the Mac, outside the cloud fetch (its boards are still counted in the coverage, as planned on the Mac). probe_quota: when the site's last cloud run was refused for at least probe_when_refused of its boards (HTTP 429 through every retry), only this many of its boards are asked, the least recently read first, until it answers again. quota: the most of the site's boards one cloud run asks, the least recently read first, so every board takes its turn; the rest are deferred by quota, never called failed. A site not listed gets one partition.",
-  "_history": "Nov 2026, owner-approved: Greenhouse 3, Lever 2, Ashby 2 machines, one board at a time each (about 1.6, 1.1 and 1.1 requests a second to each host in all, watched for 429s, each machine backing off on its own); Workable and Jobvite on a quota (Workable refused nearly every request). 25 Nov 2026 (cloud-only discovery, owner's scope): Workday back in the cloud -- every site is read by the cloud, never by the Mac. Its boards were read from GitHub without refusal until mid-November, then refused nearly every time; while it refuses, a probe of its least recently read boards is asked each run. Time budget 90 minutes: the run starts at 1:00 or 11:00 Central and must be published within two hours.",
+  "_about": "Discovery partitions (devops/discovery_plan.py). One lane per job site, never mixed. partitions: how many independent machines read that site's boards; max_partitions: the most it may ever be split into; budget: the most boards of that site read at the same moment across ALL its partitions (one_host sites: machines asking the one host at once, each keeping the 1.5 s gap). lane \"mac\": the site is read on the Mac, outside the cloud fetch (its boards are still counted in the coverage, as planned on the Mac). probe_quota: when the site's last cloud run was refused for at least probe_when_refused of its boards (HTTP 429 through every retry), only this many of its boards are asked, the least recently read first, until it answers again. quota: the most of the site's boards one cloud run asks, the least recently read first, so every board takes its turn; the rest are deferred by quota, never called failed. A site not listed gets one partition. queue_minutes: the site's last measured minutes per partition (26 Nov 2026 run 45903934655; Lever, Ashby and Jobvite: expected at their new splits) -- the order the matrix is started in, longest first, since only 19 partitions run at once.",
+  "_history": "Nov 2026, owner-approved: Greenhouse 3, Lever 2, Ashby 2 machines, one board at a time each (about 1.6, 1.1 and 1.1 requests a second to each host in all, watched for 429s, each machine backing off on its own); Workable and Jobvite on a quota (Workable refused nearly every request). 25 Nov 2026 (cloud-only discovery, owner's scope): Workday back in the cloud -- every site is read by the cloud, never by the Mac. Its boards were read from GitHub without refusal until mid-November, then refused nearly every time; while it refuses, a probe of its least recently read boards is asked each run. Time budget 90 minutes: the run starts at 1:00 or 11:00 Central and must be published within two hours. 26 Nov 2026 (Development Mode, owner-approved): Greenhouse 6 machines made the baseline after the measured run (22.4 min, no 429s, same coverage). Experiments, each kept only if measured better: Lever 4 and Ashby 4 machines (one board at a time each, about 2x their earlier request rates), Jobvite every board on 3 machines instead of 150 a run on one (it refused nothing).",
   "time_budget_minutes": 90,
   "default_one_partition_budget": 6,
   "lanes": {
     "greenhouse": {
-      "partitions": 3,
-      "max_partitions": 3,
-      "budget": 3,
-      "one_host": true
+      "partitions": 6,
+      "max_partitions": 6,
+      "budget": 6,
+      "one_host": true,
+      "queue_minutes": 22.4
     },
     "workday": {
       "partitions": 2,
@@ -16,63 +17,73 @@
       "budget": 6,
       "one_host": false,
       "probe_quota": 40,
-      "probe_when_refused": 0.9
+      "probe_when_refused": 0.9,
+      "queue_minutes": 18.3
     },
     "bamboohr": {
       "partitions": 2,
       "max_partitions": 4,
       "budget": 6,
-      "one_host": false
+      "one_host": false,
+      "queue_minutes": 23.0
     },
     "lever": {
-      "partitions": 2,
-      "max_partitions": 2,
-      "budget": 2,
-      "one_host": true
+      "partitions": 4,
+      "max_partitions": 4,
+      "budget": 4,
+      "one_host": true,
+      "queue_minutes": 12.5
     },
     "ashby": {
-      "partitions": 2,
-      "max_partitions": 2,
-      "budget": 2,
-      "one_host": true
+      "partitions": 4,
+      "max_partitions": 4,
+      "budget": 4,
+      "one_host": true,
+      "queue_minutes": 12.1
     },
     "jazzhr": {
       "partitions": 1,
       "max_partitions": 2,
       "budget": 6,
-      "one_host": false
+      "one_host": false,
+      "queue_minutes": 9.2
     },
     "breezy": {
       "partitions": 1,
       "max_partitions": 1,
       "budget": 6,
-      "one_host": false
+      "one_host": false,
+      "queue_minutes": 1.6
     },
     "teamtailor": {
       "partitions": 1,
       "max_partitions": 1,
       "budget": 6,
-      "one_host": false
+      "one_host": false,
+      "queue_minutes": 2.3
     },
     "recruitee": {
       "partitions": 1,
       "max_partitions": 1,
       "budget": 6,
-      "one_host": false
+      "one_host": false,
+      "queue_minutes": 20.2
     },
     "workable": {
       "partitions": 1,
       "max_partitions": 1,
       "budget": 1,
       "one_host": true,
-      "quota": 150
+      "quota": 150,
+      "queue_minutes": 12.8
     },
     "jobvite": {
-      "partitions": 1,
-      "max_partitions": 1,
-      "budget": 1,
+      "partitions": 3,
+      "max_partitions": 3,
+      "budget": 3,
       "one_host": true,
-      "quota": 150
+      "quota": 0,
+      "queue_minutes": 6.5
     }
   }
 }

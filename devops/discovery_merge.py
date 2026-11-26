@@ -260,6 +260,7 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
     for left in _side_files(work):
         left.unlink()
     settle(base)
+    cold = not base.exists()
     if base.exists():
         shutil.copy2(base, work)
     elif any(parts.values()):
@@ -275,7 +276,10 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
         raise MergeError("no saved database and no results")
     coverage = {"plan_id": manifest["plan_id"], "at": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
                 "partitions": [], "providers": {}, "boards": {s: 0 for s in BOARD_STATES}, "outcomes": [],
-                "details": [], "mac_lanes": dict(manifest.get("mac_lanes") or {}), "timings": {}}
+                "details": [], "mac_lanes": dict(manifest.get("mac_lanes") or {}), "timings": {},
+                # True: no saved database -- board history, the scrape log (each site's last refusal) and earlier
+                # inventories start from this run; never presented as continuous with the runs before it.
+                "cold_start": cold}
     # uri=True: ATTACH then reads each result through a read-only address -- it is never written.
     db = sqlite3.connect(work.resolve().as_uri(), uri=True, isolation_level=None)
     try:

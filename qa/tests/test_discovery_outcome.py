@@ -164,3 +164,35 @@ def test_with_no_saved_database_at_all_the_merge_starts_from_the_results_instead
     cov = dm.merge(missing, plan, parts)
     assert missing.is_file() and cov["status"] == "COMPLETE"
     assert do.decide(cov, 0, OK_COMPLETE)[0] == do.COMPLETE
+
+
+def test_a_cold_start_is_said_and_a_saved_database_is_not_one(tmp_path, monkeypatch, capsys):
+    base = seed(tmp_path / "base.db", BASE_BOARDS)
+    healthy_world()
+    plan = plan_for(base)
+    parts = run_all(tmp_path, base, plan)
+    warm = dm.merge(joined(tmp_path, base), plan, parts)
+    cold = dm.merge(tmp_path / "none" / "data" / "jobs.db", plan, parts)
+    assert warm["cold_start"] is False and cold["cold_start"] is True
+    assert "Cold start" in do.summary(do.COMPLETE, [], [], cold) and "Cold start" not in do.summary(do.COMPLETE, [], [], warm)
+    run_main(tmp_path, monkeypatch, cold, 0, complete_upload="success")
+    assert "::warning::Cold start" in capsys.readouterr().out
+
+
+def test_with_no_saved_database_a_site_that_is_probed_while_it_refuses_is_probed(tmp_path, capsys):
+    from devops import discovery_plan as dp
+    csv = tmp_path / "boards.csv"
+    csv.write_text("source,slug,name\n" + "".join(f"workday,w{i},W{i}\n" for i in range(300)) + "greenhouse,g1,G\n")
+    out = tmp_path / "m.json"
+    assert dp.main(["plan", "--db", str(tmp_path / "missing.db"), "--boards-csv", str(csv), "--out", str(out)]) == 0
+    said = capsys.readouterr().out
+    wd = [p for p in json.loads(out.read_text())["partitions"] if p["provider"] == "workday"]
+    assert "cold_start=true" in said and wd and all(p["probe"] for p in wd)
+
+
+def test_the_matrix_queues_the_longest_partitions_first():
+    from devops import discovery_plan as dp
+    manifest = {"partitions": [{"id": "a-1of1", "provider": "a", "boards": [], "workers": 1, "est_minutes": 2},
+                               {"id": "z-1of1", "provider": "z", "boards": [], "workers": 1, "est_minutes": 20},
+                               {"id": "m-1of1", "provider": "m", "boards": [], "workers": 1, "est_minutes": 9}]}
+    assert [m["id"] for m in dp.matrix(manifest)] == ["z-1of1", "m-1of1", "a-1of1"]

@@ -228,6 +228,10 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
                                                     max(max(b["est_s"] for b in group),
                                                         sum(b["est_s"] for b in group) / w) / 60, 1),
                                "boards": group})
+            if lane.get("queue_minutes"):
+                # The site's last MEASURED partition minutes (lanes file): what the matrix is ordered by, where the
+                # estimate from board times misleads (refusal waits, a quota, per-posting requests).
+                partitions[-1]["queue_minutes"] = float(lane["queue_minutes"])
     for p in partitions:
         p["run"] = not only or p["id"] in only or p["provider"] in only
     budget = float(budget_minutes if budget_minutes is not None else lanes.get("time_budget_minutes", 150))
@@ -263,10 +267,14 @@ def check_assignment(rows: list[dict], manifest: dict, lanes: dict) -> None:
 
 def matrix(manifest: dict) -> list[dict]:
     """What the public workflow log may show of the plan: ids, sites and counts -- never a board."""
+    # Longest first (26 Nov 2026): GitHub starts a matrix in its order, at most max-parallel at once; a long
+    # partition queued behind short ones would finish last. Ties by id, so the order is stable.
+    run = sorted((p for p in manifest["partitions"] if p.get("run", True)),
+                 key=lambda p: (-float(p.get("queue_minutes") or p.get("est_minutes") or 0), p["id"]))
     return [{"id": p["id"], "provider": p["provider"], "boards": len(p["boards"]), "workers": p["workers"],
              "est_minutes": p["est_minutes"], **({"quota": p["quota"]} if p.get("quota") else {}),
              **({"probe": True} if p.get("probe") else {})}
-            for p in manifest["partitions"] if p.get("run", True)]
+            for p in run]
 
 
 def finish_estimate(partition: dict, budget_minutes: float) -> tuple[float, int]:
@@ -303,7 +311,13 @@ def main(argv: list[str]) -> int:
     target = int(args.target_total) if str(args.target_total).strip().isdigit() else None
     budget = float(args.budget_minutes) if str(args.budget_minutes).strip() else None
     only = {x.strip() for x in args.only.split(",") if x.strip()} or None
-    manifest = make_plan(boards(args.db, args.boards_csv), lanes, target, budget, only, refused_shares(args.db))
+    refused = refused_shares(args.db)
+    if not Path(args.db).exists():
+        # A cold start (26 Nov 2026): the saved database, and with it each site's last refusal, is gone. A site that
+        # is probed while it refuses (Workday) is probed now too -- never asked for every board on no evidence.
+        refused = {site: 1.0 for site, lane in lanes.get("lanes", {}).items() if lane.get("probe_quota")}
+        print("cold_start=true")
+    manifest = make_plan(boards(args.db, args.boards_csv), lanes, target, budget, only, refused)
     if args.command == "plan":
         args.out.write_text(json.dumps(manifest, separators=(",", ":")))
         print("matrix=" + json.dumps(matrix(manifest), separators=(",", ":")))

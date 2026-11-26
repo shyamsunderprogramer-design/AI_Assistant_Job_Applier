@@ -101,6 +101,9 @@ def summary(status: str, failed: list, unread: list, coverage: dict | None, *, s
             PARTIAL: "PARTIAL — verified usable result published; coverage incomplete (not a complete refresh)",
             FAILED: "FAILED — see the reasons below"}[status]
     lines = [f"## Discovery outcome: {head}", ""]
+    if (coverage or {}).get("cold_start"):
+        lines += ["> **Cold start:** the saved database was missing. Board history, each site's last refusal and "
+                  "earlier inventories start from this run.", ""]
     if failed:
         lines += [f"- **Failed:** {w}" for w in failed] + [""]
     rows = [("Discovery window", slot or "—"), ("Started by", trigger or "—")]
@@ -189,6 +192,8 @@ def main(argv: list[str]) -> int:
     # Annotations: on the run's page, beside the summary.
     for why in failed:
         print(f"::error::Discovery FAILED: {why}")
+    if (coverage or {}).get("cold_start"):
+        print("::warning::Cold start: the saved database was missing; history starts from this run.")
     if status == PARTIAL:
         t = (coverage or {}).get("totals") or {}
         print(f"::warning::Discovery PARTIAL (not a complete refresh): {t.get('boards_scanned_in_full', 0):,} of "
