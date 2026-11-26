@@ -196,3 +196,20 @@ def test_the_matrix_queues_the_longest_partitions_first():
                                {"id": "z-1of1", "provider": "z", "boards": [], "workers": 1, "est_minutes": 20},
                                {"id": "m-1of1", "provider": "m", "boards": [], "workers": 1, "est_minutes": 9}]}
     assert [m["id"] for m in dp.matrix(manifest)] == ["z-1of1", "m-1of1", "a-1of1"]
+
+
+def test_partitions_are_grouped_onto_runners_never_two_of_one_site_each_exactly_once(tmp_path):
+    from devops import discovery_plan as dp
+    rows = [{"source": s, "slug": f"{s}{i}", "name": "", "board_url": "", "origin": "", "est_s": 2.0}
+            for s, n in (("greenhouse", 60), ("lever", 20), ("ashby", 20), ("jazzhr", 5), ("breezy", 5)) for i in range(n)]
+    lanes = {"lanes": {"greenhouse": {"partitions": 6, "max_partitions": 6, "budget": 6, "one_host": True},
+                       "lever": {"partitions": 4, "max_partitions": 4, "budget": 4, "one_host": True},
+                       "ashby": {"partitions": 4, "max_partitions": 4, "budget": 4, "one_host": True}}}
+    plan = dp.make_plan(rows, lanes)
+    runners = dp.bundles(plan, per_runner=3)
+    parts = [pid for r in runners for pid in r["parts"].split()]
+    assert sorted(parts) == sorted(p["id"] for p in plan["partitions"])          # each exactly once
+    for r in runners:
+        sites = [pid.rsplit("-", 1)[0] for pid in r["parts"].split()]
+        assert len(sites) == len(set(sites)) and len(sites) <= 3                  # never two of one site
+    assert len(runners) == 6                                                     # greenhouse's 6 set the count

@@ -777,16 +777,20 @@ def test_the_workflow_steps_themselves_plan_lock_merge_and_lock_for_the_mac(tmp_
     shutil.copy2(base, joiner / "data" / "jobs.db")
     (joiner / "plan").mkdir()
     shutil.copy2(planner / "manifest.json.enc", joiner / "plan" / "manifest.json.enc")
-    for i, entry in enumerate(matrix):
-        part = run_partition(tmp_path, base, manifest, entry["id"])
-        if lose_one and i == 0:
-            continue                                     # its machine died: no artifact
-        machine = part.parent.parent
-        done = _bash(_step("scrape", "Lock this partition's result"), machine, env)
+    runners = json.loads(said["runners"])
+    assert sorted(pid for r in runners for pid in r["parts"].split()) == sorted(m["id"] for m in matrix)
+    for r, runner in enumerate(runners):
+        machine = tmp_path / f"runner-{runner['id']}"
+        for i, pid in enumerate(runner["parts"].split()):
+            part = run_partition(tmp_path, base, manifest, pid)          # the reader, offline
+            if lose_one and r == 0 and i == 0:
+                continue                                 # this reader died: no result
+            (machine / "work" / pid / "out").mkdir(parents=True)
+            shutil.copy2(part, machine / "work" / pid / "out" / "part.db")
+        done = _bash(_step("scrape", "Lock these partitions' results"), machine, {**env, "PARTS": runner["parts"]})
         assert done.returncode == 0, done.stderr
-        dest = joiner / "parts" / f"part-{entry['id']}"   # download-artifact's layout for pattern: part-*
-        dest.mkdir(parents=True)
-        shutil.copy2(machine / "part.db.enc", dest / "part.db.enc")
+        # download-artifact with merge-multiple: every runner's staged/ into parts/
+        shutil.copytree(machine / "staged", joiner / "parts", dirs_exist_ok=True)
     # join job
     out.write_text("")
     done = _bash(_step("join", "Merge every partition whose result arrived"), joiner, env)
@@ -859,7 +863,9 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
     assert set(jobs) == {"plan", "scrape", "feeds", "join"}       # feeds: the job-search sites (25 Nov 2026)
     scrape, join = jobs["scrape"], jobs["join"]
     assert scrape["needs"] == "plan" and scrape["strategy"]["fail-fast"] is False
-    assert scrape["strategy"]["matrix"]["part"] == "${{ fromJSON(needs.plan.outputs.matrix) }}"
+    # One runner per group of partitions (26 Nov 2026), each partition still its own reader.
+    assert scrape["strategy"]["matrix"]["runner"] == "${{ fromJSON(needs.plan.outputs.runners) }}"
+    assert scrape["name"].startswith("scrape ")              # devops/discovery_slot.py counts jobs named so
     assert scrape["strategy"]["max-parallel"] >= 16
     assert join["needs"] == ["plan", "scrape", "feeds"] and "!cancelled()" in join["if"] and "always()" not in join["if"]
     assert "needs.plan.result == 'success'" in join["if"]
@@ -885,7 +891,13 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
     for j in jobs.values():
         for s in j["steps"]:
             if "upload-artifact" in str(s.get("uses", "")):
-                assert s["with"]["path"].endswith((".enc", "report.json", "coverage.json")), s
+                # staged/ is filled with locked results only (part-<partition>/part.db.enc); reports-staged/ with
+                # the counts-only reports.
+                assert s["with"]["path"].endswith((".enc", "report.json", "coverage.json")) or \
+                    s["with"]["path"] in ("staged/", "reports-staged/"), s
+    read = next(st for st in scrape["steps"] if st.get("name", "").startswith("Lock these partitions"))
+    staged = [line for line in read["run"].splitlines() if "staged/part-" in line]
+    assert staged and all("part.db.enc" in line or "mkdir" in line for line in staged)
     # The planner the plan job runs needs nothing installed.
     plan_src = (ROOT / "devops" / "discovery_plan.py").read_text()
     imports = set(re.findall(r"^(?:from|import) ([a-z_0-9]+)", plan_src, re.M))
@@ -942,7 +954,7 @@ def test_the_plan_command_prints_what_the_workflow_reads(tmp_path):
                            "--target-total", "", "--budget-minutes", "", "--only", "", "--out", str(out)],
                           cwd=ROOT, capture_output=True, text=True, check=True)
     lines = dict(line.split("=", 1) for line in done.stdout.strip().splitlines())
-    assert set(lines) == {"matrix", "plan_id", "budget"}
+    assert set(lines) == {"matrix", "runners", "plan_id", "budget"}
     assert json.loads(lines["matrix"]) == dp.matrix(json.loads(out.read_text()))
     assert "acme" not in done.stdout
 

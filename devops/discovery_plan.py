@@ -277,6 +277,32 @@ def matrix(manifest: dict) -> list[dict]:
             for p in run]
 
 
+def bundles(manifest: dict, per_runner: int = 3) -> list[dict]:
+    """The machines (26 Nov 2026): logical partitions grouped onto GitHub runners, each partition still its own
+    reader -- its own process, its own copy of the database, its own client keeping the per-host gap. Never two
+    partitions of one site on one runner, so no site is asked from one machine (one address) more often than before.
+    As many runners as the most-split site needs, or enough for `per_runner` readers each; longest partitions placed
+    first, each on the runner with the fewest readers so far. Counts and ids only: safe for the public log."""
+    run = sorted((p for p in manifest["partitions"] if p.get("run", True)),
+                 key=lambda p: (-float(p.get("queue_minutes") or p.get("est_minutes") or 0), p["id"]))
+    if not run:
+        return []
+    per_site: dict[str, int] = {}
+    for p in run:
+        per_site[p["provider"]] = per_site.get(p["provider"], 0) + 1
+    n = max(max(per_site.values()), -(-len(run) // max(1, per_runner)))
+    groups: list[list[dict]] = [[] for _ in range(n)]
+    for p in run:
+        free = [g for g in groups if all(q["provider"] != p["provider"] for q in g)]
+        min(free, key=lambda g: (len(g), groups.index(g))).append(p)
+    out = []
+    for i, g in enumerate(groups, start=1):
+        out.append({"id": f"r{i:02d}", "parts": " ".join(p["id"] for p in g),
+                    "boards": sum(len(p["boards"]) for p in g),
+                    "est_minutes": max(float(p.get("queue_minutes") or p.get("est_minutes") or 0) for p in g)})
+    return out
+
+
 def finish_estimate(partition: dict, budget_minutes: float) -> tuple[float, int]:
     """(minutes to read every board, boards read within the budget), from each board's own last time: one board
     at a time on one host, else the partition's workers taking the next board as each frees up."""
@@ -321,6 +347,7 @@ def main(argv: list[str]) -> int:
     if args.command == "plan":
         args.out.write_text(json.dumps(manifest, separators=(",", ":")))
         print("matrix=" + json.dumps(matrix(manifest), separators=(",", ":")))
+        print("runners=" + json.dumps(bundles(manifest, int(lanes.get("readers_per_runner", 3))), separators=(",", ":")))
         print(f"plan_id={manifest['plan_id']}")
         print(f"budget={int(manifest['budget_minutes'])}")
         print(f"{len(manifest['partitions'])} partitions, {manifest['boards']:,} boards, plan {manifest['plan_id']}"
