@@ -1,0 +1,225 @@
+# Replay of Daily scrape #109's join (run 45864352737) with the corrected outcome step -- verification only.
+#
+# Runs only on a push to the outcome-replay branch; never scheduled, never on main. It reads no board: it takes
+# #109's own partition and job-search results (its artifacts), the saved database as the cache holds it (read
+# only: this workflow never saves the cache), and runs the join's steps exactly as daily-scrape.yml does, at the
+# same pinned commit. Its result is uploaded under another name, for 1 day: the Mac and the window guard look at
+# Daily scrape runs only, so nothing here is taken as a discovery or counts as a window read.
+#
+# replay-mode.txt: "partial" replays #109 as it was; "missing-partition" drops one partition's result first (a
+# genuine failure: the run must end red).
+name: Outcome replay (verification only)
+
+on:
+  push:
+    branches: [outcome-replay]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: outcome-replay
+  cancel-in-progress: false
+
+env:
+  CODE_REF: "66e1ff1bf6d17862b520702dfde70cbda21334a7"   # the production pin since PR #10
+  SOURCE_RUN: "45864352737"                               # Daily scrape #109
+  STARTED: "2026-11-26T17:03:29Z"                         # #109's plan start
+  PUBLISHED: "2026-11-26 17:50:12"                        # #109's discovery-result-v1 upload (UTC)
+  SLOT: "2026-11-26 11:00 CST"
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: replay-config
+          sparse-checkout: replay-mode.txt
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CODE_REF }}
+          path: code
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore the job database (read only, never saved from here)
+        uses: actions/cache/restore@v4
+        with:
+          path: code/data/jobs.db
+          key: jobs-db-none
+          restore-keys: |
+            jobs-db-
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan-manifest
+          path: code/plan
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: code/parts
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: code/reports
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: feeds-result
+          path: code/feeds
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+
+      - name: Replay mode
+        run: |
+          mode=$(tr -d '[:space:]' < replay-config/replay-mode.txt)
+          echo "mode=$mode"
+          find code/parts -mindepth 1 -maxdepth 1 | wc -l
+          if [ "$mode" = "missing-partition" ]; then
+            rm -rf code/parts/part-teamtailor-1of1          # one partition's result never arrived
+            echo "dropped: part-teamtailor-1of1"
+          fi
+
+      # ---- from here, the join's own steps (daily-scrape.yml), run in code/ ----
+
+      - name: Merge every partition whose result arrived
+        id: merge
+        working-directory: code
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+            -in plan/manifest.json.enc -out "$RUNNER_TEMP/manifest.json" -pass env:PASSPHRASE
+          for locked in parts/part-*/part.db.enc; do
+            [ -e "$locked" ] || continue
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+              -in "$locked" -out "${locked%.enc}" -pass env:PASSPHRASE || rm -f "${locked%.enc}"
+          done
+          if [ -e feeds/feeds.tar.enc ] && openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+               -in feeds/feeds.tar.enc -out feeds/feeds.tar -pass env:PASSPHRASE; then
+            tar -xf feeds/feeds.tar -C feeds feeds.db feeds-report.json || rm -f feeds/feeds.db
+          fi
+          set +e
+          python -m devops.discovery_merge --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
+            --parts-dir parts --reports-dir reports --coverage coverage.json \
+            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 30 \
+            --feeds-dir feeds > merge.txt
+          code=$?
+          set -e
+          cat merge.txt >> "$GITHUB_STEP_SUMMARY"
+          grep '^complete=' merge.txt >> "$GITHUB_OUTPUT" || true
+          echo "merged=$([ $code -eq 0 ] || [ $code -eq 3 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Lock the database for collection
+        id: lock
+        if: steps.merge.outputs.merged == 'true'
+        working-directory: code
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in data/jobs.db -out jobs.db.enc -pass env:PASSPHRASE
+          ls -lh jobs.db.enc
+
+      - name: Upload it (a complete refresh) -- replay name
+        id: complete_upload
+        if: steps.merge.outputs.complete == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-jobs-db-encrypted
+          path: code/jobs.db.enc
+          retention-days: 1
+
+      - name: Build the verified result
+        id: build
+        if: steps.merge.outputs.merged == 'true'
+        working-directory: code
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          mkdir -p result
+          python -m devops.discovery_result build --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
+            --outcomes "$RUNNER_TEMP/outcomes.json" --coverage coverage.json --out result/result.json \
+            --run-id "$RUN_ID" --attempt "$ATTEMPT" --started "$STARTED" --scrape-jobs success
+          cp data/jobs.db result/jobs.db
+          COPYFILE_DISABLE=1 tar -cf discovery-result.tar -C result result.json jobs.db
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+            -in discovery-result.tar -out discovery-result.tar.enc -pass env:PASSPHRASE
+          rm -rf result discovery-result.tar
+          ls -lh discovery-result.tar.enc
+
+      - name: Upload the verified result -- replay name, never discovery-result-v1
+        id: upload
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-discovery-result
+          path: code/discovery-result.tar.enc
+          retention-days: 1
+
+      # ---- replay checks (not in the production join) ----
+
+      - name: Check the published result as the Mac would, and that unread boards stay for recovery
+        if: steps.upload.outcome == 'success'
+        working-directory: code
+        env:
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/check"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -in discovery-result.tar.enc \
+            -out "$RUNNER_TEMP/check/r.tar" -pass env:PASSPHRASE
+          tar -xf "$RUNNER_TEMP/check/r.tar" -C "$RUNNER_TEMP/check"
+          python - <<'EOF'
+          import json, os, sqlite3
+          from pathlib import Path
+          from devops.discovery_result import verify
+          d = Path(os.environ["RUNNER_TEMP"]) / "check"
+          result = json.loads((d / "result.json").read_text())
+          got = verify(result, d / "jobs.db", os.environ["PASSPHRASE"])
+          print(f"verified: status={got['status']} complete_refresh={result['complete_refresh']} "
+                f"boards read={len(got['scanned']):,} not read={len(got['incomplete']):,}")
+          con = sqlite3.connect(f"file:{d / 'jobs.db'}?mode=ro", uri=True)
+          started = os.environ["STARTED"].replace("T", " ").replace("Z", "")
+          read_at = {(s, slug): t for s, slug, t in con.execute("SELECT source, slug, last_scraped_at FROM companies")}
+          advanced = sum(1 for k in got["incomplete"] if (read_at.get(k) or "") >= started)
+          print(f"boards not read in #109 whose last read time was advanced (would lose their turn): {advanced}")
+          assert not result["complete_refresh"] and advanced == 0
+          EOF
+
+      - name: Install faketime (the outcome is replayed at #109's publication time)
+        if: always()
+        run: sudo apt-get install -y -qq faketime > /dev/null
+
+      - name: Discovery outcome (COMPLETE, PARTIAL or FAILED)
+        if: always()
+        working-directory: code
+        env:
+          TRIGGER: "replay of #109 (schedule)"
+          MERGE_CODE: ${{ steps.merge.outputs.code }}
+          LOCK: ${{ steps.lock.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          COMPLETE_UPLOAD: ${{ steps.complete_upload.outcome }}
+        run: |
+          faketime "$PUBLISHED" python -m devops.discovery_outcome --coverage coverage.json --merge-code "$MERGE_CODE" \
+            --lock "$LOCK" --build "$BUILD" --upload "$UPLOAD" --complete-upload "$COMPLETE_UPLOAD" \
+            --result discovery-result.tar.enc --slot "$SLOT" --trigger "$TRIGGER" --started "$STARTED"
