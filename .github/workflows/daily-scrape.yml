@@ -334,6 +334,9 @@ jobs:
     if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read            # Workable's feed: has another run asked it within the hour?
     steps:
       - uses: actions/checkout@v4
         with:
@@ -378,6 +381,7 @@ jobs:
           # A dedicated job-alert mailbox only, opened read-only -- never the person's own mailbox.
           MAIL_ADDRESS: ${{ secrets.ALERTS_MAIL_ADDRESS }}
           MAIL_APP_PASSWORD: ${{ secrets.ALERTS_MAIL_APP_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: python -u -m devops.discovery_feeds --out out
 
       - name: Lock its result

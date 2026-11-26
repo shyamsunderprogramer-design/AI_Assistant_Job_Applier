@@ -123,6 +123,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr("data_engineering.scraper.filters.resolve_filter",
                         lambda cfg: JobFilter(title_keywords=["engineer"]))
     monkeypatch.setattr(wf, "MIN_JOBS", 1)
+    monkeypatch.setattr(wf, "too_soon", lambda *a, **k: "")          # the hourly rule has its own tests
     yield tmp_path / "jobs.db"
     session_mod._engine = None
     session_mod._SessionFactory = None
@@ -237,3 +238,44 @@ def test_the_join_never_adds_a_feed_copy_of_a_boards_posting_and_closes_one_a_bo
     con.close()
     assert have == [("workable", "BRD001", 1), ("workable", "BRD002", 1), ("workable-feed", "BRD002", 0),
                     ("workable-feed", "NEW001", 1), ("workable-feed", "OWN001", 1)]
+
+
+
+# -- one request an hour, across runs ------------------------------------------------------------------------------
+
+TOO_SOON = wf.too_soon          # the real one: the `db` fixture stands it aside for the storing tests
+
+
+def github(runs):
+    """GitHub's run history as a script: {run_id: [(job name, started, conclusion)]}."""
+    def get(path):
+        if path.endswith("/jobs?per_page=100"):
+            rid = int(path.split("/runs/")[1].split("/")[0])
+            return {"jobs": [{"name": n, "started_at": st, "conclusion": c} for n, st, c in runs[rid]]}
+        return {"workflow_runs": [{"id": rid} for rid in runs]}
+    return get
+
+
+def test_another_runs_feeds_job_within_the_hour_means_the_feed_is_not_asked(db, monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_RUN_ID", "9")
+    now = datetime(2026, 11, 26, 11, 0, tzinfo=timezone.utc)
+    recent = {7: [("feeds", "2026-11-26T10:20:00Z", "success")], 9: [("feeds", "2026-11-26T10:59:00Z", None)]}
+    assert "run 7 asked it at 10:20" in TOO_SOON(now, api=github(recent))
+    refused = {7: [("feeds", "2026-11-26T10:20:00Z", "failure")]}           # a refused request counts too
+    assert TOO_SOON(now, api=github(refused))
+    stood_down = {7: [("feeds", "2026-11-26T10:20:00Z", "skipped")], 8: [("feeds", "2026-11-26T09:50:00Z", "success")]}
+    assert TOO_SOON(now, api=github(stood_down)) == ""                      # skipped, or over an hour ago
+
+    def down(path):
+        raise ConnectionError("no answer")
+    assert "could not be checked" in TOO_SOON(now, api=down)              # unsure: not asked
+
+
+def test_a_read_here_within_the_hour_means_the_feed_is_not_asked(db, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    add("workable-feed", "acme", "NEW001", seen=_utcnow() - timedelta(minutes=20))
+    assert TOO_SOON().startswith("read 20 min ago") or TOO_SOON().startswith("read 19 min ago")
+    monkeypatch.setattr(wf, "too_soon", TOO_SOON)
+    s = wf.run(Cfg(), session=Session(Resp(429)), workdir=db.parent)
+    assert s.status == "skipped" and s.calls == 0 and "once an hour" in s.why

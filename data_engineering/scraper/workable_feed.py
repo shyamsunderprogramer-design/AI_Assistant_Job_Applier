@@ -95,6 +95,65 @@ def download(dest: Path, session=None, deadline_s: int = DEADLINE_S) -> int:
     return size
 
 
+# -- one request an hour, across runs ------------------------------------------------------------------------------
+
+MIN_GAP_S = 3600 + 5 * 60           # Workable's hour, and a margin
+
+
+def _utc(stamp: str):
+    from datetime import datetime, timezone
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def too_soon(now=None, api=None) -> str:
+    """Why the feed must not be asked now ("" when it may): it was read here within the hour (the saved
+    database's newest feed posting), or another run of this workflow started its job-search-sites job within
+    the hour (whatever came of it: a refused request counts too). When GitHub cannot be asked, it is not
+    asked either: one skipped read costs less than a second request inside the hour."""
+    from datetime import datetime, timedelta, timezone
+    now = now or datetime.now(timezone.utc)
+    try:
+        from sqlalchemy import func
+
+        from data_engineering.db.models import Job
+        from data_engineering.db.session import get_session
+        with get_session() as session:
+            last = session.query(func.max(Job.last_seen_at)).filter(Job.source == SOURCE).scalar()
+        if last is not None:
+            last = last.replace(tzinfo=timezone.utc) if last.tzinfo is None else last
+            if (now - last).total_seconds() < MIN_GAP_S:
+                return f"read {int((now - last).total_seconds() // 60)} min ago"
+    except Exception:                                             # noqa: BLE001 -- the database is checked below
+        log.warning("the feed's last read could not be looked up", exc_info=True)
+    repo, run_id = os.getenv("GITHUB_REPOSITORY"), os.getenv("GITHUB_RUN_ID")
+    if not repo:
+        return ""                                                 # not on GitHub: nothing else reads it
+    get = api or _github_get
+    try:
+        since = (now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        runs = get(f"repos/{repo}/actions/workflows/daily-scrape.yml/runs?created=>={since}&per_page=20")
+        for run in runs.get("workflow_runs") or []:
+            if str(run.get("id")) == str(run_id):
+                continue
+            for job in get(f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100").get("jobs") or []:
+                started = job.get("started_at")
+                if (job.get("name") == "feeds" and started and job.get("conclusion") not in ("skipped", "cancelled")
+                        and (now - _utc(started)).total_seconds() < MIN_GAP_S):
+                    return f"run {run['id']} asked it at {started[11:16]} UTC"
+    except Exception as exc:                                      # noqa: BLE001
+        return f"the other runs could not be checked ({type(exc).__name__})"
+    return ""
+
+
+def _github_get(path: str) -> dict:
+    import requests
+    token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN") or ""
+    resp = requests.get(f"https://api.github.com/{path}", timeout=30,
+                        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+    resp.raise_for_status()
+    return resp.json()
+
+
 # -- the parse ---------------------------------------------------------------------------------------------------
 
 def _refuse(*_args):
@@ -252,6 +311,10 @@ def run(cfg, session=None, workdir: Path | None = None) -> Summary:
     s = Summary()
     if not bool(cfg.get("feeds.workable_xml.enabled", True)):
         s.why = "disabled in config"
+        return s
+    wait = too_soon()
+    if wait:
+        s.why = f"asked at most once an hour: {wait}"
         return s
     flt = resolve_filter(cfg)
     tmp = Path(tempfile.mkdtemp(dir=workdir)) / "workable.xml.gz"
