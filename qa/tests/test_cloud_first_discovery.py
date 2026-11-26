@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -263,3 +263,42 @@ def test_board_names_and_searched_titles_never_reach_the_public_job_log(tmp_path
     seen = capfd.readouterr()
     assert "secret" not in seen.out + seen.err
     logging.basicConfig(force=True)                        # leave logging as other tests expect it
+
+
+# -- window identity: decided when a run STARTS, from the runs that actually read (26 Nov 2026) -------------------
+
+def test_window_identity_across_delays_queues_and_replaced_duplicates():
+    one = datetime(2026, 11, 27, 7, 0, tzinfo=UTC)            # 1:00 CST
+    eleven = datetime(2026, 11, 27, 17, 0, tzinfo=UTC)        # 11:00 CST
+    # Delayed: GitHub's 16:23 UTC line, 40 min late (11:03 CST, as on 26 Nov), reads the 11:00 window it fell into.
+    d = ds.decide("schedule", "", datetime(2026, 11, 26, 17, 3, tzinfo=UTC), [])
+    assert d["go"] and d["slot"] == "2026-11-26 11:00 CST"
+    # A run queued behind a long 1:00 read and starting only after 11:00 serves 11:00 -- the window is taken when it
+    # starts, not when it was queued -- and the 1:00 read beside it does not stop it.
+    read_1 = [{"id": 1, "created": one, "scraped": True}]
+    d = ds.decide("workflow_dispatch", "scheduler", eleven + timedelta(minutes=4), read_1)
+    assert d["go"] and d["slot"].endswith("11:00 CST")
+    # A queued duplicate replaced by a newer one (GitHub cancels the older PENDING run of the group): the newer one
+    # still reads its window, because cancelled runs never count as a read.
+    cancelled = []                                            # discovery_slot.others_in drops conclusion=cancelled
+    assert ds.decide("workflow_dispatch", "scheduler", eleven + timedelta(minutes=2), cancelled)["go"]
+    # Its duplicate, starting after it read, stands down: no second read of the same window.
+    read_11 = read_1 + [{"id": 2, "created": eleven, "scraped": True}]
+    assert not ds.decide("schedule", "", eleven + timedelta(minutes=23), read_11)["go"]
+    # A pending run of the NEXT window is never stopped by the earlier window's read.
+    assert ds.decide("schedule", "", one + timedelta(days=1, minutes=23), read_11)["go"]
+
+
+def test_the_concurrency_group_never_cancels_a_running_read():
+    import yaml
+    wf = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github" / "workflows" / "daily-scrape.yml").read_text())
+    assert wf["concurrency"]["cancel-in-progress"] is False
+
+
+def test_cancelled_runs_are_never_counted_as_a_read(monkeypatch):
+    runs = {"workflow_runs": [{"id": 10, "conclusion": "cancelled", "created_at": "2026-11-27T17:00:05Z"},
+                              {"id": 11, "conclusion": None, "created_at": "2026-11-27T17:00:09Z"}]}
+    jobs = {"jobs": [{"name": "scrape greenhouse-1of3", "conclusion": "skipped"}]}
+    monkeypatch.setattr(ds, "_gh", lambda path: runs if "/runs?" in path else jobs)
+    got = ds.others_in("o/r", datetime(2026, 11, 27, 16, 50, tzinfo=UTC), "12")
+    assert [r["id"] for r in got] == [11] and not got[0]["scraped"]
