@@ -152,3 +152,15 @@ def test_run_109_reproduced_partial_not_a_technical_failure():
                       window_start=do._window_start("2026-11-26 11:00 CST"))
     assert "84.0%" in page and "4,645 boards" in page and "Deadline | met (due 19:00 UTC)" in page
     assert "COMPLETE —" not in page
+
+
+def test_with_no_saved_database_at_all_the_merge_starts_from_the_results_instead_of_crashing(tmp_path):
+    """26 Nov 2026 replay: the cache restored nothing, data/ did not exist, and the merge crashed (exit 1)."""
+    base = seed(tmp_path / "base.db", BASE_BOARDS)
+    healthy_world()
+    plan = plan_for(base)
+    parts = run_all(tmp_path, base, plan)
+    missing = tmp_path / "fresh-checkout" / "data" / "jobs.db"            # no folder, no file
+    cov = dm.merge(missing, plan, parts)
+    assert missing.is_file() and cov["status"] == "COMPLETE"
+    assert do.decide(cov, 0, OK_COMPLETE)[0] == do.COMPLETE

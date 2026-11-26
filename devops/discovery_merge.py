@@ -251,6 +251,9 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
     as it was, only when the merged copy itself cannot be made sound."""
     reports = reports or {}
     base = Path(base)
+    # No saved copy at all -- the cache restored nothing, so not even its folder exists (found by the 26 Nov 2026
+    # replay): the cold start below makes the database from the results, rather than failing to open a file there.
+    base.parent.mkdir(parents=True, exist_ok=True)
     work = base.with_name(base.name + ".merging")
     if work.exists():
         work.unlink()                                   # an interrupted earlier merge: its copy is not used
