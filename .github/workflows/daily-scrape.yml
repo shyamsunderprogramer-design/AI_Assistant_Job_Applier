@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "66e1ff1bf6d17862b520702dfde70cbda21334a7"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "9350658e4b2d0acb23e8c5e22ac8c1d7fc9efbad"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -128,7 +128,6 @@ jobs:
       plan_id: ${{ steps.plan.outputs.plan_id }}
       budget: ${{ steps.plan.outputs.budget }}
       started: ${{ steps.plan.outputs.started }}
-      slot: ${{ steps.slot.outputs.slot }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -478,7 +477,6 @@ jobs:
           cat merge.txt >> "$GITHUB_STEP_SUMMARY"
           grep '^complete=' merge.txt >> "$GITHUB_OUTPUT" || true
           echo "merged=$([ $code -eq 0 ] || [ $code -eq 3 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
 
       - name: Save the job database
         # Whatever was merged: boards that were read are newer, the rest as before.
@@ -489,7 +487,6 @@ jobs:
           key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Lock the database for collection
-        id: lock
         if: steps.merge.outputs.merged == 'true'
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
@@ -499,7 +496,6 @@ jobs:
           ls -lh jobs.db.enc
 
       - name: Upload it (a complete refresh)
-        id: complete_upload
         if: steps.merge.outputs.complete == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -509,7 +505,6 @@ jobs:
           overwrite: true
 
       - name: Build the verified result
-        id: build
         # Complete or not: the database, the plan, and every board's outcome, signed and locked as one file
         # (devops/discovery_result.py, contract v1). The Mac checks all of it and takes only the boards read. Its status is the coverage's -- a PARTIAL result is never complete.
         if: steps.merge.outputs.merged == 'true'
@@ -532,7 +527,6 @@ jobs:
           ls -lh discovery-result.tar.enc
 
       - name: Upload the verified result
-        id: upload
         if: steps.merge.outputs.merged == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -557,24 +551,10 @@ jobs:
         run: |
           python devops/actions_summary.py >> "$GITHUB_STEP_SUMMARY" || true
 
-      - name: Discovery outcome (COMPLETE, PARTIAL or FAILED)
-        # devops/discovery_outcome.py, from the steps' own outcomes and the coverage report. COMPLETE: every board
-        # read in full. PARTIAL: some boards not read (refused, rate-limited, deferred, failed at the board), all
-        # accounted for, the verified result merged, checked, locked and published -- a warning, not a failure, and
-        # never called a complete refresh; its unread boards stay for the next runs. FAILED (exit 1): the merge
-        # stopped, a partition delivered nothing usable, no board was read, the coverage does not account for every
-        # board, or locking, building and verifying, or publishing failed.
-        if: always()
-        env:
-          SLOT: ${{ needs.plan.outputs.slot }}
-          TRIGGER: ${{ github.event_name }}${{ github.event.inputs.trigger && format(' ({0})', github.event.inputs.trigger) || '' }}
-          STARTED: ${{ needs.plan.outputs.started }}
-          MERGE_CODE: ${{ steps.merge.outputs.code }}
-          LOCK: ${{ steps.lock.outcome }}
-          BUILD: ${{ steps.build.outcome }}
-          UPLOAD: ${{ steps.upload.outcome }}
-          COMPLETE_UPLOAD: ${{ steps.complete_upload.outcome }}
+      - name: Fail unless this is a complete refresh
+        # A run that did not read every board in full ends here. Its verified result is published all the
+        # same and the Mac takes it; the boards not read are asked again by the next cloud runs.
+        if: steps.merge.outputs.complete != 'true'
         run: |
-          python -m devops.discovery_outcome --coverage coverage.json --merge-code "$MERGE_CODE" \
-            --lock "$LOCK" --build "$BUILD" --upload "$UPLOAD" --complete-upload "$COMPLETE_UPLOAD" \
-            --result discovery-result.tar.enc --slot "$SLOT" --trigger "$TRIGGER" --started "$STARTED"
+          echo "::error::Not a complete refresh: see the coverage report. Its verified result is discovery-result-v1."
+          exit 1
