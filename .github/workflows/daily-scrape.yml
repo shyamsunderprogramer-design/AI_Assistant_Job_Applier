@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "12ae1b9170c6b04949ab902e57d2737edb66f186"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "2beda2ff6bc7822f03e66c295e615cf377692e8d"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -334,6 +334,9 @@ jobs:
     if: needs.plan.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read            # Workable's feed: has another run asked it within the hour?
     steps:
       - uses: actions/checkout@v4
         with:
@@ -378,6 +381,7 @@ jobs:
           # A dedicated job-alert mailbox only, opened read-only -- never the person's own mailbox.
           MAIL_ADDRESS: ${{ secrets.ALERTS_MAIL_ADDRESS }}
           MAIL_APP_PASSWORD: ${{ secrets.ALERTS_MAIL_APP_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: python -u -m devops.discovery_feeds --out out
 
       - name: Lock its result
