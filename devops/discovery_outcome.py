@@ -1,0 +1,203 @@
+"""The run's outcome, from what its steps actually did: COMPLETE, PARTIAL or FAILED (Nov 2026).
+
+Until 26 Nov 2026 the join ended with one step, "Fail unless this is a complete refresh", that exited 1 whenever the
+merge did not say complete=true. That one condition covered two different things: a run that read most boards, merged,
+verified, locked and published a usable result (PARTIAL -- e.g. run #109: Workday, Workable and Jobvite deferred by
+their sites' limits, 84.0% read), and a run whose merge stopped and published nothing. Both said "Not a complete
+refresh", so a usable partial result looked like a technical failure, and a real failure was described as mere
+incompleteness. Now each is named, from the steps' own outcomes and the coverage report:
+
+  COMPLETE  every board read in full; merged, verified, locked and published.               Exit 0.
+  PARTIAL   some boards not read (refused, rate-limited, deferred, failed at the board) -- every board still
+            accounted for; merged, verified (devops/discovery_result.py build refuses to publish what the Mac would
+            refuse), locked and published. Warnings say what was not read; those boards stay for recovery.
+            Exit 0: incomplete coverage alone is not a technical failure. Never called complete.
+  FAILED    the merge stopped; the coverage report is missing or does not account for every planned board; no
+            board was read at all; a partition's machine delivered no usable result; or locking, building/verifying
+            or publishing failed. Exit 1. (A failed partition's verified result of the OTHER partitions is still
+            published and safe for the Mac; the run is failed all the same, because a machine of it failed.)
+
+Counts only: this writes to the public job summary.
+
+    python -m devops.discovery_outcome --coverage coverage.json --merge-code 3 --lock success --build success \
+        --upload success --complete-upload skipped --result discovery-result.tar.enc --slot "..." --trigger schedule
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+COMPLETE, PARTIAL, FAILED = "COMPLETE", "PARTIAL", "FAILED"
+DEADLINE = timedelta(hours=2)            # results due two hours after the window starts (3:00, 13:00 Central)
+
+
+def decide(coverage: dict | None, merge_code: int | None, steps: dict) -> tuple[str, list[str], list[str]]:
+    """(status, why it FAILED, what a PARTIAL run left unread). `steps`: lock, build, upload, complete_upload ->
+    the GitHub step outcome (success, failure, cancelled, skipped, or '' when it did not run)."""
+    failed: list[str] = []
+    if merge_code not in (0, 3):
+        failed.append(f"the merge stopped (exit {merge_code}): nothing was merged or published"
+                      if merge_code is not None else "the merge did not run")
+    if not coverage:
+        failed.append("there is no coverage report")
+        return FAILED, failed, []
+    t = coverage.get("totals") or {}
+    planned = int(t.get("boards_planned") or 0)
+    if not planned:
+        failed.append("the plan held no boards")
+    if not t.get("reconciles", False):
+        failed.append("the coverage report does not account for every planned board")
+    if planned and int(t.get("boards_scanned_in_full") or 0) + int(t.get("boards_read_in_part") or 0) == 0:
+        failed.append("no board was read at all: nothing usable")
+    lost = [p for p in coverage.get("partitions") or [] if p.get("reason") and p.get("status") == "FAILED"]
+    if lost:
+        failed.append(f"{len(lost)} partition(s) delivered no usable result (their boards stay for recovery)")
+    complete = merge_code == 0
+    if complete != (coverage.get("status") == COMPLETE):
+        failed.append("the merge's exit and its coverage report disagree")
+    for step, what in (("lock", "locking the database"), ("build", "building and verifying the result"),
+                       ("upload", "publishing the verified result")):
+        if merge_code in (0, 3) and steps.get(step) != "success":
+            failed.append(f"{what} did not succeed ({steps.get(step) or 'did not run'})")
+    if complete and steps.get("complete_upload") != "success":
+        failed.append(f"publishing the complete-refresh copy did not succeed ({steps.get('complete_upload') or 'did not run'})")
+    if failed:
+        return FAILED, failed, []
+    if complete:
+        return COMPLETE, [], []
+    unread = []
+    for site, p in sorted((coverage.get("providers") or {}).items()):
+        c = p.get("counts") or {}
+        missing = int(p.get("boards") or 0) - int(c.get("complete") or 0)
+        if missing:
+            unread.append(f"{site}: {c.get('complete', 0):,} of {p.get('boards', 0):,} boards read in full "
+                          f"({c.get('partial', 0)} in part, {c.get('failed', 0)} failed, {c.get('rate_limited', 0)} "
+                          f"refused/rate-limited, {p.get('deferred', 0)} deferred)")
+    return PARTIAL, [], unread
+
+
+def _minutes(a: str | None, b: str | None) -> float | None:
+    try:
+        ta = datetime.fromisoformat(str(a).replace("Z", "+00:00"))
+        tb = datetime.fromisoformat(str(b).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round((tb - ta).total_seconds() / 60, 1)
+
+
+def summary(status: str, failed: list, unread: list, coverage: dict | None, *, slot: str = "", trigger: str = "",
+            started: str = "", result_bytes: int | None = None, steps: dict | None = None,
+            now: datetime | None = None, window_start: datetime | None = None) -> str:
+    """The job summary (Markdown, counts only)."""
+    now = now or datetime.now(timezone.utc)
+    steps = steps or {}
+    t = (coverage or {}).get("totals") or {}
+    head = {COMPLETE: "COMPLETE — verified result published, every board read in full",
+            PARTIAL: "PARTIAL — verified usable result published; coverage incomplete (not a complete refresh)",
+            FAILED: "FAILED — see the reasons below"}[status]
+    lines = [f"## Discovery outcome: {head}", ""]
+    if failed:
+        lines += [f"- **Failed:** {w}" for w in failed] + [""]
+    rows = [("Discovery window", slot or "—"), ("Started by", trigger or "—")]
+    if t:
+        new = sum(int((p.get("merged") or {}).get("added") or 0) for p in (coverage or {}).get("partitions") or [])
+        feeds = (coverage or {}).get("feeds") or {}
+        rows += [("Boards planned", f"{t.get('boards_planned', 0):,}"),
+                 ("Read in full", f"{t.get('boards_scanned_in_full', 0):,}"),
+                 ("Read in part", f"{t.get('boards_read_in_part', 0):,}"),
+                 ("Failed", f"{t.get('boards_failed', 0):,}"),
+                 ("Refused / rate-limited", f"{t.get('boards_rate_limited', 0):,}"),
+                 ("Deferred (site quota / no internet)", f"{t.get('boards_deferred_quota', 0):,} / "
+                                                         f"{t.get('boards_deferred_network', 0):,}"),
+                 ("Out of time / not attempted", f"{t.get('boards_timed_out', 0):,} / {t.get('boards_not_attempted', 0):,}"),
+                 ("Coverage", f"{t.get('coverage_pct', 0)}%"),
+                 ("New postings (boards / job-search sites)", f"{new:,} / {int(feeds.get('added') or 0):,}"),
+                 ("Merge and checks", f"{t.get('merge_seconds', '—')} s"),
+                 ("Still to read (cloud recovery)", f"{t.get('boards_needing_recovery', 0):,} boards")]
+    if result_bytes is not None:
+        rows.append(("Verified result (encrypted)", f"{result_bytes / 1e6:,.1f} MB"))
+    rows += [("Locked (encrypted)", steps.get("lock") or "did not run"),
+             ("Published", steps.get("upload") or "did not run")]
+    total = _minutes(started, now.isoformat()) if started else None
+    if total is not None:
+        rows.append(("Total so far", f"{total} min"))
+    if window_start is not None:
+        due = window_start + DEADLINE
+        rows.append(("Deadline", f"{'met' if status != FAILED and now <= due else 'MISSED'} "
+                                 f"(due {due:%H:%M} UTC)"))
+    lines += ["| | |", "|---|---|"] + [f"| {k} | {v} |" for k, v in rows] + [""]
+    parts = [(p.get("id"), p.get("status"), p.get("minutes")) for p in (coverage or {}).get("partitions") or []]
+    if parts:
+        lines += ["| Partition | Status | Minutes |", "|---|---|---|"]
+        lines += [f"| {pid} | {st} | {m if m is not None else '—'} |" for pid, st, m in parts] + [""]
+    if unread:
+        lines += ["**Not read in full this run** (their boards stay for the next runs):", ""]
+        lines += [f"- {u}" for u in unread] + [""]
+    return "\n".join(lines)
+
+
+def _window_start(slot: str) -> datetime | None:
+    """'2026-11-26 11:00 CST' -> that moment in UTC."""
+    if not slot:
+        return None
+    from zoneinfo import ZoneInfo
+    try:
+        local = datetime.strptime(" ".join(slot.split()[:2]), "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo("America/Chicago"))
+    except ValueError:
+        return None
+    return local.astimezone(timezone.utc)
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("--coverage", type=Path, required=True)
+    ap.add_argument("--merge-code", default="")
+    for step in ("lock", "build", "upload", "complete-upload"):
+        ap.add_argument(f"--{step}", default="")
+    ap.add_argument("--result", type=Path, default=None)
+    ap.add_argument("--slot", default="")
+    ap.add_argument("--trigger", default="")
+    ap.add_argument("--started", default="")
+    args = ap.parse_args(argv)
+    coverage = None
+    if args.coverage.is_file():
+        try:
+            coverage = json.loads(args.coverage.read_text())
+        except ValueError:
+            coverage = None
+    code = int(args.merge_code) if str(args.merge_code).strip().lstrip("-").isdigit() else None
+    steps = {"lock": args.lock, "build": args.build, "upload": args.upload, "complete_upload": args.complete_upload}
+    status, failed, unread = decide(coverage, code, steps)
+    size = args.result.stat().st_size if args.result and args.result.is_file() else None
+    text = summary(status, failed, unread, coverage, slot=args.slot, trigger=args.trigger, started=args.started,
+                   result_bytes=size, steps=steps, window_start=_window_start(args.slot))
+    page = os.environ.get("GITHUB_STEP_SUMMARY")
+    if page:
+        with open(page, "a") as fh:
+            fh.write(text + "\n")
+    else:
+        print(text)
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as fh:
+            fh.write(f"status={status}\n")
+    # Annotations: on the run's page, beside the summary.
+    for why in failed:
+        print(f"::error::Discovery FAILED: {why}")
+    if status == PARTIAL:
+        t = (coverage or {}).get("totals") or {}
+        print(f"::warning::Discovery PARTIAL (not a complete refresh): {t.get('boards_scanned_in_full', 0):,} of "
+              f"{t.get('boards_planned', 0):,} boards read in full ({t.get('coverage_pct', 0)}%); the verified result "
+              f"is published; {t.get('boards_needing_recovery', 0):,} boards stay for the next runs.")
+        for u in unread:
+            print(f"::warning::Not read in full: {u}")
+    return 1 if status == FAILED else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

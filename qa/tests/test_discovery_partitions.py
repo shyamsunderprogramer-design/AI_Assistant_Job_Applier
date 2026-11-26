@@ -875,8 +875,12 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
     # The final artifact appears only when every partition delivered; a partial one has its own name.
     names = [s["with"]["name"] for s in join["steps"] if "upload-artifact" in str(s.get("uses", ""))]
     assert "jobs-db-encrypted" in names and "discovery-result-v1" in names
+    # The last step names the outcome (devops/discovery_outcome.py): it always runs, and it fails the run only for a
+    # genuine failure -- a partial result, verified and published, is a warning (26 Nov 2026, run #109).
     last = join["steps"][-1]
-    assert last["if"] == "steps.merge.outputs.complete != 'true'" and "exit 1" in last["run"]
+    assert last["if"] == "always()" and "devops.discovery_outcome" in last["run"]
+    assert not any("complete != 'true'" in str(st.get("if", "")) and "exit 1" in st.get("run", "") for st in join["steps"])
+    assert all(not st.get("continue-on-error") for st in join["steps"] if st.get("id") in ("lock", "build", "upload"))
     # Nothing unlocked travels: every uploaded file is .enc, or a counts-only report.
     for j in jobs.values():
         for s in j["steps"]:
