@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "332c9e78f3a0b81e3aefb3d457b5a48b17f5712f"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "597253db4105fcdd61a7c0ba9178a2a791169b9f"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -250,7 +250,7 @@ jobs:
     strategy:
       # Each partition stands on its own: one failing never cancels the others.
       fail-fast: false
-      max-parallel: 16
+      max-parallel: 19     # experiment (26 Nov 2026): 20 partitions; GitHub runs 20 jobs at once, the feeds job is one
       matrix:
         part: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: scrape ${{ matrix.part.id }}
