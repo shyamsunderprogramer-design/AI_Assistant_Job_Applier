@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "66e1ff1bf6d17862b520702dfde70cbda21334a7"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "332c9e78f3a0b81e3aefb3d457b5a48b17f5712f"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -109,6 +109,11 @@ on:
         description: "Run only these partitions or sites, comma-separated (the rest are NOT ATTEMPTED; the run fails)"
         required: false
         default: ""
+
+# A run started by hand is a development (or maintenance) run: named so in the Actions list, it always runs, and it
+# is never counted as a scheduled window's read (devops/discovery_slot.py DEV_MARK). The outside scheduler and
+# GitHub's schedule keep the plain name.
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.trigger != 'scheduler' && 'Daily scrape [development run]' || 'Daily scrape' }}
 
 concurrency:
   # Never let two scrapes touch the same cached database.
