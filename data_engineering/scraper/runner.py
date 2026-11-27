@@ -79,6 +79,9 @@ class RunSummary:
     # Mac can close what the board no longer lists (devops/discovery_inventory.py). Only a COMPLETE outcome has one:
     # {"ids": [...], "at": ISO time (UTC) the listing was read}.
     inventory: dict = field(default_factory=dict)
+    # Boards a host turned away and that were asked again inside this run (26 Nov 2026): deferred at first, read
+    # on the retry (recovered), refused again (still_refused), and the seconds spent waiting for the cool-off.
+    retry: dict = field(default_factory=lambda: {"deferred": 0, "recovered": 0, "still_refused": 0, "waited_s": 0.0})
     network_down: bool = False          # the run stopped because nothing answered at all (NetworkWatch)
 
 
@@ -181,10 +184,13 @@ def run_scrape(cfg, sites=None, skip_sites=None) -> RunSummary:
 
 def scrape_companies(cfg, companies: list[CompanyRef], *, workers: int | None = None,
                      deadline: float | None = None, client: PoliteClient | None = None,
-                     run_id: str | None = None, watch: NetworkWatch | None = None) -> RunSummary:
+                     run_id: str | None = None, watch: NetworkWatch | None = None,
+                     retry_in_run: bool = True) -> RunSummary:
     """Read exactly these boards. `deadline` (time.monotonic()) is a time budget: no board is started after
     it, and no rate-limit wait runs past it -- those boards are recorded not_attempted or rate_limited, never as
-    read. Without one this is the full run as it always was (`run_scrape`)."""
+    read. Without one this is the full run as it always was (`run_scrape`). `retry_in_run` False: a board a host
+    turned away is not waited for and asked again in this run -- it stays rate_limited and is read first by a later
+    run (the least recently read go first), its host's cool-off kept (Workday, which refuses every retry)."""
     client = client or PoliteClient(HttpSettings.from_config(cfg))
     scrapers = build_scrapers(cfg, client)
     job_filter = resolve_filter(cfg)
@@ -255,10 +261,10 @@ def scrape_companies(cfg, companies: list[CompanyRef], *, workers: int | None = 
     max_wait = 20 * 60
     if deadline is not None:
         max_wait = max(0.0, min(max_wait, deadline - time.monotonic() - 60))
-    if watch.down:
-        max_wait = 0.0                    # no internet: no wait for a host to cool off either
+    if watch.down or not retry_in_run:
+        max_wait = 0.0                    # no internet, or no retry in this run: no wait for a cool-off either
     _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty, workers,
-                    max_wait=max_wait, deadline=deadline, watch=watch)
+                    max_wait=max_wait, deadline=deadline, watch=watch, retry=retry_in_run)
     if watch.down:
         summary.network_down = True
         for key, (status, error) in list(summary.outcomes.items()):
@@ -285,11 +291,18 @@ def scrape_boards(cfg, refs: list[CompanyRef]) -> RunSummary:
 
 def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_after, close_on_empty,
                     workers, max_wait: float = 20 * 60, deadline: float | None = None,
-                    watch: "NetworkWatch | None" = None) -> None:
-    """Ask the boards a host turned away once more, after its cool-off ends."""
+                    watch: "NetworkWatch | None" = None, retry: bool = True) -> None:
+    """Ask the boards a host turned away once more, after its cool-off ends. `retry` False: never in this run --
+    they stay rate-limited (a later run reads them first), and no runner time is spent waiting."""
     if not summary.deferred:
         return
     again, summary.deferred = summary.deferred, []
+    if not retry:
+        log.info("%d board(s) were rate-limited; not asked again in this run (left for the next)", len(again))
+        for company in again:
+            summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
+        summary.retry["still_refused"] += len(again)
+        return
     hosts: dict[str, list] = {}
     for company in again:
         hosts.setdefault(_host_of(scrapers[company.source], company), []).append(company)
@@ -300,10 +313,12 @@ def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_afte
                  "rate-limited", len(again))
         for company in again:
             summary.outcomes[(company.source, company.slug)] = (RATE_LIMITED, "RateLimited")
+        summary.retry["still_refused"] += len(again)
         return
     wait = cooling
     log.info("%d board(s) were rate-limited; asking again in %.0f min", len(again), wait / 60)
     time.sleep(wait)
+    summary.retry["waited_s"] = round(summary.retry["waited_s"] + wait, 1)
 
     def walk(host_companies: list) -> None:
         for company in host_companies:
@@ -320,6 +335,8 @@ def _retry_deferred(summary, scrapers, client, job_filter, lock, deactivate_afte
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(walk, hosts.values()))
+    summary.retry["still_refused"] += sum(
+        1 for c in again if (summary.outcomes.get((c.source, c.slug)) or (None,))[0] == RATE_LIMITED)
 
 
 def _is_in_memory() -> bool:
@@ -377,6 +394,7 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
                 # Not a failure yet: asked again once the host has cooled off.
                 summary.companies_attempted -= 1
                 summary.deferred.append(company)
+                summary.retry["deferred"] += 1
             else:
                 _log_failure(summary, company, "RateLimited", str(exc), started, deactivate_after)
         return
@@ -427,6 +445,8 @@ def _scrape_one(company, scrapers, job_filter, summary, lock,
         summary.jobs_reopened += lifecycle.reopened
 
         _log_success(summary, company, got.detail["listed"], len(kept), new_count, started)
+        if retrying:
+            summary.retry["recovered"] += 1
         done = got.detail["listing"] == "complete" and got.detail["pending"] == 0
         summary.outcomes[(company.source, company.slug)] = (COMPLETE if done else PARTIAL, "")
         summary.details[(company.source, company.slug)] = dict(got.detail)

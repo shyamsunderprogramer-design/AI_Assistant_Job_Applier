@@ -1,0 +1,70 @@
+"""A site's request-rate cap across all its readers, and in-run retries measured (26 Nov 2026). Offline."""
+
+from __future__ import annotations
+
+import time
+
+from data_engineering.scraper import runner
+from data_engineering.scraper.http_client import HttpSettings, PoliteClient
+from devops import discovery_plan as dp
+from devops import discovery_worker as dw
+from qa.tests.test_discovery_partitions import (  # noqa: F401 -- `offline`: the autouse no-network fixture
+    BASE_BOARDS, CALLS, WORLD, Cfg, healthy_world, offline, plan_for, run_partition, seed)
+
+
+def test_the_site_wide_interval_spaces_requests_whatever_their_hosts():
+    c = PoliteClient(HttpSettings(user_agent="test", min_delay_seconds=0.0, jitter_seconds=0.0, min_interval_seconds=0.2,
+                                  respect_robots=False))
+    t0 = time.monotonic()
+    for host in ("a.example", "b.example", "c.example"):
+        c._wait_turn(host)                      # three different hosts: no per-host gap applies
+    assert time.monotonic() - t0 >= 0.39         # two intervals of 0.2 between three requests
+
+
+def test_the_plan_gives_each_reader_its_share_of_the_sites_cap():
+    rows = [{"source": "greenhouse", "slug": f"g{i}", "name": "", "board_url": "", "origin": "", "est_s": 2.0}
+            for i in range(90)]
+    lanes = {"lanes": {"greenhouse": {"partitions": 9, "max_partitions": 9, "budget": 9, "one_host": True,
+                                      "max_rps": 5.0},
+                       "workday": {"in_run_retry": False}}}
+    plan = dp.make_plan(rows + [{"source": "workday", "slug": "w1", "name": "", "board_url": "", "origin": "",
+                                 "est_s": 2.0}], lanes)
+    gh = [p for p in plan["partitions"] if p["provider"] == "greenhouse"]
+    assert len(gh) == 9 and all(p["min_interval_s"] == 1.8 for p in gh)          # 9 readers x 1/1.8 s = 5 a second
+    wd = [p for p in plan["partitions"] if p["provider"] == "workday"]
+    assert wd and all(p["in_run_retry"] is False for p in wd)
+
+
+def test_refused_boards_are_counted_and_recovered_ones_too(tmp_path, monkeypatch):
+    base = seed(tmp_path / "base.db", BASE_BOARDS)
+    healthy_world()
+    WORLD.update({w: 429 for w in ("w1", "w2", "w3", "w4", "w5")})
+    plan = plan_for(base)
+    pid = next(p["id"] for p in plan["partitions"] if p["provider"] == "workday")
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)                 # the cool-off wait, not slept here
+    part = run_partition(tmp_path, base, plan, pid, cfg=Cfg(**{"http.rate_limit_cooldown_seconds": 1}))
+    import json
+    rep = json.loads((part.parent / "report.json").read_text())
+    r = rep["retry"]
+    assert r["deferred"] >= 1 and r["recovered"] == 0 and r["still_refused"] == r["deferred"]
+    assert rep["requests"] >= r["deferred"]
+
+
+def test_with_no_in_run_retry_refused_boards_stay_for_the_next_run_and_no_time_is_waited(tmp_path, monkeypatch):
+    base = seed(tmp_path / "base.db", BASE_BOARDS)
+    healthy_world()
+    WORLD.update({w: 429 for w in ("w1", "w2", "w3", "w4", "w5")})
+    plan = plan_for(base)
+    for p in plan["partitions"]:
+        if p["provider"] == "workday":
+            p["in_run_retry"] = False
+    pid = next(p["id"] for p in plan["partitions"] if p["provider"] == "workday")
+    slept = []
+    monkeypatch.setattr(runner.time, "sleep", lambda s: slept.append(s))
+    import json
+    part = run_partition(tmp_path, base, plan, pid)
+    rep = json.loads((part.parent / "report.json").read_text())
+    assert rep["retry"]["recovered"] == 0 and rep["retry"]["waited_s"] == 0 and not [s for s in slept if s > 60]
+    assert rep["counts"]["rate_limited"] >= 1 and rep["counts"]["complete"] == 0   # never called read
+    # Not excluded: they are the least recently read, so the next plan asks them first.
+    _ = dw

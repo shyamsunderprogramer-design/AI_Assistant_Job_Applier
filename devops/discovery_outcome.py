@@ -134,6 +134,26 @@ def summary(status: str, failed: list, unread: list, coverage: dict | None, *, s
         rows.append(("Deadline", f"{'met' if status != FAILED and now <= due else 'MISSED'} "
                                  f"(due {due:%H:%M} UTC)"))
     lines += ["| | |", "|---|---|"] + [f"| {k} | {v} |" for k, v in rows] + [""]
+    sites: dict = {}
+    for p in (coverage or {}).get("partitions") or []:
+        e = sites.setdefault(p.get("provider") or "?", {"parts": 0, "minutes": 0.0, "requests": 0, "refused": 0,
+                                                         "deferred": 0, "recovered": 0, "waited_s": 0.0})
+        r = p.get("retry") or {}
+        e["parts"] += 1
+        e["minutes"] = max(e["minutes"], float(p.get("minutes") or 0))
+        e["requests"] += int(p.get("requests") or 0)
+        e["refused"] += int(p.get("rate_limited_requests") or 0)
+        for k in ("deferred", "recovered"):
+            e[k] += int(r.get(k) or 0)
+        e["waited_s"] = max(e["waited_s"], float(r.get("waited_s") or 0))
+    if sites:
+        lines += ["| Site | Parts | Slowest (min) | Requests | Per second, all readers | Refused (429) | "
+                  "Deferred / recovered on retry | Longest cool-off wait |", "|---|---|---|---|---|---|---|---|"]
+        for site, e in sorted(sites.items()):
+            rate = e["requests"] / (e["minutes"] * 60) if e["minutes"] else 0
+            lines.append(f"| {site} | {e['parts']} | {e['minutes']:.1f} | {e['requests']:,} | {rate:.2f} | "
+                         f"{e['refused']:,} | {e['deferred']:,} / {e['recovered']:,} | {e['waited_s'] / 60:.1f} min |")
+        lines.append("")
     parts = [(p.get("id"), p.get("status"), p.get("minutes")) for p in (coverage or {}).get("partitions") or []]
     if parts:
         lines += ["| Partition | Status | Minutes |", "|---|---|---|"]

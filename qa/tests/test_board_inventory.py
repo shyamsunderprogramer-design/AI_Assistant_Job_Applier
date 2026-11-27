@@ -314,3 +314,17 @@ def test_a_result_from_before_inventories_reconciles_nothing(tmp_path):
     db = tmp_path / "old.db"
     sqlite3.connect(db).execute("CREATE TABLE jobs (id INTEGER)").connection.close()
     assert inv.load(db, RESULT, CHECKED) == ({}, {})
+
+
+def test_an_empty_page_from_a_site_read_from_its_html_never_closes_even_seen_twice(tmp_path):
+    c = mac_db(tmp_path, [("gone", 1, "Not Applied", OLD_SEEN, None, None)])
+    jz = {("jazzhr", "acme"): inv.Inventory("jazzhr", "acme", "900-1-jazzhr-1of1", T0, set(), set(),
+                                             T0 - timedelta(hours=10))}
+    c.execute("UPDATE jobs SET source = 'jazzhr'")
+    p = inv.plan(c, jz, set())
+    assert not p.close and len(p.held) == 1 and "HTML" in p.held[0][3]
+    # The same from a data API, empty in two independent complete reads: closes.
+    c.execute("UPDATE jobs SET source = 'greenhouse'")
+    gh = {("greenhouse", "acme"): inv.Inventory("greenhouse", "acme", "900-1-greenhouse-1of9", T0, set(), set(),
+                                                 T0 - timedelta(hours=10))}
+    assert len(inv.plan(c, gh, set()).close) == 1

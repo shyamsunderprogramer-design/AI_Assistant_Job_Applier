@@ -311,7 +311,8 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
             entry = {"id": pid, "provider": part["provider"], "boards": len(part["boards"]), "status": status,
                      "counts": counts, "merged": did, "reason": why or ""}
             meta = found.get("meta") or {}
-            for key in ("started_at", "finished_at", "minutes", "rate_limited_requests", "provider_rate_limits"):
+            for key in ("started_at", "finished_at", "minutes", "rate_limited_requests", "provider_rate_limits",
+                        "requests", "retry", "min_interval_s"):
                 if key in meta:
                     entry[key] = meta[key]
             coverage["partitions"].append(entry)

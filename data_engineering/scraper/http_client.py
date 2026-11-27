@@ -78,6 +78,10 @@ class HttpSettings:
     provider_groups: dict[str, list[str]] = field(default_factory=lambda: {
         "workday": ["myworkdayjobs.com", "myworkdaysite.com"]})
     provider_trip_hosts: int = 3
+    # The least time between ANY two requests of this client, whatever their hosts (26 Nov 2026): how a site's
+    # total request rate is held under its cap across all its readers and runners (devops/discovery_plan.py gives
+    # each reader its share: readers / max_rps). 0: only the per-host gap, as before.
+    min_interval_seconds: float = 0.0
 
     @classmethod
     def from_config(cls, cfg) -> "HttpSettings":
@@ -99,6 +103,7 @@ class HttpSettings:
                              (cfg.get("http.provider_groups", None) or {
                                  "workday": ["myworkdayjobs.com", "myworkdaysite.com"]}).items()},
             provider_trip_hosts=int(cfg.get("http.provider_trip_hosts", 3)),
+            min_interval_seconds=float(cfg.get("http.min_interval_seconds", 0) or 0),
         )
 
 
@@ -127,6 +132,10 @@ class PoliteClient:
         # For the run's report: how often each host and provider group turned us away (HTTP 429).
         self.rate_limit_events: dict[str, int] = {}
         self._rate_guard = threading.Lock()
+        # The site-wide share (HttpSettings.min_interval_seconds), and how many requests were sent, for the report.
+        self._any_lock = threading.Lock()
+        self._last_any: float | None = None
+        self.requests_made = 0
 
     # -- robots ------------------------------------------------------------
     def _robots_for(self, host_root: str) -> urllib.robotparser.RobotFileParser | None:
@@ -214,6 +223,14 @@ class PoliteClient:
                 if elapsed < delay:
                     time.sleep(delay - elapsed)
             self._last_request_at[host] = time.monotonic()
+        gap = self.settings.min_interval_seconds
+        if gap > 0:
+            with self._any_lock:
+                if self._last_any is not None:
+                    elapsed = time.monotonic() - self._last_any
+                    if elapsed < gap:
+                        time.sleep(gap - elapsed)
+                self._last_any = time.monotonic()
 
     # -- requests ----------------------------------------------------------
     def get(self, url: str, **kwargs) -> requests.Response:
@@ -311,6 +328,8 @@ class PoliteClient:
                 raise RateLimited(f"{group} is rate-limiting us; none of its hosts is asked until it cools off")
             self._wait_turn(host)
             try:
+                with self._rate_guard:
+                    self.requests_made += 1
                 resp = self._session.request(
                     method, url, timeout=self.settings.timeout_seconds, **kwargs
                 )

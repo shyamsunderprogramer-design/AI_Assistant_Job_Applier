@@ -58,6 +58,10 @@ DROP_MIN = 10                            # ... when the previous one named at le
 MASS_SHARE = 0.5                         # closing more than half a board's open postings here is suspicious ...
 MASS_MIN = 10                            # ... when it is at least this many
 SWITCH = "cloud.reconcile_inventory"     # config.yaml: true applies; otherwise every import only previews
+# Sites whose listing is read from their HTML page (data_engineering/scraper/jazzhr.py, jobvite.py), not a data API:
+# an empty page cannot be told from a page whose layout changed, and two reads of a changed page agree -- so an empty
+# listing from these never closes anything, however often it is seen (26 Nov 2026).
+HTML_LISTED = frozenset({"jazzhr", "jobvite"})
 
 
 class InventoryError(ValueError):
@@ -262,7 +266,10 @@ def plan(local: sqlite3.Connection, inventories: dict, cloud_keys: set) -> Plan:
         open_here = sum(1 for r in rows if r[2])
         gone = [r for r in rows if r[2] and r[1] not in inv.ids]
         why = ""
-        if not inv.ids:
+        never = not inv.ids and source in HTML_LISTED
+        if never:
+            why = "its page came back empty (read from HTML: never taken as empty)"
+        elif not inv.ids:
             why = "its listing came back empty"
         elif inv.prev_ids is not None and len(inv.prev_ids) >= DROP_MIN and len(inv.ids) < DROP_SHARE * len(inv.prev_ids):
             why = "its listing shrank to under half its previous read"
@@ -285,7 +292,7 @@ def plan(local: sqlite3.Connection, inventories: dict, cloud_keys: set) -> Plan:
             if seen_t is not None and seen_t >= inv.read_at:
                 p.newer_kept += 1                       # seen after this read: an older inventory decides nothing
                 continue
-            if why and (inv.prev_ids is None or ext in inv.prev_ids):
+            if never or (why and (inv.prev_ids is None or ext in inv.prev_ids)):
                 p.held.append((jid, key, status, why if inv.prev_ids is None else f"{why}; its previous read named it"))
                 b["held"] += 1
                 continue

@@ -98,6 +98,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
     outcomes: dict[tuple, tuple] = {}
     details: dict[tuple, dict] = {}
     inventory: dict[tuple, dict] = {}
+    retry: dict = {}
     client = None
     if part["provider"] not in SCRAPER_TYPES or not cfg.get(f"portals.{part['provider']}.enabled", True):
         for b in part["boards"]:
@@ -108,9 +109,15 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
         refs = [CompanyRef(name=b.get("name") or b["slug"], slug=b["slug"], source=b["source"])
                 for b in part["boards"] if (b["source"], b["slug"]) not in skipped]
         refs, later = rotation(refs, int(part.get("quota") or 0))
-        client = PoliteClient(HttpSettings.from_config(cfg))
+        settings = HttpSettings.from_config(cfg)
+        if part.get("min_interval_s"):
+            # This reader's share of its site's request-rate cap, across every reader of the site on every runner.
+            settings.min_interval_seconds = max(settings.min_interval_seconds, float(part["min_interval_s"]))
+        client = PoliteClient(settings)
         summary = scrape_companies(cfg, refs, workers=int(part.get("workers") or 1),
-                                   deadline=started + budget * 60, client=client, run_id=run_id)
+                                   deadline=started + budget * 60, client=client, run_id=run_id,
+                                   retry_in_run=bool(part.get("in_run_retry", True)))
+        retry = dict(summary.retry)
         summary_id = summary.run_id
         outcomes.update(summary.outcomes)
         details.update(summary.details)
@@ -130,6 +137,8 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
             "inventory": {f"{s}\t{slug}": v for (s, slug), v in inventory.items()
                           if outcomes.get((s, slug), (None,))[0] == "complete"},
             "rate_limited_requests": sum(v for k, v in events.items() if not k.startswith("provider:")),
+            "requests": int(getattr(client, "requests_made", 0) or 0), "retry": retry,
+            "min_interval_s": float(part.get("min_interval_s") or 0),
             "provider_rate_limits": {k.split(":", 1)[1]: v for k, v in events.items() if k.startswith("provider:")}}
 
 
@@ -214,7 +223,8 @@ def report(result: dict) -> dict:
             "postings": postings, "listings": listing,
             "started_at": result["started_at"], "finished_at": result["finished_at"], "minutes": result["minutes"],
             "budget_minutes": result["budget_minutes"], "rate_limited_requests": result["rate_limited_requests"],
-            "provider_rate_limits": result["provider_rate_limits"], "delivered": True}
+            "provider_rate_limits": result["provider_rate_limits"], "requests": result.get("requests", 0),
+            "retry": result.get("retry") or {}, "delivered": True}
 
 
 def failed_report(manifest: dict | None, partition_id: str, why: str) -> dict:

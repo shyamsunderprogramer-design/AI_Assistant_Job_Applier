@@ -228,6 +228,12 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
                                                     max(max(b["est_s"] for b in group),
                                                         sum(b["est_s"] for b in group) / w) / 60, 1),
                                "boards": group})
+            if lane.get("max_rps"):
+                # The site's request-rate cap, shared by all its readers on every runner: each reader (one client,
+                # however many worker threads) keeps at least partitions / max_rps seconds between any two requests.
+                partitions[-1]["min_interval_s"] = round(k / float(lane["max_rps"]), 3)
+            if lane.get("in_run_retry") is False:
+                partitions[-1]["in_run_retry"] = False
             if lane.get("queue_minutes"):
                 # The site's last MEASURED partition minutes (lanes file): what the matrix is ordered by, where the
                 # estimate from board times misleads (refusal waits, a quota, per-posting requests).
