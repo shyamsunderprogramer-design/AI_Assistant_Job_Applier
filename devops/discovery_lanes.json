@@ -1,15 +1,15 @@
 {
   "_about": "Discovery partitions (devops/discovery_plan.py). One lane per job site, never mixed. partitions: how many independent machines read that site's boards; max_partitions: the most it may ever be split into; budget: the most boards of that site read at the same moment across ALL its partitions (one_host sites: machines asking the one host at once, each keeping the 1.5 s gap). lane \"mac\": the site is read on the Mac, outside the cloud fetch (its boards are still counted in the coverage, as planned on the Mac). probe_quota: when the site's last cloud run was refused for at least probe_when_refused of its boards (HTTP 429 through every retry), only this many of its boards are asked, the least recently read first, until it answers again. quota: the most of the site's boards one cloud run asks, the least recently read first, so every board takes its turn; the rest are deferred by quota, never called failed. A site not listed gets one partition. queue_minutes: the site's last measured minutes per partition (26 Nov 2026 run 45903934655; Lever, Ashby and Jobvite: expected at their new splits) -- the order the matrix is started in, longest first, since only 19 partitions run at once. readers_per_runner: logical partitions run side by side on one GitHub runner (devops/discovery_plan.py bundles), never two of one site, each its own process and client.",
-  "_history": "Nov 2026, owner-approved: Greenhouse 3, Lever 2, Ashby 2 machines, one board at a time each (about 1.6, 1.1 and 1.1 requests a second to each host in all, watched for 429s, each machine backing off on its own); Workable and Jobvite on a quota (Workable refused nearly every request). 25 Nov 2026 (cloud-only discovery, owner's scope): Workday back in the cloud -- every site is read by the cloud, never by the Mac. Its boards were read from GitHub without refusal until mid-November, then refused nearly every time; while it refuses, a probe of its least recently read boards is asked each run. Time budget 90 minutes: the run starts at 1:00 or 11:00 Central and must be published within two hours. 26 Nov 2026 (Development Mode, owner-approved): Greenhouse 6 machines made the baseline after the measured run (22.4 min, no 429s, same coverage). Experiments, each kept only if measured better: Lever 4 and Ashby 4 machines (one board at a time each, about 2x their earlier request rates), Jobvite every board on 3 machines instead of 150 a run on one (it refused nothing). 26 Nov 2026 run 45909763192: Lever 4 (11.8-12.0 min, 0 refusals) and Ashby 4 (12.0-12.2 min, 0 refusals) kept, coverage unchanged; Jobvite on 3 kept for coverage (480 of 536 read, from 150; 7 refused requests); GitHub gave only 10 runners at first, so partitions are now grouped, up to 3 a runner, never two of one site. Experiment: Recruitee on 2 machines (3 workers each, budget unchanged) -- it was refused 357-385 times a run from one machine.",
+  "_history": "Nov 2026, owner-approved: Greenhouse 3, Lever 2, Ashby 2 machines, one board at a time each (about 1.6, 1.1 and 1.1 requests a second to each host in all, watched for 429s, each machine backing off on its own); Workable and Jobvite on a quota (Workable refused nearly every request). 25 Nov 2026 (cloud-only discovery, owner's scope): Workday back in the cloud -- every site is read by the cloud, never by the Mac. Its boards were read from GitHub without refusal until mid-November, then refused nearly every time; while it refuses, a probe of its least recently read boards is asked each run. Time budget 90 minutes: the run starts at 1:00 or 11:00 Central and must be published within two hours. 26 Nov 2026 (Development Mode, owner-approved): Greenhouse 6 machines made the baseline after the measured run (22.4 min, no 429s, same coverage). Experiments, each kept only if measured better: Lever 4 and Ashby 4 machines (one board at a time each, about 2x their earlier request rates), Jobvite every board on 3 machines instead of 150 a run on one (it refused nothing). 26 Nov 2026 run 45909763192: Lever 4 (11.8-12.0 min, 0 refusals) and Ashby 4 (12.0-12.2 min, 0 refusals) kept, coverage unchanged; Jobvite on 3 kept for coverage (480 of 536 read, from 150; 7 refused requests); GitHub gave only 10 runners at first, so partitions are now grouped, up to 3 a runner, never two of one site. Experiment: Recruitee on 2 machines (3 workers each, budget unchanged) -- it was refused 357-385 times a run from one machine. 26 Nov 2026 run 45914877636 (runners grouped): 25.8 min, 85.8% read; Recruitee on 2 machines 2.9 min (from 20.3; 58-59 refusals each, from 357-385 on one) kept. Experiment: Greenhouse 9 machines (about 4.7 requests a second to its host, 0 refusals at 6) and BambooHR 4 machines with 3 workers each (budget 12: each machine as before, twice the machines).",
   "time_budget_minutes": 90,
   "default_one_partition_budget": 6,
   "lanes": {
     "greenhouse": {
-      "partitions": 6,
-      "max_partitions": 6,
-      "budget": 6,
+      "partitions": 9,
+      "max_partitions": 9,
+      "budget": 9,
       "one_host": true,
-      "queue_minutes": 22.4
+      "queue_minutes": 15.0
     },
     "workday": {
       "partitions": 2,
@@ -21,11 +21,11 @@
       "queue_minutes": 18.3
     },
     "bamboohr": {
-      "partitions": 2,
+      "partitions": 4,
       "max_partitions": 4,
-      "budget": 6,
+      "budget": 12,
       "one_host": false,
-      "queue_minutes": 23.0
+      "queue_minutes": 12.0
     },
     "lever": {
       "partitions": 4,
@@ -67,7 +67,7 @@
       "max_partitions": 2,
       "budget": 6,
       "one_host": false,
-      "queue_minutes": 20.2
+      "queue_minutes": 3.0
     },
     "workable": {
       "partitions": 1,

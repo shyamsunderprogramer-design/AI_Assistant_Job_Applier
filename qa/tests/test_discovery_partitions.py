@@ -770,7 +770,7 @@ def test_the_workflow_steps_themselves_plan_lock_merge_and_lock_for_the_mac(tmp_
     done = _bash(_step("plan", "Lock the plan"), planner, env)
     assert done.returncode == 0, done.stderr
     manifest = json.loads((temp / "manifest.json").read_text())
-    assert [m["id"] for m in matrix] == [p["id"] for p in manifest["partitions"]]
+    assert sorted(m["id"] for m in matrix) == sorted(p["id"] for p in manifest["partitions"])   # longest first
     # scrape jobs: each partition's result locked by the workflow's own step
     joiner = tmp_path / "join-job"
     (joiner / "data").mkdir(parents=True)
