@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "8c4d58cd46ee9638373c7a32f1bf73fa29e38ed4"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "436729a16efb2d8938f249c4e81cbae58c9ac080"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -130,6 +130,7 @@ jobs:
     outputs:
       go: ${{ steps.slot.outputs.go }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      runners: ${{ steps.plan.outputs.runners }}
       plan_id: ${{ steps.plan.outputs.plan_id }}
       budget: ${{ steps.plan.outputs.budget }}
       started: ${{ steps.plan.outputs.started }}
@@ -252,8 +253,10 @@ jobs:
       fail-fast: false
       max-parallel: 19     # GitHub runs 20 jobs at once and the feeds job is one; the longest partitions go first
       matrix:
-        part: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    name: scrape ${{ matrix.part.id }}
+        # One runner per group of partitions (devops/discovery_plan.py bundles): up to 3 readers side by side, never
+        # two of one site, each its own process, database copy and client (the per-host gap is per reader, as before).
+        runner: ${{ fromJSON(needs.plan.outputs.runners) }}
+    name: scrape ${{ matrix.runner.id }} (${{ matrix.runner.parts }})
 
     steps:
       - uses: actions/checkout@v4
@@ -294,41 +297,75 @@ jobs:
           name: plan-manifest
           path: plan
 
-      - name: Read this partition's boards
+      - name: Read these partitions' boards, side by side
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
           SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
           BUDGET: ${{ needs.plan.outputs.budget }}
+          PARTS: ${{ matrix.runner.parts }}
         run: |
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
             -in plan/manifest.json.enc -out "$RUNNER_TEMP/manifest.json" -pass env:PASSPHRASE
-          python -u -m devops.discovery_worker --manifest "$RUNNER_TEMP/manifest.json" \
-            --partition "${{ matrix.part.id }}" --budget-minutes "$BUDGET" --out out
+          # Each partition: its own copy of the database, its own process, its own result. One failing never
+          # stops the others; each is locked and handed on, and the step fails at the end if any did.
+          pids=""
+          for part in $PARTS; do
+            mkdir -p "work/$part"
+            if [ -e data/jobs.db ]; then cp data/jobs.db "work/$part/jobs.db"; fi    # none: a cold start
+            DATABASE_URL="sqlite:///$PWD/work/$part/jobs.db" python -u -m devops.discovery_worker \
+              --manifest "$RUNNER_TEMP/manifest.json" --partition "$part" --budget-minutes "$BUDGET" \
+              --out "work/$part/out" > "work/$part/worker.txt" 2>&1 &
+            pids="$pids $!:$part"
+          done
+          failed=0
+          for entry in $pids; do
+            pid="${entry%%:*}"; part="${entry#*:}"
+            if wait "$pid"; then code=0; else code=$?; failed=1; fi
+            sed "s/^/[$part] /" "work/$part/worker.txt"
+            echo "[$part] exit $code"
+          done
+          exit $failed
 
-      - name: Lock this partition's result
-        # Its boards' rows only -- locked like everything else that travels.
+      - name: Lock these partitions' results
+        # Each result that exists, locked like everything else that travels -- also when another partition of
+        # this runner failed. staged/part-<partition>/part.db.enc is the layout the join reads.
+        if: always()
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+          PARTS: ${{ matrix.runner.parts }}
         run: |
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
-            -in out/part.db -out part.db.enc -pass env:PASSPHRASE
-          ls -lh part.db.enc
+          mkdir -p staged reports-staged
+          for part in $PARTS; do
+            if [ -e "work/$part/out/part.db" ]; then
+              mkdir -p "staged/part-$part"
+              openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
+                -in "work/$part/out/part.db" -out "staged/part-$part/part.db.enc" -pass env:PASSPHRASE
+            fi
+            if [ -e "work/$part/out/report.json" ]; then
+              mkdir -p "reports-staged/report-$part"
+              cp "work/$part/out/report.json" "reports-staged/report-$part/report.json"
+            fi
+          done
+          find staged -name '*.enc' -exec ls -lh {} +
 
-      - name: Hand it to the join
-        uses: actions/upload-artifact@v4
-        with:
-          name: part-${{ matrix.part.id }}
-          path: part.db.enc
-          retention-days: 1
-          overwrite: true
-
-      - name: Its report (counts only)
-        # Uploaded even when the partition failed, so the join can tell FAILED from NOT ATTEMPTED.
+      - name: Hand them to the join
+        # staged/ holds only the locked results: part-<partition>/part.db.enc, as the join reads them.
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: report-${{ matrix.part.id }}
-          path: out/report.json
+          name: part-${{ matrix.runner.id }}
+          path: staged/
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: ignore
+
+      - name: Their reports (counts only)
+        # Uploaded even when a partition failed, so the join can tell FAILED from NOT ATTEMPTED.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.runner.id }}
+          path: reports-staged/
           retention-days: 7
           overwrite: true
           if-no-files-found: ignore
@@ -441,11 +478,13 @@ jobs:
         with:
           pattern: part-*
           path: parts
+          merge-multiple: true        # each runner's artifact holds part-<partition>/ folders
 
       - uses: actions/download-artifact@v4
         with:
           pattern: report-*
           path: reports
+          merge-multiple: true
 
       - uses: actions/download-artifact@v4
         continue-on-error: true       # the job-search sites failing never stops the boards' merge
