@@ -1,0 +1,6 @@
+# What a scrape runner needs (the board readers, devops/discovery_worker.py): installed in seconds, not the app's
+# whole requirements.txt (26 s on every runner, 26 Nov 2026).
+PyYAML>=6.0
+SQLAlchemy>=2.1
+requests>=2.32
+python-dotenv>=1.0

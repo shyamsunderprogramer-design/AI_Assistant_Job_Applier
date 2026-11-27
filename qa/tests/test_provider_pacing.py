@@ -68,3 +68,22 @@ def test_with_no_in_run_retry_refused_boards_stay_for_the_next_run_and_no_time_i
     assert rep["counts"]["rate_limited"] >= 1 and rep["counts"]["complete"] == 0   # never called read
     # Not excluded: they are the least recently read, so the next plan asks them first.
     _ = dw
+
+
+def test_a_robots_fetch_is_paced_and_counted_like_any_request(monkeypatch):
+    from types import SimpleNamespace
+    c = PoliteClient(HttpSettings(user_agent="test", min_delay_seconds=0.0, jitter_seconds=0.0, min_interval_seconds=0.15,
+                                  respect_robots=True))
+    monkeypatch.setattr(c._session, "get", lambda url, **kw: SimpleNamespace(status_code=404, text=""))
+    t0 = time.monotonic()
+    c._robots_for("https://a.example")
+    c._robots_for("https://b.example")
+    assert c.requests_made == 2 and time.monotonic() - t0 >= 0.14     # the site-wide interval applied between them
+
+
+def test_every_site_has_a_request_rate_cap():
+    import json
+    from pathlib import Path
+    lanes = json.loads((Path(__file__).resolve().parents[2] / "devops" / "discovery_lanes.json").read_text())["lanes"]
+    assert all(float(lane.get("max_rps") or 0) > 0 for lane in lanes.values()), \
+        [s for s, lane in lanes.items() if not lane.get("max_rps")]

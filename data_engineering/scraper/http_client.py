@@ -146,6 +146,11 @@ class PoliteClient:
         parser = urllib.robotparser.RobotFileParser()
         robots_url = f"{host_root}/robots.txt"
         try:
+            # A request like any other (26 Nov 2026): paced by the host's gap and the site-wide interval, and counted.
+            # On a site with a host per employer (BambooHR, JazzHR, Breezy...) it is one per board read.
+            self._wait_turn(urlparse(host_root).netloc)
+            with self._rate_guard:
+                self.requests_made += 1
             resp = self._session.get(robots_url, timeout=self.settings.timeout_seconds)
             if resp.status_code == 200:
                 parser.parse(resp.text.splitlines())
