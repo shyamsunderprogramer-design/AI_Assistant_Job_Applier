@@ -244,8 +244,10 @@ def prune_log(db: sqlite3.Connection, days: float, now: datetime | None = None) 
         return 0
     db.execute("BEGIN IMMEDIATE")
     try:
+        # Each board's newest row (the plan's latest outcome) and its newest successful one (its reading time).
         cur = db.execute("DELETE FROM scrape_log WHERE created_at < ? AND id NOT IN "
-                         "(SELECT MAX(id) FROM scrape_log GROUP BY source, company_slug)", (cutoff,))
+                         "(SELECT MAX(id) FROM scrape_log GROUP BY source, company_slug) AND id NOT IN "
+                         "(SELECT MAX(id) FROM scrape_log WHERE ok = 1 GROUP BY source, company_slug)", (cutoff,))
         db.execute("COMMIT")
         return cur.rowcount
     except BaseException:

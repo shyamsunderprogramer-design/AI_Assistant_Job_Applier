@@ -124,11 +124,13 @@ def boards(db_path: Path | None, boards_csv: Path | None = None) -> list[dict]:
                                  "origin": origin or ""})
             has_log = db.execute("SELECT 1 FROM sqlite_master WHERE name = 'scrape_log'").fetchone()
             if has_log:
-                # Each board's latest reading time (the newest row per board), in one pass: a lookup per
-                # row took 4.5 minutes on a large log.
+                # Each board's latest SUCCESSFUL reading time, in one pass (a lookup per row took 4.5 minutes on a
+                # large log). Not its latest row: a refused or failed board's row is the time it took to be turned
+                # away, a fraction of a second -- 391 refused Greenhouse boards looked that fast, and the split
+                # put all of them in one partition, twice as long as the rest (run 45939682664, 27 Nov 2026).
                 for source, slug, seconds in db.execute(
                         "SELECT s.source, s.company_slug, s.duration_seconds FROM scrape_log s JOIN "
-                        "(SELECT MAX(id) AS id FROM scrape_log GROUP BY source, company_slug) newest "
+                        "(SELECT MAX(id) AS id FROM scrape_log WHERE ok = 1 GROUP BY source, company_slug) newest "
                         "ON s.id = newest.id"):
                     if seconds is not None:
                         history[(source, slug)] = float(seconds)

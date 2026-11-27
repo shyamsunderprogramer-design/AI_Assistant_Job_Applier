@@ -129,3 +129,29 @@ def test_robots_answers_older_than_a_day_are_not_used_and_the_join_keeps_the_new
     con.close()
     assert set(dw.known_robots(db, now)) == {"https://new.example"}
     assert dw.known_robots(tmp_path / "missing.db", now) == {}
+
+
+def test_a_refused_boards_quick_failure_never_stands_for_its_reading_time(tmp_path):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from devops import discovery_merge as dm
+    db = tmp_path / "saved.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE companies (source, slug, name, board_url, origin, active)")
+    c.execute("CREATE TABLE scrape_log (id INTEGER PRIMARY KEY, run_id, source, company_slug, ok, jobs_seen, jobs_kept, "
+              "jobs_new, error_type, error_message, duration_seconds, created_at)")
+    c.executemany("INSERT INTO companies VALUES (?, ?, ?, '', '', 1)", [("greenhouse", "a", "A"), ("greenhouse", "b", "B")])
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    new = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    c.executemany("INSERT INTO scrape_log (run_id, source, company_slug, ok, error_type, duration_seconds, created_at) "
+                  "VALUES (?, 'greenhouse', ?, ?, ?, ?, ?)", [
+                      ("r1", "a", 1, None, 2.0, old), ("r2", "a", 0, "RateLimited", 0.1, new),   # refused last
+                      ("r1", "b", 1, None, 2.0, new)])
+    c.commit()
+    est = {r["slug"]: r["est_s"] for r in dp.boards(db)}
+    assert est["a"] == 2.0                                     # its last successful read, not the 0.1 s refusal
+    con = sqlite3.connect(db, isolation_level=None)
+    dm.prune_log(con, 3)
+    kept = {(s, ok) for s, ok in con.execute("SELECT company_slug, ok FROM scrape_log")}
+    assert ("a", 1) in kept and ("a", 0) in kept               # its newest row and its newest successful one
+    assert {r["slug"]: r["est_s"] for r in dp.boards(db)}["a"] == 2.0
