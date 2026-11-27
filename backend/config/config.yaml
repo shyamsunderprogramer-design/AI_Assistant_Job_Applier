@@ -179,7 +179,7 @@ http:
   # 401/403/451 is a full disallow -- a refusal is never permission -- except on hosts whose owner documents the
   # API as public (below); a 429, 5xx, other 4xx or no answer means nothing on that host is asked for now.
   robots_public_api_hosts:
-    - api.ashbyhq.com      # Ashby's public Job Posting API (developers.ashbyhq.com)
+    - api.ashbyhq.com/posting-api/    # Ashby's public Job Posting API (developers.ashbyhq.com): that path only
 
 # ---------------------------------------------------------------------------
 # Which ATS platforms to scrape. Adding a company is a config/DB change only.

@@ -78,10 +78,11 @@ class HttpSettings:
     # this long. Retrying each URL in turn cost about four minutes per board
     # and turned a one-hour daily run into nine and a half.
     rate_limit_cooldown_seconds: float = 900.0
-    # Hosts whose robots.txt refuses to be read (401/403) but whose owner DOCUMENTS the API as public for anyone
-    # to read: api.ashbyhq.com (Ashby's public Job Posting API, developers.ashbyhq.com). Every other refusal is a
-    # full disallow (27 Nov 2026) -- a 401 or 403 is never read as permission on its own.
-    robots_public_api_hosts: tuple = ("api.ashbyhq.com",)
+    # Documented public APIs behind a robots.txt that refuses to be read (401/403/451), as "host/path-prefix": only
+    # that path is allowed, the rest of the host stays disallowed, and a robots.txt the host DOES serve (200) is
+    # obeyed as written. api.ashbyhq.com/posting-api/: Ashby's public Job Posting API (developers.ashbyhq.com).
+    # Every other refusal is a full disallow (27 Nov 2026) -- a 401 or 403 is never read as permission on its own.
+    robots_public_api_hosts: tuple = ("api.ashbyhq.com/posting-api/",)
     # Hosts that want a longer gap than min_delay_seconds: apply.workable.com
     # turned away 56 boards in one run at 1.5s.
     host_delays: dict[str, float] = field(default_factory=dict)
@@ -116,7 +117,7 @@ class HttpSettings:
             rate_limit_cooldown_seconds=float(
                 cfg.get("http.rate_limit_cooldown_seconds", 900.0)),
             robots_public_api_hosts=tuple(str(h).lower() for h in (
-                cfg.get("http.robots_public_api_hosts", None) or ("api.ashbyhq.com",))),
+                cfg.get("http.robots_public_api_hosts", None) or ("api.ashbyhq.com/posting-api/",))),
             host_delays={str(h): float(s) for h, s in (cfg.get("http.host_delays", {}) or {}).items()},
             max_retry_after_seconds=float(cfg.get("http.max_retry_after_seconds", 60.0)),
             backoff_jitter_fraction=float(cfg.get("http.backoff_jitter_fraction", 0.5)),
@@ -229,10 +230,11 @@ class PoliteClient:
             parser.parse(text.splitlines())
         elif status in ROBOTS_ABSENT:
             parser.parse([])                   # RFC 9309 §2.3.1.3: no robots.txt, no rules
-        elif status in ROBOTS_REFUSED and urlparse(host_root).netloc.lower() in self.settings.robots_public_api_hosts:
+        elif status in ROBOTS_REFUSED and self._public_paths(host_root):
             # The owner documents this API as public (HttpSettings.robots_public_api_hosts): that, not the refusal,
-            # is the permission.
-            parser.parse([])
+            # is the permission -- for its documented path only.
+            parser.parse(["User-agent: *", *(f"Allow: {path}" for path in self._public_paths(host_root)),
+                          "Disallow: /"])
         else:
             # A refusal to show the rules (401, 403, 451) is not permission, and nothing else reaches here: the
             # whole host is disallowed (27 Nov 2026; until then a 401/403 read as "no robots.txt").
@@ -240,6 +242,15 @@ class PoliteClient:
                 log.info("robots.txt for %s returned %d: treated as a full disallow", host_root, status)
             parser.parse(["User-agent: *", "Disallow: /"])
         return parser
+
+    def _public_paths(self, host_root: str) -> list[str]:
+        host = urlparse(host_root).netloc.lower()
+        out = []
+        for entry in self.settings.robots_public_api_hosts or ():
+            h, _, path = str(entry).lower().partition("/")
+            if h == host and path:
+                out.append("/" + path)
+        return out
 
     def robots_check(self, url: str) -> None:
         """Raises unless robots.txt lets us ask for `url`: RobotsDisallowed (the owner's rules say no),

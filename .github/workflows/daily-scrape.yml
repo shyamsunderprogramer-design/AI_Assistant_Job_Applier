@@ -610,8 +610,9 @@ jobs:
         with:
           name: discovery-result-v1
           path: discovery-result.tar.enc
-          # 14 days (27 Nov 2026): the cold-start restore takes one up to 13 days old (devops/discovery_restore.py).
-          retention-days: 14
+          # 7 days; the cold-start restore takes one up to 6 days old (devops/discovery_restore.py). 14 / 13 once the
+          # owner confirms public-repository artifact storage is not billed (GitHub's docs do not say so outright).
+          retention-days: 7
           overwrite: true
 
       - name: Coverage report (counts only)

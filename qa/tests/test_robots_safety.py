@@ -77,6 +77,10 @@ def test_a_refusal_to_show_the_rules_is_a_full_disallow_never_permission(status)
 def test_only_a_documented_public_api_is_read_behind_a_401():
     c = _client({"https://api.ashbyhq.com/robots.txt": 401})
     assert c.allowed("https://api.ashbyhq.com/posting-api/job-board/acme")
+    assert not c.allowed("https://api.ashbyhq.com/anything-else")          # the documented path only
+    # A robots.txt the host does serve is obeyed as written: the exception never overrides a real rule.
+    c = _client({"https://api.ashbyhq.com/robots.txt": (200, "User-agent: *\nDisallow: /posting-api/\n")})
+    assert not c.allowed("https://api.ashbyhq.com/posting-api/job-board/acme")
     c = _client({"https://api.other.example/robots.txt": 401})
     assert not c.allowed("https://api.other.example/posting-api/job-board/acme")
 

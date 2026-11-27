@@ -67,8 +67,8 @@ def test_a_tampered_or_foreign_result_is_skipped_for_the_next_and_none_is_a_cold
     assert got["restored_from"] is None and not dest2.exists()
 
 
-def test_a_result_ten_days_old_is_used_and_the_window_sits_inside_the_artifacts_retention(tmp_path, monkeypatch):
-    mid, db = locked_result(tmp_path, "695", finished=NOW - timedelta(days=10))
+def test_a_result_five_days_old_is_used_with_its_state_and_the_window_sits_inside_the_retention(tmp_path, monkeypatch):
+    mid, db = locked_result(tmp_path, "695", finished=NOW - timedelta(days=5))
     dest = tmp_path / "ck" / "jobs.db"
     got = rs.restore(dest, "o/r", PASS, download=fake(monkeypatch, {"695": mid}))
     assert got["restored_from"] == "695" and dest.read_bytes() == db.read_bytes()    # every table, state included
@@ -76,11 +76,19 @@ def test_a_result_ten_days_old_is_used_and_the_window_sits_inside_the_artifacts_
     from qa.tests.test_discovery_partitions import ROOT
     flow = (ROOT / ".github" / "workflows" / "daily-scrape.yml").read_text()
     kept = int(re.search(r"name: discovery-result-v1\n(?:.*\n){0,3}?\s*retention-days: (\d+)", flow).group(1))
-    assert rs.MAX_AGE < timedelta(days=kept) and kept == 14 and rs.MAX_AGE == timedelta(days=13)
+    assert rs.MAX_AGE < timedelta(days=kept)
+    # The cool-offs between runs come back with it (a table of the restored database), and are read by the plan.
+    import sqlite3
+    from devops import discovery_plan as dp
+    with sqlite3.connect(dest) as con:
+        assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'provider_state'").fetchone()
+        con.execute("INSERT OR REPLACE INTO provider_state VALUES ('workday', 2, ?, 'refused', 'x')",
+                    ((NOW + timedelta(hours=3)).isoformat(timespec="seconds"),))
+    assert set(dp.cooling(dest)) == {"workday"}
 
 
-def test_a_result_older_than_thirteen_days_is_not_used(tmp_path, monkeypatch):
-    old, _ = locked_result(tmp_path, "690", finished=NOW - timedelta(days=14))
+def test_a_result_older_than_six_days_is_not_used(tmp_path, monkeypatch):
+    old, _ = locked_result(tmp_path, "690", finished=NOW - timedelta(days=7))
     dest = tmp_path / "ck" / "jobs.db"
     got = rs.restore(dest, "o/r", PASS, download=fake(monkeypatch, {"690": old}))
     assert got["restored_from"] is None and "too old" not in str(dest)
