@@ -1,0 +1,47 @@
+# Verification only: the cold-start restore (devops/discovery_restore.py) run live, as the plan job runs it when the
+# cache holds no saved database. Runs only on a push to the restore-check branch. Reads no board, saves no cache,
+# uploads nothing: it restores into a scratch folder, checks it, and prints counts only.
+name: Restore check (verification only)
+
+on:
+  push:
+    branches: [restore-check]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "2038e7320a96e85ee3d0a39e1e14f4aac21ecdba"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore as the plan job would with an empty cache
+        id: restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/empty-cache"
+          python -m devops.discovery_restore --dest "$RUNNER_TEMP/empty-cache/jobs.db" --repo "$GITHUB_REPOSITORY"
+      - name: What was restored (counts only)
+        env:
+          RESTORED: ${{ steps.restore.outputs.restored_from }}
+        run: |
+          test -n "$RESTORED"
+          python - <<'PY'
+          import os, sqlite3
+          db = os.path.join(os.environ["RUNNER_TEMP"], "empty-cache", "jobs.db")
+          c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+          print("restored from run", os.environ["RESTORED"])
+          print("integrity", c.execute("PRAGMA integrity_check").fetchone()[0])
+          for t in ("companies", "jobs", "scrape_log", "board_inventory"):
+              print(t, c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
+          print("boards with a read time", c.execute("SELECT COUNT(*) FROM companies WHERE last_scraped_at IS NOT NULL").fetchone()[0])
+          PY
