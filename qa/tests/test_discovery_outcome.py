@@ -16,8 +16,8 @@ from devops import discovery_outcome as do
 from qa.tests.test_discovery_partitions import (  # noqa: F401 -- `offline`: the autouse no-network fixture
     BASE_BOARDS, WORLD, healthy_world, joined, offline, opened, plan_for, run_all, seed)
 
-OK = {"lock": "success", "build": "success", "upload": "success", "complete_upload": "skipped"}
-OK_COMPLETE = {**OK, "complete_upload": "success"}
+OK = {"build": "success", "upload": "success"}
+OK_COMPLETE = OK            # 27 Nov 2026: no separate complete-refresh copy; the verified result is what is published
 
 
 def merged(tmp_path, world=None, tamper=None, lose=()):
@@ -78,7 +78,7 @@ def test_a_merge_that_stopped_or_never_ran_fails(tmp_path, code):
     assert status == do.FAILED and any("merge" in f for f in failed)
 
 
-@pytest.mark.parametrize("step,outcome", [("lock", "failure"), ("build", "failure"), ("upload", "failure"),
+@pytest.mark.parametrize("step,outcome", [("build", "failure"), ("upload", "failure"),
                                           ("build", "cancelled"), ("upload", "")])
 def test_encryption_verification_or_publication_failing_fails_the_run(tmp_path, step, outcome):
     cov, code = merged(tmp_path, {"w1": 429})
@@ -86,9 +86,10 @@ def test_encryption_verification_or_publication_failing_fails_the_run(tmp_path, 
     assert status == do.FAILED and len(failed) == 1
 
 
-def test_a_complete_run_whose_complete_copy_did_not_publish_fails(tmp_path):
+def test_a_complete_run_is_complete_on_its_verified_result_alone_and_fails_without_it(tmp_path):
     cov, code = merged(tmp_path)
-    assert do.decide(cov, code, OK)[0] == do.FAILED                              # complete_upload skipped
+    assert do.decide(cov, code, OK)[0] == do.COMPLETE                             # no second copy needed
+    assert do.decide(cov, code, {**OK, "upload": "failure"})[0] == do.FAILED     # the result itself is
 
 
 def test_a_missing_or_inconsistent_coverage_report_fails(tmp_path):
@@ -175,7 +176,7 @@ def test_a_cold_start_is_said_and_a_saved_database_is_not_one(tmp_path, monkeypa
     cold = dm.merge(tmp_path / "none" / "data" / "jobs.db", plan, parts)
     assert warm["cold_start"] is False and cold["cold_start"] is True
     assert "Cold start" in do.summary(do.COMPLETE, [], [], cold) and "Cold start" not in do.summary(do.COMPLETE, [], [], warm)
-    run_main(tmp_path, monkeypatch, cold, 0, complete_upload="success")
+    run_main(tmp_path, monkeypatch, cold, 0)
     assert "::warning::Cold start" in capsys.readouterr().out
 
 

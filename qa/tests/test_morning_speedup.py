@@ -723,7 +723,7 @@ def test_the_workflow_plans_partitions_and_joins_them():
     assert len(plan_saves) == 1 and "restored_from != ''" in plan_saves[0]["if"]
     assert jobs["join"]["needs"] == ["plan", "scrape", "feeds"]
     join = " ".join(s.get("run", "") for s in jobs["join"]["steps"])
-    assert "devops.discovery_merge" in join and "jobs.db.enc" in join
+    assert "devops.discovery_merge" in join and "discovery-result.tar.enc" in join
     # Started from the cloud (25 Nov 2026): the outside scheduler through workflow_dispatch at 1:00 and 11:00
     # Central, GitHub's own schedule only as a fallback (once per window: devops/discovery_slot.py). Never the Mac.
     on = flow.get("on", flow.get(True))

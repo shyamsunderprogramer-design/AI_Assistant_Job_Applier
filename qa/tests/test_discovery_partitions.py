@@ -800,11 +800,6 @@ def test_the_workflow_steps_themselves_plan_lock_merge_and_lock_for_the_mac(tmp_
     assert said["complete"] == ("false" if lose_one else "true")
     coverage = json.loads((joiner / "coverage.json").read_text())
     assert (coverage["status"] == dm.COMPLETE) is (not lose_one)
-    done = _bash(_step("join", "Lock the database for collection"), joiner, env)
-    assert done.returncode == 0, done.stderr
-    unlocked = tmp_path / "mac-unlocked.db"
-    cloud_results._openssl(["-d", "-in", str(joiner / "jobs.db.enc"), "-out", str(unlocked)], "pass-for-test")
-    assert jobs_of(unlocked) == jobs_of(joiner / "data" / "jobs.db")
     # The verified result, built and locked by the workflow's own step, unpacked and verified as the Mac does.
     env.update(STARTED="2000-01-01T00:00:00Z", RUN_ID="777", ATTEMPT="1",
                SCRAPE_JOBS="failure" if lose_one else "success")
@@ -827,11 +822,13 @@ def test_13_the_merged_database_is_locked_and_unlocked_exactly_as_the_mac_expect
     from devops import cloud_results, merge_cloud
     flow = yaml.safe_load(WORKFLOW.read_text())
     join = flow["jobs"]["join"]["steps"]
-    lock = next(s for s in join if s.get("name") == "Lock the database for collection")["run"]
-    assert " ".join(cloud_results.CIPHER[1:]) in lock and "-in data/jobs.db -out jobs.db.enc" in lock
-    upload = next(s for s in join if s.get("name") == "Upload it (a complete refresh)")
-    assert upload["with"]["name"] == cloud_results.ARTIFACT and upload["with"]["path"] == "jobs.db.enc"
-    assert upload["if"] == "steps.merge.outputs.complete == 'true'"
+    # 27 Nov 2026: the complete-refresh copy (jobs-db-encrypted) is no longer made -- the verified result holds the
+    # same database, signed and locked, and the Mac takes it first. The Mac still unlocks an older run's copy (below).
+    names = [s.get("name") for s in join]
+    assert "Lock the database for collection" not in names and "Upload it (a complete refresh)" not in names
+    assert not any((s.get("with") or {}).get("name") == cloud_results.ARTIFACT for s in join)
+    build = next(s for s in join if s.get("name") == "Build the verified result")["run"]
+    assert all(x in build for x in ("-aes-256-cbc", "-pbkdf2", "-iter 200000", "-md sha256"))   # the same cipher
     from devops import discovery_result
     result = next(s for s in join if s.get("name") == "Upload the verified result")
     assert result["with"]["name"] == discovery_result.ARTIFACT != cloud_results.ARTIFACT
@@ -880,7 +877,7 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
             assert "github.event.inputs" not in s.get("run", "")
     # The final artifact appears only when every partition delivered; a partial one has its own name.
     names = [s["with"]["name"] for s in join["steps"] if "upload-artifact" in str(s.get("uses", ""))]
-    assert "jobs-db-encrypted" in names and "discovery-result-v1" in names
+    assert "jobs-db-encrypted" not in names and "discovery-result-v1" in names     # one published copy (27 Nov 2026)
     # The last step names the outcome (devops/discovery_outcome.py): it always runs, and it fails the run only for a
     # genuine failure -- a partial result, verified and published, is a warning (26 Nov 2026, run #109).
     last = join["steps"][-1]

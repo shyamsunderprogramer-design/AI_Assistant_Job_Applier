@@ -62,9 +62,11 @@
 # Three statuses, kept apart: the workflow's execution (this run's conclusion),
 # the scan's completeness (the coverage report), and the result's validity
 # (checked on the Mac). This run ends in success only when the coverage is
-# COMPLETE -- every board of every partition read in full; then it also
-# publishes jobs-db-encrypted, as every complete run before (an older Mac takes
-# that). Complete or not, whenever the merge succeeded it publishes
+# COMPLETE -- every board of every partition read in full. (Until 27 Nov 2026 a
+# complete run also published jobs-db-encrypted, a second copy of the same
+# database; the Mac takes the verified result first, so it is no longer made.
+# The Mac still reads one for an older run that has no verified result.)
+# Complete or not, whenever the merge succeeded it publishes
 # discovery-result-v1: the database, the plan and every board's outcome, signed
 # and locked (devops/discovery_result.py). The Mac verifies it whole when it is next
 # on, and takes the postings of the boards read and nothing of the others; it reads
@@ -560,26 +562,6 @@ jobs:
           path: data/jobs.db
           key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Lock the database for collection
-        id: lock
-        if: steps.merge.outputs.merged == 'true'
-        env:
-          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
-        run: |
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -salt \
-            -in data/jobs.db -out jobs.db.enc -pass env:PASSPHRASE
-          ls -lh jobs.db.enc
-
-      - name: Upload it (a complete refresh)
-        id: complete_upload
-        if: steps.merge.outputs.complete == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: jobs-db-encrypted
-          path: jobs.db.enc
-          retention-days: 7
-          overwrite: true
-
       - name: Build the verified result
         id: build
         # Complete or not: the database, the plan, and every board's outcome, signed and locked as one file
@@ -644,11 +626,9 @@ jobs:
           TRIGGER: ${{ github.event_name }}${{ github.event.inputs.trigger && format(' ({0})', github.event.inputs.trigger) || '' }}
           STARTED: ${{ needs.plan.outputs.started }}
           MERGE_CODE: ${{ steps.merge.outputs.code }}
-          LOCK: ${{ steps.lock.outcome }}
           BUILD: ${{ steps.build.outcome }}
           UPLOAD: ${{ steps.upload.outcome }}
-          COMPLETE_UPLOAD: ${{ steps.complete_upload.outcome }}
         run: |
           python -m devops.discovery_outcome --coverage coverage.json --merge-code "$MERGE_CODE" \
-            --lock "$LOCK" --build "$BUILD" --upload "$UPLOAD" --complete-upload "$COMPLETE_UPLOAD" \
+            --build "$BUILD" --upload "$UPLOAD" \
             --result discovery-result.tar.enc --slot "$SLOT" --trigger "$TRIGGER" --started "$STARTED"

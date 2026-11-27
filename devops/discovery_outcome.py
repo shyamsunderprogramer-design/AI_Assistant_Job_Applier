@@ -37,7 +37,7 @@ DEADLINE = timedelta(hours=2)            # results due two hours after the windo
 
 
 def decide(coverage: dict | None, merge_code: int | None, steps: dict) -> tuple[str, list[str], list[str]]:
-    """(status, why it FAILED, what a PARTIAL run left unread). `steps`: lock, build, upload, complete_upload ->
+    """(status, why it FAILED, what a PARTIAL run left unread). `steps`: build, upload ->
     the GitHub step outcome (success, failure, cancelled, skipped, or '' when it did not run)."""
     failed: list[str] = []
     if merge_code not in (0, 3):
@@ -60,12 +60,11 @@ def decide(coverage: dict | None, merge_code: int | None, steps: dict) -> tuple[
     complete = merge_code == 0
     if complete != (coverage.get("status") == COMPLETE):
         failed.append("the merge's exit and its coverage report disagree")
-    for step, what in (("lock", "locking the database"), ("build", "building and verifying the result"),
-                       ("upload", "publishing the verified result")):
+    # The verified result is what is published, complete or not (27 Nov 2026: the separate complete-refresh copy,
+    # and its own lock step, are no longer made -- the result already holds that database, signed and locked).
+    for step, what in (("build", "building and verifying the result"), ("upload", "publishing the verified result")):
         if merge_code in (0, 3) and steps.get(step) != "success":
             failed.append(f"{what} did not succeed ({steps.get(step) or 'did not run'})")
-    if complete and steps.get("complete_upload") != "success":
-        failed.append(f"publishing the complete-refresh copy did not succeed ({steps.get('complete_upload') or 'did not run'})")
     if failed:
         return FAILED, failed, []
     if complete:
@@ -134,7 +133,7 @@ def summary(status: str, failed: list, unread: list, coverage: dict | None, *, s
                  ("Still to read (cloud recovery)", f"{t.get('boards_needing_recovery', 0):,} boards")]
     if result_bytes is not None:
         rows.append(("Verified result (encrypted)", f"{result_bytes / 1e6:,.1f} MB"))
-    rows += [("Locked (encrypted)", steps.get("lock") or "did not run"),
+    rows += [("Built, verified and encrypted", steps.get("build") or "did not run"),
              ("Published", steps.get("upload") or "did not run")]
     total = _minutes(started, now.isoformat()) if started else None
     if total is not None:
@@ -226,7 +225,7 @@ def main(argv: list[str]) -> int:
         except ValueError:
             coverage = None
     code = int(args.merge_code) if str(args.merge_code).strip().lstrip("-").isdigit() else None
-    steps = {"lock": args.lock, "build": args.build, "upload": args.upload, "complete_upload": args.complete_upload}
+    steps = {"build": args.build, "upload": args.upload}     # --lock / --complete-upload: accepted, no longer used
     status, failed, unread = decide(coverage, code, steps)
     size = args.result.stat().st_size if args.result and args.result.is_file() else None
     text = summary(status, failed, unread, coverage, slot=args.slot, trigger=args.trigger, started=args.started,
