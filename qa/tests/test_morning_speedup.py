@@ -709,11 +709,12 @@ def test_the_workflow_plans_partitions_and_joins_them():
     assert "devops.discovery_plan plan" in give["run"]
     assert '--target-total "$PARTITIONS"' in give["run"] and "inputs" not in give["run"]   # through env, never inline
     assert jobs["scrape"]["needs"] == "plan"
-    assert jobs["scrape"]["strategy"]["matrix"]["part"] == "${{ fromJSON(needs.plan.outputs.matrix) }}"
+    # Since 26 Nov 2026: one runner per group of partitions, each partition still its own reader.
+    assert jobs["scrape"]["strategy"]["matrix"]["runner"] == "${{ fromJSON(needs.plan.outputs.runners) }}"
     steps = {s.get("name"): s for s in jobs["scrape"]["steps"]}
-    assert "devops.discovery_worker" in steps["Read this partition's boards"]["run"]
-    assert "-salt" in steps["Lock this partition's result"]["run"]
-    assert steps["Hand it to the join"]["with"]["retention-days"] == 1
+    assert "devops.discovery_worker" in steps["Read these partitions' boards, side by side"]["run"]
+    assert "-salt" in steps["Lock these partitions' results"]["run"]
+    assert steps["Hand them to the join"]["with"]["retention-days"] == 1
     # Only the join saves the database; every partition starts from the same saved copy.
     uses = [s.get("uses", "") for job in jobs.values() for s in job["steps"]]
     assert uses.count("actions/cache/save@v4") == 1 and "actions/cache@v4" not in uses
