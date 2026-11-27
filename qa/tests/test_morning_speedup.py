@@ -717,7 +717,10 @@ def test_the_workflow_plans_partitions_and_joins_them():
     assert steps["Hand them to the join"]["with"]["retention-days"] == 1
     # Only the join saves the database; every partition starts from the same saved copy.
     uses = [s.get("uses", "") for job in jobs.values() for s in job["steps"]]
-    assert uses.count("actions/cache/save@v4") == 1 and "actions/cache@v4" not in uses
+    # The join saves; the plan saves only a copy restored from a verified result when the cache held none.
+    assert uses.count("actions/cache/save@v4") == 2 and "actions/cache@v4" not in uses
+    plan_saves = [s for s in jobs["plan"]["steps"] if s.get("uses") == "actions/cache/save@v4"]
+    assert len(plan_saves) == 1 and "restored_from != ''" in plan_saves[0]["if"]
     assert jobs["join"]["needs"] == ["plan", "scrape", "feeds"]
     join = " ".join(s.get("run", "") for s in jobs["join"]["steps"])
     assert "devops.discovery_merge" in join and "jobs.db.enc" in join

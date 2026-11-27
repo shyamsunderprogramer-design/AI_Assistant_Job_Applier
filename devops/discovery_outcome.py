@@ -101,6 +101,9 @@ def summary(status: str, failed: list, unread: list, coverage: dict | None, *, s
             PARTIAL: "PARTIAL — verified usable result published; coverage incomplete (not a complete refresh)",
             FAILED: "FAILED — see the reasons below"}[status]
     lines = [f"## Discovery outcome: {head}", ""]
+    if (coverage or {}).get("restored_from"):
+        lines += [f"> **Saved database restored** from run {coverage['restored_from']}'s verified result (the cache "
+                  "held none): history continues from that run.", ""]
     if (coverage or {}).get("cold_start"):
         lines += ["> **Cold start:** the saved database was missing. Board history, each site's last refusal and "
                   "earlier inventories start from this run.", ""]

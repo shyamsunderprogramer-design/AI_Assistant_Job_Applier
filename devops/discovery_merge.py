@@ -553,6 +553,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--started", default="", help="when the run started (ISO, UTC), for its duration")
     ap.add_argument("--feeds-dir", type=Path, default=None,
                     help="the job-search sites' result (feeds.db and feeds-report.json), merged after the boards")
+    ap.add_argument("--restored-from", default="",
+                    help="the run whose verified result the saved database was restored from (the cache had none)")
     ap.add_argument("--prune-log-days", type=float, default=0,
                     help="keep the scrape log to this many days (each board's newest row always kept): the cloud's copy only")
     args = ap.parse_args(argv)
@@ -575,6 +577,9 @@ def main(argv: list[str]) -> int:
     except MergeError as exc:
         print(f"merge stopped: {exc}", file=sys.stderr)
         return 4
+    # Continuity: a saved database restored from an earlier verified result (devops/discovery_restore.py) is
+    # continuous with that run, and said to be; a cold start is said by `cold_start`.
+    coverage["restored_from"] = str(args.restored_from or "")
     try:
         coverage["feeds"] = merge_feeds(args.db, args.feeds_dir)
     except sqlite3.Error as exc:            # the boards' merge stands; the sites are reported unmerged
