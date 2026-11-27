@@ -610,7 +610,8 @@ jobs:
         with:
           name: discovery-result-v1
           path: discovery-result.tar.enc
-          retention-days: 7
+          # 14 days (27 Nov 2026): the cold-start restore takes one up to 13 days old (devops/discovery_restore.py).
+          retention-days: 14
           overwrite: true
 
       - name: Coverage report (counts only)

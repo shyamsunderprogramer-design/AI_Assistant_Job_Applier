@@ -78,25 +78,23 @@ def _client_seeing(status, text=""):
     return client
 
 
-def test_401_on_robots_means_unavailable_not_forbidden():
-    """RFC 9309 §2.3.1.3: a 4xx means robots.txt is unavailable and the crawler
-    MAY proceed. Treating 401 as a blanket Disallow made api.ashbyhq.com — a
-    documented PUBLIC job-board API — unscrapeable."""
-    assert _client_seeing(401).allowed("https://api.example.com/jobs") is True
+def test_401_on_robots_is_not_permission():
+    """27 Nov 2026: a refusal to show the rules is never read as permission (until then a 401/403 read as
+    "no robots.txt"). qa/tests/test_robots_safety.py has the rest."""
+    assert _client_seeing(401).allowed("https://api.example.com/jobs") is False
 
 
-def test_403_on_robots_also_means_unavailable():
-    assert _client_seeing(403).allowed("https://api.example.com/jobs") is True
+def test_403_on_robots_is_not_permission_either():
+    assert _client_seeing(403).allowed("https://api.example.com/jobs") is False
+
+
+def test_a_documented_public_api_behind_a_401_stays_readable():
+    """api.ashbyhq.com: Ashby documents its Job Posting API as public; that, not the 401, is the permission."""
+    assert _client_seeing(401).allowed("https://api.ashbyhq.com/posting-api/job-board/acme") is True
 
 
 def test_404_on_robots_allows():
     assert _client_seeing(404).allowed("https://api.example.com/jobs") is True
-
-
-def test_strict_mode_restores_the_cautious_reading():
-    client = _client_seeing(401)
-    client.settings.strict_robots_on_4xx = True
-    assert client.allowed("https://api.example.com/jobs") is False
 
 
 def test_5xx_on_robots_disallows():

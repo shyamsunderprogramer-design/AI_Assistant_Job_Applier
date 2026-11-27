@@ -54,6 +54,16 @@ LOG_INDEX = "CREATE INDEX IF NOT EXISTS ix_scrape_log_run_board ON scrape_log (r
 BOARD_STATES = ("complete", "partial", "failed", "rate_limited", "not_attempted")
 KEYS = {"companies": ("source", "slug"), "jobs": ("source", "company_slug", "external_id")}
 WORKABLE_FEED, WORKABLE_BOARDS = "workable-feed", "workable"      # data_engineering/scraper/workable_feed.py
+DEFERRED = {"ProviderQuota": "quota", "NetworkDown": "network", "ProviderCooling": "cooling"}
+OWNER_RESTRICTED = "RobotsDisallowed"      # the board owner's robots.txt says no: reported apart from failures
+ROBOTS_KEEP = (200, 401, 403, 404, 410, 451)   # data_engineering/scraper/http_client.ROBOTS_KEEP
+# A site cools off between runs (27 Nov 2026) when it refused nearly every board it was asked (HTTP 429 through
+# every retry), or asked us to stay away (Retry-After): 6 hours after the first such run, doubling with each one
+# in a row, 3 days at most; one run it answers ends it. Kept in the saved database, so a restore keeps it too.
+COOL_REFUSED_SHARE = 0.9
+COOL_FIRST_HOURS, COOL_MAX_HOURS = 6.0, 72.0
+PROVIDER_STATE = ("CREATE TABLE IF NOT EXISTS provider_state (source TEXT PRIMARY KEY, refused_runs INTEGER NOT NULL "
+                  "DEFAULT 0, cool_until TEXT, reason TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)")
 
 
 class MergeError(RuntimeError):
@@ -324,7 +334,7 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
                      "counts": counts, "merged": did, "reason": why or ""}
             meta = found.get("meta") or {}
             for key in ("started_at", "finished_at", "minutes", "rate_limited_requests", "provider_rate_limits",
-                        "requests", "retry", "min_interval_s"):
+                        "requests", "retry", "min_interval_s", "longest_retry_after_s"):
                 if key in meta:
                     entry[key] = meta[key]
             coverage["partitions"].append(entry)
@@ -345,6 +355,12 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
                     st, err = "not_attempted", ("PartitionFailed" if ran else "NotRun")
                 coverage["outcomes"].append([key[0], key[1], st, err or "", pid])
         coverage["timings"]["merge_s"] = round(time.monotonic() - t0, 2)
+        stamp = now or datetime.now(timezone.utc)
+        coverage["provider_state"] = update_provider_state(db, coverage["partitions"], stamp)
+        coverage["reactivated"] = reactivate_wrongly_retired(db)
+        # robots.txt answers that are not definite (a 429, a 5xx...) are never kept, whatever an older reader wrote.
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'robots_cache'").fetchone():
+            db.execute(f"DELETE FROM robots_cache WHERE status NOT IN ({', '.join(map(str, ROBOTS_KEEP))})")
         if prune_log_days:
             t0 = time.monotonic()
             coverage["pruned_log_rows"] = prune_log(db, prune_log_days, now)
@@ -352,6 +368,7 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
             t0 = time.monotonic()
             db.execute("VACUUM")
             coverage["timings"]["vacuum_s"] = round(time.monotonic() - t0, 2)
+        coverage["inventory"] = board_inventory(db, stamp)
         t0 = time.monotonic()
         if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise MergeError("the merged copy failed its integrity check; the database was left as it was")
@@ -372,10 +389,14 @@ def merge(base: Path, manifest: dict, parts: dict[str, Path | None], reports: di
         counts = {s: sum(e["counts"][s] for e in entries) for s in BOARD_STATES}
         mine = {e["id"] for e in entries}
         deferred = sum(1 for _, _, st, err, pid in coverage["outcomes"]
-                       if pid in mine and st == "not_attempted" and err in ("ProviderQuota", "NetworkDown"))
+                       if pid in mine and st == "not_attempted" and err in DEFERRED)
+        restricted = sum(1 for _, _, st, err, pid in coverage["outcomes"]
+                         if pid in mine and st == "failed" and err == OWNER_RESTRICTED)
         coverage["providers"][site] = {"status": _roll_up([e["status"] for e in entries]),
                                        "partitions": len(entries), "boards": sum(e["boards"] for e in entries),
-                                       "counts": counts, "deferred": deferred}
+                                       "counts": counts, "deferred": deferred, "owner_restricted": restricted,
+                                       "attempted": sum(counts[k] for k in ("complete", "partial", "failed",
+                                                                            "rate_limited"))}
     statuses = [e["status"] for e in coverage["partitions"]]
     coverage["status"] = _roll_up(statuses)
     # Every result arriving is reported, but it is not a refresh: only every board read in full is.
@@ -396,8 +417,10 @@ def totals(coverage: dict, started: datetime | None = None, finished: datetime |
     skipped on purpose as irrelevant (never a shortfall)."""
     by = {}
     for _, _, st, err, _ in coverage["outcomes"]:
-        if st == "not_attempted" and err in ("ProviderQuota", "NetworkDown"):
-            st = "quota" if err == "ProviderQuota" else "network"
+        if st == "not_attempted" and err in DEFERRED:
+            st = DEFERRED[err]
+        elif st == "failed" and err == OWNER_RESTRICTED:
+            st = "owner_restricted"
         by[st] = by.get(st, 0) + 1
     planned = len(coverage["outcomes"])
     scanned = by.get("complete", 0) + by.get("partial", 0)
@@ -418,20 +441,126 @@ def totals(coverage: dict, started: datetime | None = None, finished: datetime |
            "boards_deferred_provider_limits": by.get("rate_limited", 0),
            "boards_rate_limited": by.get("rate_limited", 0),
            "boards_deferred_quota": by.get("quota", 0), "boards_deferred_network": by.get("network", 0),
-           "boards_failed": by.get("failed", 0), "boards_timed_out": by.get("timed_out", 0),
+           "boards_deferred_cooling": by.get("cooling", 0),
+           "boards_failed": by.get("failed", 0), "boards_owner_restricted": by.get("owner_restricted", 0),
+           "boards_timed_out": by.get("timed_out", 0),
            "boards_not_attempted": by.get("not_attempted", 0),
            "postings_listed": postings["listed"], "postings_relevant": postings["relevant"],
            "postings_described": postings["described"], "postings_descriptions_pending": postings["pending"],
            "postings_skipped_irrelevant": postings["skipped"],
            "coverage_pct": round(100.0 * scanned / planned, 1) if planned else 0.0}
-    parts = ("boards_scanned_in_full", "boards_read_in_part", "boards_failed", "boards_rate_limited",
-             "boards_deferred_quota", "boards_deferred_network", "boards_timed_out", "boards_not_attempted")
+    parts = ("boards_scanned_in_full", "boards_read_in_part", "boards_failed", "boards_owner_restricted",
+             "boards_rate_limited", "boards_deferred_quota", "boards_deferred_network", "boards_deferred_cooling",
+             "boards_timed_out", "boards_not_attempted")
     out["reconciles"] = sum(out[k] for k in parts) == planned
     if started and finished:
         out["duration_minutes"] = round((finished - started).total_seconds() / 60, 1)
     if coverage.get("timings"):
         out["merge_seconds"] = round(sum(coverage["timings"].values()), 1)
+    inv = (coverage.get("inventory") or {}).get("total")
+    if inv:
+        # Against EVERY board known, retired ones included: the share never rises by dropping a board.
+        out["boards_known"] = inv["known"]
+        out["coverage_of_known_pct"] = round(100.0 * scanned / inv["known"], 1) if inv["known"] else 0.0
     return out
+
+
+def update_provider_state(db: sqlite3.Connection, partitions: list[dict], now: datetime) -> dict:
+    """Each site's cool-off between runs, from this run (see COOL_*): {site: {refused_runs, cool_until, reason}}.
+    A site with a partition that did not deliver, or that asked no board (it was cooling), is left as it was."""
+    db.execute(PROVIDER_STATE)
+    by_site: dict[str, list[dict]] = {}
+    for e in partitions:
+        by_site.setdefault(e["provider"], []).append(e)
+    stamp = now.isoformat(timespec="seconds")
+    out = {}
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        for site, entries in sorted(by_site.items()):
+            if any(e["reason"] for e in entries):
+                continue
+            c = {k: sum(e["counts"][k] for e in entries) for k in BOARD_STATES}
+            asked = c["complete"] + c["partial"] + c["failed"] + c["rate_limited"]
+            if not asked:
+                continue
+            row = db.execute("SELECT refused_runs FROM provider_state WHERE source = ?", (site,)).fetchone()
+            runs = int(row[0]) if row else 0
+            until, reason = None, ""
+            if c["rate_limited"] / asked >= COOL_REFUSED_SHARE:
+                runs += 1
+                hours = min(COOL_FIRST_HOURS * 2 ** (runs - 1), COOL_MAX_HOURS)
+                until = now + timedelta(hours=hours)
+                reason = f"refused {c['rate_limited']} of {asked} boards asked ({runs} run(s) in a row)"
+            else:
+                runs = 0
+            asked_wait = max((float(e.get("longest_retry_after_s") or 0) for e in entries), default=0.0)
+            if asked_wait > 0 and (until is None or now + timedelta(seconds=asked_wait) > until):
+                until = now + timedelta(seconds=asked_wait)
+                reason = (reason + "; " if reason else "") + f"Retry-After {asked_wait:.0f} s"
+            cool = until.isoformat(timespec="seconds") if until else None
+            db.execute("INSERT INTO provider_state VALUES (?, ?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET "
+                       "refused_runs = excluded.refused_runs, cool_until = excluded.cool_until, "
+                       "reason = excluded.reason, updated_at = excluded.updated_at", (site, runs, cool, reason, stamp))
+            out[site] = {"refused_runs": runs, "cool_until": cool, "reason": reason}
+        db.execute("COMMIT")
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+    return out
+
+
+def reactivate_wrongly_retired(db: sqlite3.Connection) -> dict:
+    """Boards retired on a failure that said nothing about the board (data_engineering/scraper/runner
+    .counts_toward_retiring: a refusal, the host's 5xx, the owner's robots.txt), active again with a clean count:
+    asked again by the next run, and retired only if their own host says they are gone. {site: boards}."""
+    from data_engineering.scraper.retire_rules import counts_toward_retiring
+    if not {"error_type", "error_message", "ok"} <= set(_cols(db, "main", "scrape_log")):
+        return {}
+    rows = db.execute(
+        "SELECT c.id, c.source, l.error_type, l.error_message FROM companies c JOIN scrape_log l ON l.id = "
+        "(SELECT MAX(id) FROM scrape_log s WHERE s.source = c.source AND s.company_slug = c.slug) "
+        "WHERE NOT c.active AND NOT l.ok").fetchall()
+    back = [(cid, src) for cid, src, et, msg in rows if not counts_toward_retiring(et or "", msg or "")]
+    out: dict[str, int] = {}
+    if back:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            db.executemany("UPDATE companies SET active = 1, consecutive_failures = 0 WHERE id = ?",
+                           [(cid,) for cid, _ in back])
+            db.execute("COMMIT")
+        except BaseException:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        for _, src in back:
+            out[src] = out.get(src, 0) + 1
+    return out
+
+
+def board_inventory(db: sqlite3.Connection, now: datetime) -> dict:
+    """Every board the cloud knows, retired ones included, per site and in total: known, active, deactivated,
+    owner-restricted (its newest read: the owner's robots.txt said no), and read successfully in the last 7 and 30
+    days (each board's newest successful row survives pruning -- prune_log). Counts only."""
+    if not {"error_type", "ok", "created_at"} <= set(_cols(db, "main", "scrape_log")) or \
+            not {"active", "source", "slug"} <= set(_cols(db, "main", "companies")):
+        return {}
+    d7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    d30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = db.execute(
+        "WITH newest AS (SELECT source, company_slug, MAX(id) AS id FROM scrape_log GROUP BY source, company_slug), "
+        "good AS (SELECT source, company_slug, MAX(created_at) AS at FROM scrape_log WHERE ok GROUP BY source, "
+        "company_slug) "
+        "SELECT c.source, COUNT(*), SUM(c.active = 1), SUM(c.active = 0), "
+        f"SUM(coalesce(l.error_type, '') = '{OWNER_RESTRICTED}' AND NOT coalesce(l.ok, 1)), "
+        "SUM(coalesce(g.at, '') >= ?), SUM(coalesce(g.at, '') >= ?) "
+        "FROM companies c LEFT JOIN newest n ON n.source = c.source AND n.company_slug = c.slug "
+        "LEFT JOIN scrape_log l ON l.id = n.id "
+        "LEFT JOIN good g ON g.source = c.source AND g.company_slug = c.slug GROUP BY c.source", (d7, d30)).fetchall()
+    keys = ("known", "active", "deactivated", "owner_restricted", "read_7d", "read_30d")
+    sites = {src: dict(zip(keys, (int(v or 0) for v in vals))) for src, *vals in rows}
+    total = {k: sum(v[k] for v in sites.values()) for k in keys}
+    return {"sites": sites, "total": total}
 
 
 def public(coverage: dict) -> dict:
@@ -460,9 +589,11 @@ def summary(coverage: dict) -> str:
               f"| Read in full (listing complete, every relevant description) | {t['boards_scanned_in_full']:,} |",
               f"| Read in part | {t['boards_read_in_part']:,} |",
               f"| Failed | {t['boards_failed']:,} |",
+              f"| Owner-restricted (robots.txt) | {t.get('boards_owner_restricted', 0):,} |",
               f"| Rate-limited | {t['boards_rate_limited']:,} |",
               f"| Deferred by quota (their turn comes) | {t['boards_deferred_quota']:,} |",
               f"| Deferred: no internet | {t['boards_deferred_network']:,} |",
+              f"| Deferred: site cooling off | {t.get('boards_deferred_cooling', 0):,} |",
               f"| Out of time | {t['boards_timed_out']:,} |",
               f"| Not attempted | {t['boards_not_attempted']:,} |",
               "", "| Read in part, why (a board may be both) | |", "|---|---:|",

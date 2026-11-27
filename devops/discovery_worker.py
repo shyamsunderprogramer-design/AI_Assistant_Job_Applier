@@ -30,6 +30,7 @@ from pathlib import Path
 OUTCOMES = ("complete", "partial", "failed", "rate_limited", "not_attempted")
 TABLES = ("companies", "jobs", "scrape_log")
 QUOTA = "ProviderQuota"          # not asked this run: past its site's quota, its turn comes in a later run
+COOLING = "ProviderCooling"      # not asked this run: its site is cooling off after refusing (devops/discovery_plan.py)
 DETAIL = ("listing", "listed", "relevant", "described", "pending", "skipped")   # runner.RunSummary.details
 
 
@@ -104,6 +105,12 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
         for b in part["boards"]:
             outcomes[(b["source"], b["slug"])] = (NOT_ATTEMPTED, "NoReader")
         summary_id = run_id or f"{partition_id}-none"
+    elif part.get("cooling_until"):
+        # The site refused every board of its last probes, or asked us to stay away (Retry-After): until the time
+        # the plan names, not one of its boards is asked -- each kept for the runs after (27 Nov 2026).
+        for b in part["boards"]:
+            outcomes[(b["source"], b["slug"])] = (NOT_ATTEMPTED, COOLING)
+        summary_id = run_id or f"{partition_id}-cooling"
     else:
         skipped = ensure_boards(part)
         refs = [CompanyRef(name=b.get("name") or b["slug"], slug=b["slug"], source=b["source"])
@@ -115,6 +122,10 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
             settings.min_interval_seconds = max(settings.min_interval_seconds, float(part["min_interval_s"]))
         client = PoliteClient(settings)
         client.preload_robots(known_robots(database_file()))
+        if part.get("min_interval_s") and int(part.get("of") or 1) > 1:
+            # Readers of one site start together; each waits its place in the site's interval first, so their first
+            # requests are spread over it rather than sent in one burst.
+            time.sleep(float(part["min_interval_s"]) * (int(part.get("index") or 1) - 1) / int(part["of"]))
         summary = scrape_companies(cfg, refs, workers=int(part.get("workers") or 1),
                                    deadline=started + budget * 60, client=client, run_id=run_id,
                                    retry_in_run=bool(part.get("in_run_retry", True)))
@@ -130,7 +141,8 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
     for b in part["boards"]:                       # a board with no outcome was never started
         outcomes.setdefault((b["source"], b["slug"]), (NOT_ATTEMPTED, "NotStarted"))
     events = dict(getattr(client, "rate_limit_events", {}) or {})
-    robots = {h: [st, body, _now()] for h, (st, body) in (getattr(client, "robots_seen", {}) or {}).items()}
+    # Each answer stamped with when it was FETCHED (not when the run ended): 24 hours at most from that moment.
+    robots = {h: [v[0], v[1], v[2] if len(v) > 2 else _now()] for h, v in (getattr(client, "robots_seen", {}) or {}).items()}
     return {"partition": partition_id, "provider": part["provider"], "plan_id": manifest["plan_id"],
             "run_id": summary_id, "started_at": started_at, "finished_at": _now(),
             "minutes": round((time.monotonic() - started) / 60, 2), "budget_minutes": budget,
@@ -141,6 +153,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
             "rate_limited_requests": sum(v for k, v in events.items() if not k.startswith("provider:")),
             "requests": int(getattr(client, "requests_made", 0) or 0), "retry": retry,
             "min_interval_s": float(part.get("min_interval_s") or 0), "robots": robots,
+            "longest_retry_after_s": round(float(getattr(client, "longest_retry_after", 0) or 0), 1),
             "provider_rate_limits": {k.split(":", 1)[1]: v for k, v in events.items() if k.startswith("provider:")}}
 
 
@@ -204,12 +217,16 @@ def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
 
 ROBOTS_SCHEMA = ("CREATE TABLE IF NOT EXISTS robots_cache (host_root TEXT PRIMARY KEY, status INTEGER NOT NULL, "
                  "body TEXT NOT NULL, fetched_at TEXT NOT NULL)")
-ROBOTS_MAX_AGE_H = 24          # RFC 9309 §2.4: a crawler SHOULD NOT use a cached robots.txt for more than 24 hours
+# RFC 9309 §2.4: a crawler SHOULD NOT use a cached robots.txt for more than 24 hours. 23 here, so an answer taken at
+# a run's start is still under 24 hours old at its end.
+ROBOTS_MAX_AGE_H = 23
 
 
 def known_robots(db_path: Path, now: datetime | None = None) -> dict:
-    """robots.txt answers read in the last 24 hours (the saved database's robots_cache), {host_root: (status, text)}.
-    None of them, or no such table (an older database): {} -- every robots.txt is asked for, as before."""
+    """robots.txt answers read in the last 23 hours (the saved database's robots_cache), {host_root: (status, text)}:
+    definite answers only (http_client.ROBOTS_KEEP -- never a 429, a 5xx or anything else). None of them, or no such
+    table (an older database): {} -- every robots.txt is asked for, as before."""
+    from data_engineering.scraper.http_client import ROBOTS_KEEP
     from datetime import timedelta
     cutoff = ((now or datetime.now(timezone.utc)) - timedelta(hours=ROBOTS_MAX_AGE_H)).isoformat(timespec="seconds")
     try:
@@ -220,7 +237,8 @@ def known_robots(db_path: Path, now: datetime | None = None) -> dict:
         if not con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'robots_cache'").fetchone():
             return {}
         return {h: (st, body) for h, st, body in
-                con.execute("SELECT host_root, status, body FROM robots_cache WHERE fetched_at >= ?", (cutoff,))}
+                con.execute("SELECT host_root, status, body FROM robots_cache WHERE fetched_at >= ?", (cutoff,))
+                if isinstance(st, int) and st in ROBOTS_KEEP}
     finally:
         con.close()
 

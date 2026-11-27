@@ -902,7 +902,7 @@ def test_14_the_workflow_parses_and_its_jobs_depend_on_each_other_safely():
     plan_src = (ROOT / "devops" / "discovery_plan.py").read_text()
     imports = set(re.findall(r"^(?:from|import) ([a-z_0-9]+)", plan_src, re.M))
     assert imports <= {"__future__", "argparse", "csv", "hashlib", "json", "re", "sqlite3", "statistics", "sys",
-                       "pathlib", "heapq"}
+                       "pathlib", "heapq", "datetime", "math"}
 
 
 CONTRACT = ("devops/discovery_plan.py", "devops/discovery_worker.py", "devops/discovery_merge.py",

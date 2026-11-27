@@ -26,6 +26,8 @@ import argparse
 import csv
 import hashlib
 import json
+import math
+from datetime import datetime, timezone
 import re
 import sqlite3
 import statistics
@@ -79,6 +81,20 @@ def refused_shares(db_path: Path | None) -> dict[str, float]:
             if total:
                 shares[source] = (refused or 0) / total
     return shares
+
+
+def cooling(db_path: Path | None, now: datetime | None = None) -> dict[str, dict]:
+    """Sites still cooling off at `now` (the saved database's provider_state, devops/discovery_merge.py):
+    {site: {"until": ISO time, "reason": ...}}. None, or no such table (an older database or a cold start): {}."""
+    if db_path is None or not Path(db_path).exists():
+        return {}
+    stamp = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    with sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'provider_state'").fetchone():
+            return {}
+        return {src: {"until": until, "reason": reason or ""} for src, until, reason in db.execute(
+            "SELECT source, cool_until, reason FROM provider_state WHERE cool_until IS NOT NULL AND cool_until > ?",
+            (stamp,))}
 
 
 def quota_of(lane: dict, refused: float | None) -> tuple[int, bool]:
@@ -201,7 +217,7 @@ def plan_id_of(partitions: list[dict]) -> str:
 
 def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
               budget_minutes: float | None = None, only: set[str] | None = None,
-              refused: dict[str, float] | None = None) -> dict:
+              refused: dict[str, float] | None = None, cooling_sites: dict[str, dict] | None = None) -> dict:
     """The manifest: every board in exactly one partition of its own site. `only` (partition ids or site names)
     keeps those partitions to run; the rest are listed as not to run, so a subset is never taken for a full scan."""
     by_site: dict[str, list[dict]] = {}
@@ -233,9 +249,14 @@ def make_plan(rows: list[dict], lanes: dict, target_total: int | None = None,
             if lane.get("max_rps"):
                 # The site's request-rate cap, shared by all its readers on every runner: each reader (one client,
                 # however many worker threads) keeps at least partitions / max_rps seconds between any two requests.
-                partitions[-1]["min_interval_s"] = round(k / float(lane["max_rps"]), 3)
+                # Rounded UP to the millisecond: rounding to the nearest let 11 readers send 6.006 a second (27 Nov).
+                partitions[-1]["min_interval_s"] = math.ceil(k / float(lane["max_rps"]) * 1000) / 1000
             if lane.get("in_run_retry") is False:
                 partitions[-1]["in_run_retry"] = False
+            if site in (cooling_sites or {}):
+                # Cooling off after refusing (or a Retry-After): planned, so every board is accounted for and
+                # kept, but none is asked until then (devops/discovery_worker.py).
+                partitions[-1]["cooling_until"] = cooling_sites[site]["until"]
             if lane.get("queue_minutes"):
                 # The site's last MEASURED partition minutes (lanes file): what the matrix is ordered by, where the
                 # estimate from board times misleads (refusal waits, a quota, per-posting requests).
@@ -351,7 +372,8 @@ def main(argv: list[str]) -> int:
         # is probed while it refuses (Workday) is probed now too -- never asked for every board on no evidence.
         refused = {site: 1.0 for site, lane in lanes.get("lanes", {}).items() if lane.get("probe_quota")}
         print("cold_start=true")
-    manifest = make_plan(boards(args.db, args.boards_csv), lanes, target, budget, only, refused)
+    cool = cooling(args.db)
+    manifest = make_plan(boards(args.db, args.boards_csv), lanes, target, budget, only, refused, cool)
     if args.command == "plan":
         args.out.write_text(json.dumps(manifest, separators=(",", ":")))
         print("matrix=" + json.dumps(matrix(manifest), separators=(",", ":")))
@@ -361,7 +383,9 @@ def main(argv: list[str]) -> int:
         print(f"{len(manifest['partitions'])} partitions, {manifest['boards']:,} boards, plan {manifest['plan_id']}"
               + "".join(f"; {n:,} {site} boards on the Mac lane" for site, n in manifest["mac_lanes"].items())
               + "".join(f"; {p['id']} asks only {p['quota']} boards (it refused its last run)"
-                        for p in manifest["partitions"] if p.get("probe")),
+                        for p in manifest["partitions"] if p.get("probe") and not p.get("cooling_until"))
+              + "".join(f"; {site} is cooling off until {c['until']} ({c['reason']}): none of its boards is asked"
+                        for site, c in sorted(cool.items())),
               file=sys.stderr)
         return 0
     b = manifest["budget_minutes"]

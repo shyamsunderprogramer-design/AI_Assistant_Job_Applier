@@ -75,9 +75,11 @@ def decide(coverage: dict | None, merge_code: int | None, steps: dict) -> tuple[
         c = p.get("counts") or {}
         missing = int(p.get("boards") or 0) - int(c.get("complete") or 0)
         if missing:
+            own = int(p.get("owner_restricted") or 0)
             unread.append(f"{site}: {c.get('complete', 0):,} of {p.get('boards', 0):,} boards read in full "
-                          f"({c.get('partial', 0)} in part, {c.get('failed', 0)} failed, {c.get('rate_limited', 0)} "
-                          f"refused/rate-limited, {p.get('deferred', 0)} deferred)")
+                          f"({c.get('partial', 0)} in part, {int(c.get('failed') or 0) - own} failed, "
+                          f"{own} owner-restricted, {c.get('rate_limited', 0)} refused/rate-limited, "
+                          f"{p.get('deferred', 0)} deferred)")
     return PARTIAL, [], unread
 
 
@@ -117,11 +119,16 @@ def summary(status: str, failed: list, unread: list, coverage: dict | None, *, s
                  ("Read in full", f"{t.get('boards_scanned_in_full', 0):,}"),
                  ("Read in part", f"{t.get('boards_read_in_part', 0):,}"),
                  ("Failed", f"{t.get('boards_failed', 0):,}"),
+                 ("Owner-restricted (robots.txt)", f"{t.get('boards_owner_restricted', 0):,}"),
                  ("Refused / rate-limited", f"{t.get('boards_rate_limited', 0):,}"),
-                 ("Deferred (site quota / no internet)", f"{t.get('boards_deferred_quota', 0):,} / "
-                                                         f"{t.get('boards_deferred_network', 0):,}"),
+                 ("Deferred (site quota / cooling off / no internet)",
+                  f"{t.get('boards_deferred_quota', 0):,} / {t.get('boards_deferred_cooling', 0):,} / "
+                  f"{t.get('boards_deferred_network', 0):,}"),
                  ("Out of time / not attempted", f"{t.get('boards_timed_out', 0):,} / {t.get('boards_not_attempted', 0):,}"),
-                 ("Coverage", f"{t.get('coverage_pct', 0)}%"),
+                 ("Coverage (of the active boards planned)", f"{t.get('coverage_pct', 0)}%"),
+                 ("Coverage (of every known board, retired included)",
+                  f"{t['coverage_of_known_pct']}% of {t.get('boards_known', 0):,}" if "coverage_of_known_pct" in t
+                  else "—"),
                  ("New postings (boards / job-search sites)", f"{new:,} / {int(feeds.get('added') or 0):,}"),
                  ("Merge and checks", f"{t.get('merge_seconds', '—')} s"),
                  ("Still to read (cloud recovery)", f"{t.get('boards_needing_recovery', 0):,} boards")]
@@ -157,6 +164,28 @@ def summary(status: str, failed: list, unread: list, coverage: dict | None, *, s
             lines.append(f"| {site} | {e['parts']} | {e['minutes']:.1f} | {e['requests']:,} | {rate:.2f} | "
                          f"{e['refused']:,} | {e['deferred']:,} / {e['recovered']:,} | {e['waited_s'] / 60:.1f} min |")
         lines.append("")
+    inv = ((coverage or {}).get("inventory") or {}).get("sites") or {}
+    if inv:
+        provs = (coverage or {}).get("providers") or {}
+        lines += ["| Site | Known boards | Active | Deactivated | Owner-restricted | Asked this run | Read in full | "
+                  "Refused | Deferred | Read in last 7 days | Read in last 30 days |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+        for site, v in sorted(inv.items()):
+            p = provs.get(site) or {}
+            c = p.get("counts") or {}
+            lines.append(f"| {site} | {v['known']:,} | {v['active']:,} | {v['deactivated']:,} | "
+                         f"{v['owner_restricted']:,} | {int(p.get('attempted') or 0):,} | "
+                         f"{int(c.get('complete') or 0):,} | {int(c.get('rate_limited') or 0):,} | "
+                         f"{int(p.get('deferred') or 0):,} | {v['read_7d']:,} | {v['read_30d']:,} |")
+        lines.append("")
+    cool = {k: v for k, v in ((coverage or {}).get("provider_state") or {}).items() if v.get("cool_until")}
+    if cool:
+        lines += [f"- **{site} cooling off** until {v['cool_until']} UTC ({v['reason']}): the next runs ask none of "
+                  "its boards before then." for site, v in sorted(cool.items())] + [""]
+    if (coverage or {}).get("reactivated"):
+        lines += ["- **Active again** (retired on a refusal, the host's own error or robots.txt, never on what the "
+                  "host said about the board): " + ", ".join(f"{s} {n}" for s, n in
+                                                            sorted(coverage["reactivated"].items())), ""]
     parts = [(p.get("id"), p.get("status"), p.get("minutes")) for p in (coverage or {}).get("partitions") or []]
     if parts:
         lines += ["| Partition | Status | Minutes |", "|---|---|---|"]

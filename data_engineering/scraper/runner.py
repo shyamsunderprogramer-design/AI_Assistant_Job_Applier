@@ -14,6 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from data_engineering.db.models import Company, Job, ScrapeLog, utcnow
+from data_engineering.scraper.retire_rules import counts_toward_retiring
 from data_engineering.db.session import get_session
 from backend.core.jobfields import derive
 from data_engineering.scraper.ashby import AshbyScraper
@@ -695,8 +696,8 @@ def _log_failure(
         # toward retiring it, or one busy afternoon retires healthy boards.
         # Nor is no answer at all (NetworkError: no name lookup, no connection,
         # a timeout) -- an outage once retired healthy boards that way. A
-        # board is retired only on what its host said.
-        if row is not None and error_type not in ("RateLimited", "NetworkError"):
+        # board is retired only on what its host said about the BOARD.
+        if row is not None and counts_toward_retiring(error_type, message):
             row.consecutive_failures += 1
             # A dead slug shouldn't be re-probed forever once the list is large.
             if deactivate_after and row.consecutive_failures >= deactivate_after:

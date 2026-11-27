@@ -3,7 +3,7 @@
 The saved database lives in the Actions cache, which GitHub may evict. With it would go what a run needs to stay
 continuous with the ones before: each board's last read (who is read first), the scrape log (each site's last
 refusal, so a refusing site is only probed), the boards' inventories and the boards still to read. All of it is in
-every verified result too (devops/discovery_result.py: the merged database, locked and signed, kept 7 days). So when
+every verified result too (devops/discovery_result.py: the merged database, locked and signed, kept 14 days). So when
 the cache restores nothing, the newest result of this workflow that is still there is downloaded, unlocked, checked
 exactly as the Mac checks it (signature, plan, outcomes, database hash and integrity) and no older than MAX_AGE, and
 its database becomes the saved one. Its run id and age are said, and carried into the coverage. Nothing usable: a
@@ -28,7 +28,9 @@ from pathlib import Path
 ARTIFACT = "discovery-result-v1"
 LOCKED = "discovery-result.tar.enc"
 WORKFLOW = "daily-scrape.yml"
-MAX_AGE = timedelta(days=6)
+# 13 days (27 Nov 2026; 6 until then): inside the result's 14-day retention, so the newest one still kept is
+# found even after a long outage.
+MAX_AGE = timedelta(days=13)
 CIPHER = ["enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-md", "sha256"]
 
 
@@ -41,7 +43,7 @@ def _gh(*args: str, timeout: int = 600) -> str:
 
 def candidates(repo: str, now: datetime) -> list[dict]:
     """This workflow's runs whose verified result is still kept, newest first."""
-    runs = json.loads(_gh("api", f"repos/{repo}/actions/workflows/{WORKFLOW}/runs?status=completed&per_page=30"))
+    runs = json.loads(_gh("api", f"repos/{repo}/actions/workflows/{WORKFLOW}/runs?status=completed&per_page=100"))
     out = []
     for r in runs.get("workflow_runs") or []:
         created = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
