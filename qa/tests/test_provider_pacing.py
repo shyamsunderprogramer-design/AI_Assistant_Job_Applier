@@ -87,3 +87,15 @@ def test_every_site_has_a_request_rate_cap():
     lanes = json.loads((Path(__file__).resolve().parents[2] / "devops" / "discovery_lanes.json").read_text())["lanes"]
     assert all(float(lane.get("max_rps") or 0) > 0 for lane in lanes.values()), \
         [s for s, lane in lanes.items() if not lane.get("max_rps")]
+
+
+def test_a_robots_fetch_does_not_hold_back_the_page_after_it_on_the_same_host(monkeypatch):
+    from types import SimpleNamespace
+    c = PoliteClient(HttpSettings(user_agent="test", min_delay_seconds=0.4, jitter_seconds=0.0, respect_robots=True))
+    monkeypatch.setattr(c._session, "get", lambda url, **kw: SimpleNamespace(status_code=404, text=""))
+    t0 = time.monotonic()
+    c._robots_for("https://a.example")
+    c._wait_turn("a.example")                       # the board's first page: no per-host gap after robots.txt
+    assert time.monotonic() - t0 < 0.3
+    c._wait_turn("a.example")                       # its second request: the per-host gap, as always
+    assert time.monotonic() - t0 >= 0.39

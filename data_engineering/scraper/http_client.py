@@ -146,9 +146,10 @@ class PoliteClient:
         parser = urllib.robotparser.RobotFileParser()
         robots_url = f"{host_root}/robots.txt"
         try:
-            # A request like any other (26 Nov 2026): paced by the host's gap and the site-wide interval, and counted.
-            # On a site with a host per employer (BambooHR, JazzHR, Breezy...) it is one per board read.
-            self._wait_turn(urlparse(host_root).netloc)
+            # Counted, and held to the site-wide interval like any request (26 Nov 2026): on a site with a host per
+            # employer (BambooHR, JazzHR, Breezy...) it is one per board read. Not to the per-host gap: robots.txt and
+            # the page after it are the crawler's one visit (the gap is kept between that host's own requests).
+            self._wait_site()
             with self._rate_guard:
                 self.requests_made += 1
             resp = self._session.get(robots_url, timeout=self.settings.timeout_seconds)
@@ -228,6 +229,10 @@ class PoliteClient:
                 if elapsed < delay:
                     time.sleep(delay - elapsed)
             self._last_request_at[host] = time.monotonic()
+        self._wait_site()
+
+    def _wait_site(self) -> None:
+        """The site-wide share (HttpSettings.min_interval_seconds): at least this long between ANY two requests."""
         gap = self.settings.min_interval_seconds
         if gap > 0:
             with self._any_lock:
