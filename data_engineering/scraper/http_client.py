@@ -136,14 +136,25 @@ class PoliteClient:
         self._any_lock = threading.Lock()
         self._last_any: float | None = None
         self.requests_made = 0
+        # robots.txt read in an earlier run (preload_robots) and read in this one (handed on to the next runs).
+        self._robots_known: dict[str, tuple] = {}
+        self.robots_seen: dict[str, tuple] = {}
 
     # -- robots ------------------------------------------------------------
+    def preload_robots(self, known: dict) -> None:
+        """robots.txt answers read in the last 24 hours (RFC 9309 §2.4 allows caching that long), as
+        {scheme://host: (status, text)}: used instead of asking again (devops/discovery_worker.py)."""
+        self._robots_known.update(known or {})
+
     def _robots_for(self, host_root: str) -> urllib.robotparser.RobotFileParser | None:
         """Fetch and cache robots.txt for a scheme://host. None = unavailable."""
         if host_root in self._robots:
             return self._robots[host_root]
+        if host_root in self._robots_known:
+            status, text = self._robots_known[host_root]
+            self._robots[host_root] = self._parse_robots(host_root, int(status), text or "")
+            return self._robots[host_root]
 
-        parser = urllib.robotparser.RobotFileParser()
         robots_url = f"{host_root}/robots.txt"
         try:
             # Counted, and held to the site-wide interval like any request (26 Nov 2026): on a site with a host per
@@ -153,46 +164,48 @@ class PoliteClient:
             with self._rate_guard:
                 self.requests_made += 1
             resp = self._session.get(robots_url, timeout=self.settings.timeout_seconds)
-            if resp.status_code == 200:
-                parser.parse(resp.text.splitlines())
-            elif 400 <= resp.status_code < 500:
-                # RFC 9309 §2.3.1.3 ("Unavailable" Status): a 4xx means the
-                # robots.txt file is unavailable, and "the crawler MAY access
-                # any resources on the server". 401 and 403 are not exceptions
-                # — an unreadable robots.txt is an ABSENT one, not a blanket
-                # Disallow. Google's crawler documents the same reading.
-                #
-                # This code previously did the opposite while citing this very
-                # RFC, and Python's stdlib RobotFileParser has the same
-                # non-compliant behaviour, which is probably where it came from.
-                # It made api.ashbyhq.com (401 on /robots.txt, but a documented
-                # PUBLIC job-board API) unscrapeable.
-                #
-                # Set http.strict_robots_on_4xx: true to restore the cautious
-                # reading — it is stricter than the standard, not politer than
-                # it, and it will silently exclude hosts that permit crawling.
-                if resp.status_code in (401, 403) and self.settings.strict_robots_on_4xx:
-                    log.info(
-                        "robots.txt for %s returned %d; strict mode treats that as "
-                        "full disallow", host_root, resp.status_code,
-                    )
-                    parser.parse(["User-agent: *", "Disallow: /"])
-                else:
-                    parser.parse([])
-            else:
-                # 5xx. RFC 9309 §2.3.1.4: unreachable means assume complete
-                # disallow. A server having a bad day is not permission.
-                log.warning(
-                    "robots.txt for %s returned %d — assuming disallow until it recovers",
-                    host_root, resp.status_code,
-                )
-                parser.parse(["User-agent: *", "Disallow: /"])
         except requests.RequestException as exc:
             log.warning("robots.txt unreachable for %s (%s) — proceeding politely", host_root, exc)
             self._robots[host_root] = None
             return None
-
+        parser = self._parse_robots(host_root, resp.status_code, resp.text if resp.status_code == 200 else "")
+        if resp.status_code == 200 or 400 <= resp.status_code < 500:
+            # A definite answer, kept for the next runs (24 hours at most). A 5xx or no answer never is.
+            with self._rate_guard:
+                self.robots_seen[host_root] = (resp.status_code, resp.text[:200_000] if resp.status_code == 200 else "")
         self._robots[host_root] = parser
+        return parser
+
+    def _parse_robots(self, host_root: str, status: int, text: str) -> urllib.robotparser.RobotFileParser:
+        parser = urllib.robotparser.RobotFileParser()
+        if status == 200:
+            parser.parse(text.splitlines())
+        elif 400 <= status < 500:
+            # RFC 9309 §2.3.1.3 ("Unavailable" Status): a 4xx means the
+            # robots.txt file is unavailable, and "the crawler MAY access
+            # any resources on the server". 401 and 403 are not exceptions
+            # — an unreadable robots.txt is an ABSENT one, not a blanket
+            # Disallow. Google's crawler documents the same reading.
+            #
+            # This code previously did the opposite while citing this very
+            # RFC, and Python's stdlib RobotFileParser has the same
+            # non-compliant behaviour, which is probably where it came from.
+            # It made api.ashbyhq.com (401 on /robots.txt, but a documented
+            # PUBLIC job-board API) unscrapeable.
+            #
+            # Set http.strict_robots_on_4xx: true to restore the cautious
+            # reading — it is stricter than the standard, not politer than
+            # it, and it will silently exclude hosts that permit crawling.
+            if status in (401, 403) and self.settings.strict_robots_on_4xx:
+                log.info("robots.txt for %s returned %d; strict mode treats that as full disallow", host_root, status)
+                parser.parse(["User-agent: *", "Disallow: /"])
+            else:
+                parser.parse([])
+        else:
+            # 5xx. RFC 9309 §2.3.1.4: unreachable means assume complete
+            # disallow. A server having a bad day is not permission.
+            log.warning("robots.txt for %s returned %d — assuming disallow until it recovers", host_root, status)
+            parser.parse(["User-agent: *", "Disallow: /"])
         return parser
 
     def allowed(self, url: str) -> bool:

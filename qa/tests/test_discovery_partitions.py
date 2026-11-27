@@ -974,7 +974,8 @@ def test_15_discovery_reaches_nothing_that_applies_tailors_or_lifts_a_hold():
                         for j in flow["jobs"].values() for s in j["steps"]).lower()
     for word in ("tailor", "auto_submit", "backend.apply", "backend/apply", "cover_letter", "cover letter", "submit", "webapp", "ml.resume"):
         assert word not in commands, word
-    # The merge never touches the person's own tables: only the three discovery tables.
+    # The merge never touches the person's own tables: only discovery tables (since 26 Nov 2026 also the
+    # robots.txt answers kept for the next runs).
     merge_src = (ROOT / "devops" / "discovery_merge.py").read_text()
     written = set(re.findall(r"INSERT INTO main\.([a-z_]+)", merge_src))
-    assert written == {"companies", "jobs", "scrape_log"}
+    assert written == {"companies", "jobs", "scrape_log", "robots_cache"}

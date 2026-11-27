@@ -114,6 +114,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
             # This reader's share of its site's request-rate cap, across every reader of the site on every runner.
             settings.min_interval_seconds = max(settings.min_interval_seconds, float(part["min_interval_s"]))
         client = PoliteClient(settings)
+        client.preload_robots(known_robots(database_file()))
         summary = scrape_companies(cfg, refs, workers=int(part.get("workers") or 1),
                                    deadline=started + budget * 60, client=client, run_id=run_id,
                                    retry_in_run=bool(part.get("in_run_retry", True)))
@@ -129,6 +130,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
     for b in part["boards"]:                       # a board with no outcome was never started
         outcomes.setdefault((b["source"], b["slug"]), (NOT_ATTEMPTED, "NotStarted"))
     events = dict(getattr(client, "rate_limit_events", {}) or {})
+    robots = {h: [st, body, _now()] for h, (st, body) in (getattr(client, "robots_seen", {}) or {}).items()}
     return {"partition": partition_id, "provider": part["provider"], "plan_id": manifest["plan_id"],
             "run_id": summary_id, "started_at": started_at, "finished_at": _now(),
             "minutes": round((time.monotonic() - started) / 60, 2), "budget_minutes": budget,
@@ -138,7 +140,7 @@ def run(cfg, manifest: dict, partition_id: str, budget_minutes: float | None = N
                           if outcomes.get((s, slug), (None,))[0] == "complete"},
             "rate_limited_requests": sum(v for k, v in events.items() if not k.startswith("provider:")),
             "requests": int(getattr(client, "requests_made", 0) or 0), "retry": retry,
-            "min_interval_s": float(part.get("min_interval_s") or 0),
+            "min_interval_s": float(part.get("min_interval_s") or 0), "robots": robots,
             "provider_rate_limits": {k.split(":", 1)[1]: v for k, v in events.items() if k.startswith("provider:")}}
 
 
@@ -186,7 +188,11 @@ def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
         # Each board read completely: every id its listing named (devops/discovery_inventory.py).
         from devops.discovery_inventory import write_part
         write_part(dst, result.get("inventory") or {}, result["outcomes"], result["run_id"])
-        meta = {k: v for k, v in result.items() if k not in ("outcomes", "details", "inventory")}
+        # robots.txt answers read here, for the next runs' readers (24 hours at most): a table, not meta.
+        dst.execute(ROBOTS_SCHEMA)
+        dst.executemany("INSERT OR REPLACE INTO robots_cache VALUES (?, ?, ?, ?)",
+                        [(h, int(st), body or "", at) for h, (st, body, at) in (result.get("robots") or {}).items()])
+        meta = {k: v for k, v in result.items() if k not in ("outcomes", "details", "inventory", "robots")}
         for key, value in meta.items():
             dst.execute("INSERT INTO meta VALUES (?, ?)", (key, json.dumps(value)))
         dst.commit()
@@ -194,6 +200,29 @@ def export(db_path: Path, result: dict, manifest: dict, out: Path) -> Path:
         src.close()
         dst.close()
     return target
+
+
+ROBOTS_SCHEMA = ("CREATE TABLE IF NOT EXISTS robots_cache (host_root TEXT PRIMARY KEY, status INTEGER NOT NULL, "
+                 "body TEXT NOT NULL, fetched_at TEXT NOT NULL)")
+ROBOTS_MAX_AGE_H = 24          # RFC 9309 §2.4: a crawler SHOULD NOT use a cached robots.txt for more than 24 hours
+
+
+def known_robots(db_path: Path, now: datetime | None = None) -> dict:
+    """robots.txt answers read in the last 24 hours (the saved database's robots_cache), {host_root: (status, text)}.
+    None of them, or no such table (an older database): {} -- every robots.txt is asked for, as before."""
+    from datetime import timedelta
+    cutoff = ((now or datetime.now(timezone.utc)) - timedelta(hours=ROBOTS_MAX_AGE_H)).isoformat(timespec="seconds")
+    try:
+        con = sqlite3.connect(read_only(db_path), uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'robots_cache'").fetchone():
+            return {}
+        return {h: (st, body) for h, st, body in
+                con.execute("SELECT host_root, status, body FROM robots_cache WHERE fetched_at >= ?", (cutoff,))}
+    finally:
+        con.close()
 
 
 def database_file() -> Path:

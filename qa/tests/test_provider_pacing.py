@@ -99,3 +99,33 @@ def test_a_robots_fetch_does_not_hold_back_the_page_after_it_on_the_same_host(mo
     assert time.monotonic() - t0 < 0.3
     c._wait_turn("a.example")                       # its second request: the per-host gap, as always
     assert time.monotonic() - t0 >= 0.39
+
+
+def test_a_robots_answer_from_the_last_day_is_used_and_only_definite_answers_are_kept(monkeypatch):
+    from types import SimpleNamespace
+    c = PoliteClient(HttpSettings(user_agent="test", min_delay_seconds=0.0, jitter_seconds=0.0, respect_robots=True))
+    answers = {"https://a.example/robots.txt": 200, "https://b.example/robots.txt": 404, "https://c.example/robots.txt": 503}
+    monkeypatch.setattr(c._session, "get", lambda url, **kw: SimpleNamespace(
+        status_code=answers[url], text="User-agent: *\nDisallow: /private" if answers[url] == 200 else ""))
+    c.preload_robots({"https://k.example": (200, "User-agent: *\nDisallow: /")})
+    assert not c.allowed("https://k.example/jobs") and c.requests_made == 0       # from the cache: no request
+    for host in ("a", "b", "c"):
+        c._robots_for(f"https://{host}.example")
+    assert set(c.robots_seen) == {"https://a.example", "https://b.example"}      # a 5xx is never kept
+    assert c.allowed("https://a.example/jobs") and not c.allowed("https://a.example/private/x")
+
+
+def test_robots_answers_older_than_a_day_are_not_used_and_the_join_keeps_the_newest(tmp_path):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    db = tmp_path / "saved.db"
+    con = sqlite3.connect(db)
+    con.execute(dw.ROBOTS_SCHEMA)
+    now = datetime(2026, 11, 27, 12, tzinfo=timezone.utc)
+    con.executemany("INSERT INTO robots_cache VALUES (?, ?, ?, ?)", [
+        ("https://new.example", 200, "x", (now - timedelta(hours=3)).isoformat(timespec="seconds")),
+        ("https://old.example", 200, "y", (now - timedelta(hours=30)).isoformat(timespec="seconds"))])
+    con.commit()
+    con.close()
+    assert set(dw.known_robots(db, now)) == {"https://new.example"}
+    assert dw.known_robots(tmp_path / "missing.db", now) == {}

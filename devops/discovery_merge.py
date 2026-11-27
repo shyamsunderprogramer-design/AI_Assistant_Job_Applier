@@ -194,6 +194,16 @@ def _merge_one(db: sqlite3.Connection, path: Path, boards: dict, inventory: set 
         # Each board read completely: its inventory, the previous one kept beside it (devops/discovery_inventory.py).
         from devops.discovery_inventory import merge_part
         done["inventories"] = merge_part(db, inventory or set())
+        # robots.txt answers its readers fetched: the newest per host kept; older than two days dropped.
+        db.execute("CREATE TABLE IF NOT EXISTS main.robots_cache (host_root TEXT PRIMARY KEY, status INTEGER NOT NULL, "
+                   "body TEXT NOT NULL, fetched_at TEXT NOT NULL)")
+        if db.execute("SELECT 1 FROM part.sqlite_master WHERE type = 'table' AND name = 'robots_cache'").fetchone():
+            db.execute("INSERT INTO main.robots_cache SELECT host_root, status, body, fetched_at FROM part.robots_cache "
+                       "WHERE typeof(status) = 'integer' AND typeof(fetched_at) = 'text' AND true "
+                       "ON CONFLICT(host_root) DO UPDATE SET status = excluded.status, body = excluded.body, "
+                       "fetched_at = excluded.fetched_at WHERE excluded.fetched_at > robots_cache.fetched_at")
+        db.execute("DELETE FROM main.robots_cache WHERE fetched_at < ?",
+                   ((datetime.now(timezone.utc) - timedelta(days=2)).isoformat(timespec="seconds"),))
         db.execute("COMMIT")
         return done
     except BaseException:
