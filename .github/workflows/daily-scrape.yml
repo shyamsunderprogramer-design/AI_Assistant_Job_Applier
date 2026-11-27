@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "36cf6f1a64a573d6bc1b856c8b1841996a63c8ee"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "5d1042c0fc7cbbc8c6161bd1800b11f9a4ea517f"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -610,8 +610,9 @@ jobs:
         with:
           name: discovery-result-v1
           path: discovery-result.tar.enc
-          # 14 days (27 Nov 2026): the cold-start restore takes one up to 13 days old (devops/discovery_restore.py).
-          retention-days: 14
+          # 7 days; the cold-start restore takes one up to 6 days old (devops/discovery_restore.py). 14 / 13 once the
+          # owner confirms public-repository artifact storage is not billed (GitHub's docs do not say so outright).
+          retention-days: 7
           overwrite: true
 
       - name: Coverage report (counts only)
