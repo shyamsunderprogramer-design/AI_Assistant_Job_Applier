@@ -537,11 +537,13 @@ jobs:
             tar -xf feeds/feeds.tar -C feeds feeds.db feeds-report.json || rm -f feeds/feeds.db
           fi
           set +e
-          # --prune-log-days: this saved copy's scrape log kept to 30 days (each board's newest row always
-          # kept, for the plan). The cloud's copy only; the Mac's history is never pruned.
+          # --prune-log-days: this saved copy's scrape log kept to 3 days (each board's newest row always kept, for
+          # the plan; the latest run of each site, for its refusal share). Nothing else reads older rows: board
+          # retirement counts on the board itself. 30 days had grown it to 385 MB of a 489 MB database (26 Nov
+          # 2026), slowing every restore, merge and upload. The cloud's copy only; the Mac's history is never pruned.
           python -m devops.discovery_merge --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
             --parts-dir parts --reports-dir reports --coverage coverage.json \
-            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 30 \
+            --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 3 \
             --feeds-dir feeds --restored-from "$RESTORED_FROM" > merge.txt
           code=$?
           set -e
