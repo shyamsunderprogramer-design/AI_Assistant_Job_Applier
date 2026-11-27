@@ -81,7 +81,7 @@ name: Daily scrape
 # change CODE_REF on purpose (to a commit whose tests passed). To go back to the
 # four-part fetch, restore the workflow of the commit that pinned fd11a5c.
 env:
-  CODE_REF: "99be505f5d8228d846c50da7df68bf544b3d1a4b"   # quoted: a SHA of digits alone would be a number in YAML
+  CODE_REF: "763cd892b95eeee562f38f4ce1ae15bbb2a8a002"   # quoted: a SHA of digits alone would be a number in YAML
 
 on:
   # The fallback: GitHub's schedule is UTC only, so each window has two lines, one for
@@ -135,6 +135,7 @@ jobs:
       budget: ${{ steps.plan.outputs.budget }}
       started: ${{ steps.plan.outputs.started }}
       slot: ${{ steps.slot.outputs.slot }}
+      restored_from: ${{ steps.restore.outputs.restored_from }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,6 +185,28 @@ jobs:
           key: jobs-db-${{ github.run_id }}
           restore-keys: |
             jobs-db-
+
+      - name: If the cache held no saved database, restore it from the newest verified result
+        # devops/discovery_restore.py: downloaded, unlocked and checked as the Mac checks it, at most 6 days old.
+        # Nothing usable: a cold start, said as one (never presented as continuous).
+        if: steps.slot.outputs.go == 'true'
+        id: restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
+        run: |
+          if [ -e data/jobs.db ]; then
+            echo "restored_from=" >> "$GITHUB_OUTPUT"
+          else
+            python -m devops.discovery_restore --dest data/jobs.db --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Keep the restored database for this run's partitions and join
+        if: steps.slot.outputs.go == 'true' && steps.restore.outputs.restored_from != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}-restored
 
       - name: Unlock the full board list
         if: steps.slot.outputs.go == 'true'
@@ -498,6 +521,7 @@ jobs:
         env:
           PASSPHRASE: ${{ secrets.RESULTS_PASSPHRASE }}
           STARTED: ${{ needs.plan.outputs.started }}
+          RESTORED_FROM: ${{ needs.plan.outputs.restored_from }}
         run: |
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
             -in plan/manifest.json.enc -out "$RUNNER_TEMP/manifest.json" -pass env:PASSPHRASE
@@ -516,7 +540,7 @@ jobs:
           python -m devops.discovery_merge --db data/jobs.db --manifest "$RUNNER_TEMP/manifest.json" \
             --parts-dir parts --reports-dir reports --coverage coverage.json \
             --outcomes "$RUNNER_TEMP/outcomes.json" --started "$STARTED" --prune-log-days 30 \
-            --feeds-dir feeds > merge.txt
+            --feeds-dir feeds --restored-from "$RESTORED_FROM" > merge.txt
           code=$?
           set -e
           cat merge.txt >> "$GITHUB_STEP_SUMMARY"
